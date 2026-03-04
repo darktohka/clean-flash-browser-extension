@@ -179,14 +179,15 @@ unsafe extern "C" fn paint_image_data(
 
     host.resources
         .with_downcast_mut::<Graphics2DResource, _>(graphics_2d, |g| {
-            // Blit src region from image_data into graphics_2d at top_left.
+            // Blit src region from image_data into graphics_2d.
+            // Per PPAPI spec: destination = top_left + src_rect.point + (col, row)
             for row in 0..src.size.height {
-                let dst_y = tl.y + row;
+                let dst_y = tl.y + src.point.y + row;
                 if dst_y < 0 || dst_y >= g.size.height {
                     continue;
                 }
                 for col in 0..src.size.width {
-                    let dst_x = tl.x + col;
+                    let dst_x = tl.x + src.point.x + col;
                     if dst_x < 0 || dst_x >= g.size.width {
                         continue;
                     }

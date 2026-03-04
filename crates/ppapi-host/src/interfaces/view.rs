@@ -76,19 +76,20 @@ unsafe extern "C" fn is_view(resource: PP_Resource) -> PP_Bool {
 }
 
 unsafe extern "C" fn get_rect(resource: PP_Resource, rect: *mut PP_Rect) -> PP_Bool {
-    tracing::trace!("PPB_View::GetRect({}, {:?})", resource, *rect);
     let Some(host) = HOST.get() else {
         return PP_FALSE;
     };
 
-    host.resources
+    let result = host.resources
         .with_downcast::<ViewResource, _>(resource, |view| {
             if !rect.is_null() {
                 unsafe { *rect = view.rect };
             }
             PP_TRUE
         })
-        .unwrap_or(PP_FALSE)
+        .unwrap_or(PP_FALSE);
+    tracing::trace!("PPB_View::GetRect({}, {:?}) -> {}", resource, if rect.is_null() { None } else { Some(unsafe { &*rect }) }, result);
+    result
 }
 
 unsafe extern "C" fn is_fullscreen(resource: PP_Resource) -> PP_Bool {
@@ -122,19 +123,20 @@ unsafe extern "C" fn is_page_visible(resource: PP_Resource) -> PP_Bool {
 }
 
 unsafe extern "C" fn get_clip_rect(resource: PP_Resource, clip: *mut PP_Rect) -> PP_Bool {
-    tracing::trace!("PPB_View::GetClipRect({}, {:?})", resource, *clip);
     let Some(host) = HOST.get() else {
         return PP_FALSE;
     };
 
-    host.resources
+    let result = host.resources
         .with_downcast::<ViewResource, _>(resource, |view| {
             if !clip.is_null() {
                 unsafe { *clip = view.clip_rect };
             }
             PP_TRUE
         })
-        .unwrap_or(PP_FALSE)
+        .unwrap_or(PP_FALSE);
+    tracing::trace!("PPB_View::GetClipRect({}, {:?}) -> {}", resource, if clip.is_null() { None } else { Some(unsafe { &*clip }) }, result);
+    result
 }
 
 unsafe extern "C" fn get_device_scale(resource: PP_Resource) -> f32 {
@@ -158,17 +160,18 @@ unsafe extern "C" fn get_css_scale(resource: PP_Resource) -> f32 {
 }
 
 unsafe extern "C" fn get_scroll_offset(resource: PP_Resource, offset: *mut PP_Point) -> PP_Bool {
-    tracing::trace!("PPB_View::GetScrollOffset({}, {:?})", resource, *offset);
     let Some(host) = HOST.get() else {
         return PP_FALSE;
     };
 
-    host.resources
+    let result = host.resources
         .with_downcast::<ViewResource, _>(resource, |view| {
             if !offset.is_null() {
                 unsafe { *offset = view.scroll_offset };
             }
             PP_TRUE
         })
-        .unwrap_or(PP_FALSE)
+        .unwrap_or(PP_FALSE);
+    tracing::trace!("PPB_View::GetScrollOffset({}, {:?}) -> {}", resource, if offset.is_null() { None } else { Some(unsafe { &*offset }) }, result);
+    result
 }
