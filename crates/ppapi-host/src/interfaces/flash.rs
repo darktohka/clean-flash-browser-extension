@@ -174,7 +174,7 @@ unsafe extern "C" fn get_setting_int(
     tracing::debug!("PPB_Flash::GetSettingInt(setting={})", setting);
     match setting {
         PP_FLASHSETTING_3DENABLED => 0,
-        PP_FLASHSETTING_INCOGNITO => 0,
+        PP_FLASHSETTING_INCOGNITO => 1,
         PP_FLASHSETTING_STAGE3DENABLED => 0,
         PP_FLASHSETTING_NUMCORES => {
             num_cpus()

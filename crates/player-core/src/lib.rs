@@ -6,7 +6,7 @@
 use parking_lot::Mutex;
 use ppapi_host::{HostCallbacks, HostState, PluginLoader};
 use ppapi_sys::*;
-use player_ui_traits::{FrameData, PlayerState};
+use player_ui_traits::{DialogProvider, FrameData, PlayerState};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -25,6 +25,8 @@ pub struct FlashPlayer {
     latest_frame: Arc<Mutex<Option<FrameData>>>,
     /// Path to the PepperFlash plugin .so file.
     plugin_path: Option<String>,
+    /// Dialog provider for alert/confirm/prompt (from the UI layer).
+    dialog_provider: Option<Arc<dyn DialogProvider>>,
 }
 
 impl FlashPlayer {
@@ -36,12 +38,18 @@ impl FlashPlayer {
             state: Arc::new(Mutex::new(PlayerState::Idle)),
             latest_frame: Arc::new(Mutex::new(None)),
             plugin_path: None,
+            dialog_provider: None,
         }
     }
 
     /// Set the path to the PepperFlash plugin .so.
     pub fn set_plugin_path(&mut self, path: impl Into<String>) {
         self.plugin_path = Some(path.into());
+    }
+
+    /// Set the dialog provider (from the UI layer) for alert/confirm/prompt.
+    pub fn set_dialog_provider(&mut self, provider: Arc<dyn DialogProvider>) {
+        self.dialog_provider = Some(provider);
     }
 
     /// Get a handle to the latest frame (for the UI to read).
@@ -69,8 +77,10 @@ impl FlashPlayer {
 
         // Set up host callbacks to receive frame data.
         let frame_handle = self.latest_frame.clone();
+        let dialog = self.dialog_provider.clone();
         host.set_callbacks(Box::new(PlayerHostCallbacks {
             latest_frame: frame_handle,
+            dialog_provider: dialog,
         }));
 
         // If a plugin path is set, load it.
@@ -388,6 +398,7 @@ impl Drop for FlashPlayer {
 
 struct PlayerHostCallbacks {
     latest_frame: Arc<Mutex<Option<FrameData>>>,
+    dialog_provider: Option<Arc<dyn DialogProvider>>,
 }
 
 impl HostCallbacks for PlayerHostCallbacks {
@@ -420,6 +431,32 @@ impl HostCallbacks for PlayerHostCallbacks {
         // For now, return empty.
         tracing::warn!("Could not load URL: {} (path: {})", url, path);
         Vec::new()
+    }
+
+    fn show_alert(&self, message: &str) {
+        if let Some(provider) = &self.dialog_provider {
+            provider.alert(message);
+        } else {
+            tracing::info!("Alert: {}", message);
+        }
+    }
+
+    fn show_confirm(&self, message: &str) -> bool {
+        if let Some(provider) = &self.dialog_provider {
+            provider.confirm(message)
+        } else {
+            tracing::info!("Confirm: {}", message);
+            true
+        }
+    }
+
+    fn show_prompt(&self, message: &str, default: &str) -> Option<String> {
+        if let Some(provider) = &self.dialog_provider {
+            provider.prompt(message, default)
+        } else {
+            tracing::info!("Prompt: {} (default: {})", message, default);
+            Some(default.to_string())
+        }
     }
 }
 
@@ -485,7 +522,7 @@ fn create_document_url_loader(
         let body = cb.on_url_load(url);
         let body_len = body.len();
 
-        println!("Body: {:?}", body);
+        //println!("Body: {:?}", body);
 
         // 3a. Create a URLResponseInfo eagerly with proper Content-Type.
         //     Flash calls GetResponseInfo() during HandleDocumentLoad and
@@ -512,17 +549,14 @@ fn create_document_url_loader(
             l.instance = instance_id;
             l.finished_loading = true;
             l.response_info = Some(response_info_id);
-            tracing::debug!(
-                "URLLoader downcast: {:?}", l
-            );
         });
         // Print the URLLoaderResource state to verify
-        host.resources.with_downcast::<URLLoaderResource, _>(loader_id, |l| {
-            tracing::debug!(
-                "URLLoader state after open: {:?}",
-                l
-            );
-        });
+        //host.resources.with_downcast::<URLLoaderResource, _>(loader_id, |l| {
+        //    tracing::debug!(
+        //        "URLLoader state after open: {:?}",
+        //        l
+        //    );
+        //});
         tracing::debug!(
             "Document URLLoader open: loader={} loaded {} bytes, response_info={}",
             loader_id, body_len, response_info_id

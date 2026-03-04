@@ -114,14 +114,21 @@ unsafe extern "C" fn has_property(object: PP_Var, name: PP_Var, exception: *mut 
     }
 
     let host = HOST.get().unwrap();
-    let result = host.vars.with_object(object, |entry| unsafe {
-        if let Some(hp) = (*entry.class).HasProperty {
-            hp(entry.data, name, exception)
-        } else {
-            PP_FALSE
-        }
+    // Extract class + data under the lock, then call outside to avoid
+    // deadlock if the vtable re-enters VarManager (e.g. add_ref/create_object).
+    let ptrs = host.vars.with_object(object, |entry| {
+        (entry.class, entry.data)
     });
-    result.unwrap_or(PP_FALSE)
+    match ptrs {
+        Some((class, data)) => unsafe {
+            if let Some(hp) = (*class).HasProperty {
+                hp(data, name, exception)
+            } else {
+                PP_FALSE
+            }
+        },
+        None => PP_FALSE,
+    }
 }
 
 unsafe extern "C" fn has_method(object: PP_Var, name: PP_Var, exception: *mut PP_Var) -> PP_Bool {
@@ -136,14 +143,19 @@ unsafe extern "C" fn has_method(object: PP_Var, name: PP_Var, exception: *mut PP
     }
 
     let host = HOST.get().unwrap();
-    let result = host.vars.with_object(object, |entry| unsafe {
-        if let Some(hm) = (*entry.class).HasMethod {
-            hm(entry.data, name, exception)
-        } else {
-            PP_FALSE
-        }
+    let ptrs = host.vars.with_object(object, |entry| {
+        (entry.class, entry.data)
     });
-    result.unwrap_or(PP_FALSE)
+    match ptrs {
+        Some((class, data)) => unsafe {
+            if let Some(hm) = (*class).HasMethod {
+                hm(data, name, exception)
+            } else {
+                PP_FALSE
+            }
+        },
+        None => PP_FALSE,
+    }
 }
 
 unsafe extern "C" fn get_property(object: PP_Var, name: PP_Var, exception: *mut PP_Var) -> PP_Var {
@@ -163,14 +175,21 @@ unsafe extern "C" fn get_property(object: PP_Var, name: PP_Var, exception: *mut 
     }
 
     let host = HOST.get().unwrap();
-    let result = host.vars.with_object(object, |entry| unsafe {
-        if let Some(gp) = (*entry.class).GetProperty {
-            gp(entry.data, name, exception)
-        } else {
-            PP_Var::undefined()
-        }
+    let ptrs = host.vars.with_object(object, |entry| {
+        (entry.class, entry.data)
     });
-    result.unwrap_or(PP_Var::undefined())
+    match ptrs {
+        Some((class, data)) => unsafe {
+            if let Some(gp) = (*class).GetProperty {
+                let result = gp(data, name, exception);
+                println!("PPB_Var_Deprecated::GetProperty result: {:?}", result);
+                result
+            } else {
+                PP_Var::undefined()
+            }
+        },
+        None => PP_Var::undefined(),
+    }
 }
 
 unsafe extern "C" fn get_all_property_names(
@@ -195,9 +214,11 @@ unsafe extern "C" fn get_all_property_names(
     }
 
     let host = HOST.get().unwrap();
-    host.vars.with_object(object, |entry| unsafe {
-        if let Some(gapn) = (*entry.class).GetAllPropertyNames {
-            gapn(entry.data, property_count, properties, exception);
+    host.vars.with_object(object, |entry| {
+        (entry.class, entry.data)
+    }).map(|(class, data)| unsafe {
+        if let Some(gapn) = (*class).GetAllPropertyNames {
+            gapn(data, property_count, properties, exception);
         }
     });
 }
@@ -220,9 +241,11 @@ unsafe extern "C" fn set_property(
     }
 
     let host = HOST.get().unwrap();
-    host.vars.with_object(object, |entry| unsafe {
-        if let Some(sp) = (*entry.class).SetProperty {
-            sp(entry.data, name, value, exception);
+    host.vars.with_object(object, |entry| {
+        (entry.class, entry.data)
+    }).map(|(class, data)| unsafe {
+        if let Some(sp) = (*class).SetProperty {
+            sp(data, name, value, exception);
         }
     });
 }
@@ -239,9 +262,11 @@ unsafe extern "C" fn remove_property(object: PP_Var, name: PP_Var, exception: *m
     }
 
     let host = HOST.get().unwrap();
-    host.vars.with_object(object, |entry| unsafe {
-        if let Some(rp) = (*entry.class).RemoveProperty {
-            rp(entry.data, name, exception);
+    host.vars.with_object(object, |entry| {
+        (entry.class, entry.data)
+    }).map(|(class, data)| unsafe {
+        if let Some(rp) = (*class).RemoveProperty {
+            rp(data, name, exception);
         }
     });
 }
@@ -266,14 +291,19 @@ unsafe extern "C" fn call(
     }
 
     let host = HOST.get().unwrap();
-    let result = host.vars.with_object(object, |entry| unsafe {
-        if let Some(c) = (*entry.class).Call {
-            c(entry.data, method_name, argc, argv, exception)
-        } else {
-            PP_Var::undefined()
-        }
+    let ptrs = host.vars.with_object(object, |entry| {
+        (entry.class, entry.data)
     });
-    result.unwrap_or(PP_Var::undefined())
+    match ptrs {
+        Some((class, data)) => unsafe {
+            if let Some(c) = (*class).Call {
+                c(data, method_name, argc, argv, exception)
+            } else {
+                PP_Var::undefined()
+            }
+        },
+        None => PP_Var::undefined(),
+    }
 }
 
 unsafe extern "C" fn construct(
@@ -294,14 +324,19 @@ unsafe extern "C" fn construct(
     }
 
     let host = HOST.get().unwrap();
-    let result = host.vars.with_object(object, |entry| unsafe {
-        if let Some(c) = (*entry.class).Construct {
-            c(entry.data, argc, argv, exception)
-        } else {
-            PP_Var::undefined()
-        }
+    let ptrs = host.vars.with_object(object, |entry| {
+        (entry.class, entry.data)
     });
-    result.unwrap_or(PP_Var::undefined())
+    match ptrs {
+        Some((class, data)) => unsafe {
+            if let Some(c) = (*class).Construct {
+                c(data, argc, argv, exception)
+            } else {
+                PP_Var::undefined()
+            }
+        },
+        None => PP_Var::undefined(),
+    }
 }
 
 unsafe extern "C" fn is_instance_of(

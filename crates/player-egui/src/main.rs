@@ -1,6 +1,7 @@
 //! Flash Player egui frontend — main entry point.
 
 mod app;
+mod dialogs;
 
 use tracing_subscriber::EnvFilter;
 

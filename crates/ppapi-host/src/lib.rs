@@ -12,6 +12,7 @@ pub mod plugin_loader;
 pub mod resource;
 pub mod threading;
 pub mod var;
+pub mod window_object;
 
 // Re-exports for convenience
 pub use callback::CompletionCallback;
@@ -44,6 +45,23 @@ pub trait HostCallbacks: Send + Sync {
     /// Called when PPB_URLLoader::Open is called and a URL load is requested.
     /// The host should return the response body bytes.
     fn on_url_load(&self, url: &str) -> Vec<u8>;
+
+    /// Show an alert dialog with a message. Blocks until dismissed.
+    fn show_alert(&self, message: &str) {
+        tracing::info!("Alert: {}", message);
+    }
+
+    /// Show a confirm dialog. Returns `true` if confirmed. Blocks until responded.
+    fn show_confirm(&self, message: &str) -> bool {
+        tracing::info!("Confirm: {}", message);
+        true
+    }
+
+    /// Show a prompt dialog. Returns `None` if cancelled, `Some(input)` otherwise.
+    fn show_prompt(&self, message: &str, default: &str) -> Option<String> {
+        tracing::info!("Prompt: {} (default: {})", message, default);
+        Some(default.to_string())
+    }
 }
 
 // ===========================================================================

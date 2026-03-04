@@ -104,3 +104,25 @@ pub trait PlayerUI: Send {
     /// Poll for the next command from the UI. Non-blocking.
     fn poll_command(&mut self) -> Option<PlayerCommand>;
 }
+
+// ===========================================================================
+// Dialog provider — abstracts alert/confirm/prompt for the PPAPI host
+// ===========================================================================
+
+/// Provides UI dialogs that the PPAPI host can invoke when Flash content
+/// calls `window.alert()`, `window.confirm()`, or `window.prompt()`.
+///
+/// Implementations should be thread-safe; methods may be called from the
+/// PPAPI plugin thread and should block until the user responds.
+pub trait DialogProvider: Send + Sync {
+    /// Show an alert dialog with a message. Blocks until dismissed.
+    fn alert(&self, message: &str);
+
+    /// Show a confirm dialog. Returns `true` if the user clicks OK.
+    /// Blocks until a response is given.
+    fn confirm(&self, message: &str) -> bool;
+
+    /// Show a prompt dialog. Returns `Some(input)` if the user clicks OK,
+    /// `None` if cancelled. Blocks until a response is given.
+    fn prompt(&self, message: &str, default: &str) -> Option<String>;
+}

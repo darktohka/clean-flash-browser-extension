@@ -142,6 +142,7 @@ impl MessageLoop {
                         // Not ready yet — save for re-posting.
                         deferred.push(item);
                     } else {
+                        println!("Running: callback with result {}", item.result);
                         unsafe {
                             item.callback.run(item.result);
                         }

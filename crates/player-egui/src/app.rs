@@ -11,6 +11,8 @@ use player_core::FlashPlayer;
 use player_ui_traits::{FrameData, PlayerState};
 use std::sync::Arc;
 
+use crate::dialogs;
+
 /// The egui application state.
 pub struct FlashPlayerApp {
     /// The player core (owns the PPAPI host and plugin).
@@ -32,6 +34,10 @@ pub struct FlashPlayerApp {
     status_message: String,
     /// Deferred SWF path to open on first frame.
     pending_open: Option<String>,
+    /// Shared dialog state for alert/confirm/prompt.
+    dialog_state: Arc<dialogs::DialogState>,
+    /// Currently active dialog (moved from shared state for rendering).
+    active_dialog: Option<dialogs::ActiveDialog>,
 }
 
 impl FlashPlayerApp {
@@ -46,6 +52,14 @@ impl FlashPlayerApp {
 
         player.set_plugin_path(&plugin_path);
 
+        // Set up the dialog provider.
+        let dialog_state = Arc::new(dialogs::DialogState::new());
+        let dialog_provider = Arc::new(dialogs::EguiDialogProvider::new(
+            dialog_state.clone(),
+            _cc.egui_ctx.clone(),
+        ));
+        player.set_dialog_provider(dialog_provider);
+
         Self {
             player,
             frame_handle,
@@ -57,6 +71,8 @@ impl FlashPlayerApp {
             _plugin_path: plugin_path,
             status_message: "Ready. Use File > Open to load a .swf file.".into(),
             pending_open: initial_swf,
+            dialog_state,
+            active_dialog: None,
         }
     }
 
@@ -143,6 +159,26 @@ impl FlashPlayerApp {
         self.frame_texture = None;
         self.last_frame_size = (0, 0);
         self.status_message = "Content closed.".into();
+    }
+
+    /// Check for a pending dialog from the PPAPI thread and draw it.
+    fn draw_pending_dialog(&mut self, ctx: &egui::Context) {
+        // If we don't already have an active dialog, check for a new one.
+        if self.active_dialog.is_none() {
+            self.active_dialog = dialogs::take_pending_dialog(&self.dialog_state);
+        }
+
+        // If there's an active dialog, draw it.
+        if let Some(ref mut dialog) = self.active_dialog {
+            if let Some(response) = dialogs::draw_dialog(dialog, ctx) {
+                // The user responded — send the response and remove the dialog.
+                if let Some(dialog) = self.active_dialog.take() {
+                    dialog.respond(response);
+                }
+            }
+            // While a dialog is open, keep repainting.
+            ctx.request_repaint();
+        }
     }
 
     /// Draw the URL dialog.
@@ -243,6 +279,9 @@ impl eframe::App for FlashPlayerApp {
 
         // Update frame texture from the latest plugin output.
         self.update_frame_texture(ctx);
+
+        // Check for and draw any pending dialog (alert/confirm/prompt).
+        self.draw_pending_dialog(ctx);
 
         // Draw URL dialog if open.
         self.draw_url_dialog(ctx);

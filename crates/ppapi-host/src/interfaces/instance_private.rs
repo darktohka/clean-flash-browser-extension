@@ -46,14 +46,15 @@ unsafe extern "C" fn get_window_object(instance: PP_Instance) -> PP_Var {
         return PP_Var::undefined();
     }
 
-    // In a standalone player there is no DOM window. Return undefined.
-    // The plugin (PepperFlash) checks for this and proceeds without
-    // scripting bridge functionality when no window object is available.
+    // Return a fake window object that stubs out the browser DOM APIs
+    // PepperFlash expects (location, document, navigator, etc.).
+    let var = crate::window_object::create_window_object(instance);
     tracing::debug!(
-        "ppb_instance_private_get_window_object: instance={} -> undefined (no DOM)",
-        instance
+        "ppb_instance_private_get_window_object: instance={} -> {:?}",
+        instance,
+        var
     );
-    PP_Var::undefined()
+    var
 }
 
 unsafe extern "C" fn get_owner_element_object(instance: PP_Instance) -> PP_Var {
