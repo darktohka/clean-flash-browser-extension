@@ -9,6 +9,7 @@ description = "egui/eframe frontend for the Flash player"
 player-core = { workspace = true }
 player-ui-traits = { workspace = true }
 ppapi-host = { workspace = true }
+ppapi-sys = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 eframe = "0.31"

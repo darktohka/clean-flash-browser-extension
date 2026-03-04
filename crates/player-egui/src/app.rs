@@ -9,6 +9,7 @@ use eframe::egui;
 use parking_lot::Mutex;
 use player_core::FlashPlayer;
 use player_ui_traits::{FrameData, PlayerState};
+use ppapi_sys::*;
 use std::sync::Arc;
 
 use crate::dialogs;
@@ -38,6 +39,8 @@ pub struct FlashPlayerApp {
     dialog_state: Arc<dialogs::DialogState>,
     /// Currently active dialog (moved from shared state for rendering).
     active_dialog: Option<dialogs::ActiveDialog>,
+    /// Last mouse position sent (to avoid duplicate MOUSEMOVE events).
+    last_mouse_pos: Option<PP_Point>,
 }
 
 impl FlashPlayerApp {
@@ -77,6 +80,7 @@ impl FlashPlayerApp {
             pending_open: initial_swf,
             dialog_state,
             active_dialog: None,
+            last_mouse_pos: None,
         }
     }
 
@@ -249,8 +253,8 @@ impl FlashPlayerApp {
         }
     }
 
-    /// Draw the central content area.
-    fn draw_content(&self, ui: &mut egui::Ui) {
+    /// Draw the central content area and handle input events.
+    fn draw_content(&mut self, ui: &mut egui::Ui) {
         if let Some(ref texture) = self.frame_texture {
             let available = ui.available_size();
             let tex_size = texture.size_vec2();
@@ -259,14 +263,408 @@ impl FlashPlayerApp {
             let scale = (available.x / tex_size.x).min(available.y / tex_size.y).min(1.0);
             let display_size = tex_size * scale;
 
-            ui.centered_and_justified(|ui| {
-                ui.image(egui::load::SizedTexture::new(texture.id(), display_size));
-            });
+            // Centre the image in the available space.
+            let offset = (available - display_size) * 0.5;
+            let content_origin = ui.min_rect().min + egui::vec2(offset.x, offset.y);
+            let content_rect = egui::Rect::from_min_size(content_origin, display_size);
+
+            // Paint the frame.
+            ui.painter().image(
+                texture.id(),
+                content_rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+
+            // Allocate an interactive area over the image so we get input.
+            let response = ui.allocate_rect(content_rect, egui::Sense::click_and_drag());
+
+            // Also capture keyboard focus when hovered / interacted.
+            if response.hovered() || response.has_focus() {
+                response.request_focus();
+            }
+
+            // --- Mouse events ---
+            if self.player.is_running() {
+                self.handle_mouse_events(ui, &response, content_rect, display_size, tex_size);
+                self.handle_keyboard_events(ui);
+                self.handle_scroll_events(ui, &response, content_rect, display_size, tex_size);
+            }
         } else {
             ui.centered_and_justified(|ui| {
                 ui.label("No content loaded.\nUse File > Open to load a .swf file.");
             });
         }
+    }
+
+    /// Convert screen position to plugin-local coordinates.
+    fn screen_to_plugin(
+        pos: egui::Pos2,
+        content_rect: egui::Rect,
+        display_size: egui::Vec2,
+        tex_size: egui::Vec2,
+    ) -> PP_Point {
+        let local_x = (pos.x - content_rect.min.x) / display_size.x * tex_size.x;
+        let local_y = (pos.y - content_rect.min.y) / display_size.y * tex_size.y;
+        PP_Point {
+            x: local_x as i32,
+            y: local_y as i32,
+        }
+    }
+
+    /// Build PPAPI modifier flags from egui's modifier state.
+    fn egui_modifiers_to_ppapi(modifiers: &egui::Modifiers) -> u32 {
+        let mut flags = 0u32;
+        if modifiers.shift {
+            flags |= PP_INPUTEVENT_MODIFIER_SHIFTKEY;
+        }
+        if modifiers.ctrl {
+            flags |= PP_INPUTEVENT_MODIFIER_CONTROLKEY;
+        }
+        if modifiers.alt {
+            flags |= PP_INPUTEVENT_MODIFIER_ALTKEY;
+        }
+        if modifiers.mac_cmd || modifiers.command {
+            flags |= PP_INPUTEVENT_MODIFIER_METAKEY;
+        }
+        flags
+    }
+
+    /// Map egui PointerButton to PPAPI MouseButton.
+    fn egui_button_to_ppapi(button: egui::PointerButton) -> PP_InputEvent_MouseButton {
+        match button {
+            egui::PointerButton::Primary => PP_INPUTEVENT_MOUSEBUTTON_LEFT,
+            egui::PointerButton::Secondary => PP_INPUTEVENT_MOUSEBUTTON_RIGHT,
+            egui::PointerButton::Middle => PP_INPUTEVENT_MOUSEBUTTON_MIDDLE,
+            _ => PP_INPUTEVENT_MOUSEBUTTON_NONE,
+        }
+    }
+
+    /// Handle mouse events (press, release, move) over the content area.
+    fn handle_mouse_events(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        content_rect: egui::Rect,
+        display_size: egui::Vec2,
+        tex_size: egui::Vec2,
+    ) {
+        let modifiers = ui.input(|i| i.modifiers);
+        let mut pp_modifiers = Self::egui_modifiers_to_ppapi(&modifiers);
+
+        // Check for pointer position.
+        let pointer_pos = ui.input(|i| i.pointer.interact_pos()).or_else(|| {
+            ui.input(|i| i.pointer.hover_pos())
+        });
+
+        // Mouse button presses.
+        for &button in &[
+            egui::PointerButton::Primary,
+            egui::PointerButton::Secondary,
+            egui::PointerButton::Middle,
+        ] {
+            if response.clicked_by(button) || ui.input(|i| i.pointer.button_pressed(button)) {
+                if let Some(pos) = pointer_pos {
+                    if content_rect.contains(pos) {
+                        let pp_pos = Self::screen_to_plugin(pos, content_rect, display_size, tex_size);
+                        let pp_button = Self::egui_button_to_ppapi(button);
+
+                        // Add button-down modifier.
+                        let btn_mod = match button {
+                            egui::PointerButton::Primary => PP_INPUTEVENT_MODIFIER_LEFTBUTTONDOWN,
+                            egui::PointerButton::Secondary => PP_INPUTEVENT_MODIFIER_RIGHTBUTTONDOWN,
+                            egui::PointerButton::Middle => PP_INPUTEVENT_MODIFIER_MIDDLEBUTTONDOWN,
+                            _ => 0,
+                        };
+                        pp_modifiers |= btn_mod;
+
+                        self.player.send_mouse_event(
+                            PP_INPUTEVENT_TYPE_MOUSEDOWN,
+                            pp_button,
+                            pp_pos,
+                            1,
+                            pp_modifiers,
+                        );
+                    }
+                }
+            }
+
+            if ui.input(|i| i.pointer.button_released(button)) {
+                if let Some(pos) = pointer_pos {
+                    if content_rect.contains(pos) {
+                        let pp_pos = Self::screen_to_plugin(pos, content_rect, display_size, tex_size);
+                        let pp_button = Self::egui_button_to_ppapi(button);
+                        self.player.send_mouse_event(
+                            PP_INPUTEVENT_TYPE_MOUSEUP,
+                            pp_button,
+                            pp_pos,
+                            0,
+                            pp_modifiers,
+                        );
+                    }
+                }
+            }
+        }
+
+        // Mouse move.
+        if response.hovered() {
+            if let Some(pos) = pointer_pos {
+                if content_rect.contains(pos) {
+                    // Only send mouse move if position changed.
+                    let pp_pos = Self::screen_to_plugin(pos, content_rect, display_size, tex_size);
+                    if self.last_mouse_pos != Some(pp_pos) {
+                        self.last_mouse_pos = Some(pp_pos);
+                        self.player.send_mouse_event(
+                            PP_INPUTEVENT_TYPE_MOUSEMOVE,
+                            PP_INPUTEVENT_MOUSEBUTTON_NONE,
+                            pp_pos,
+                            0,
+                            pp_modifiers,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Handle keyboard events.
+    fn handle_keyboard_events(&mut self, ui: &egui::Ui) {
+        ui.input(|i| {
+            for event in &i.events {
+                let modifiers = Self::egui_modifiers_to_ppapi(&i.modifiers);
+                match event {
+                    egui::Event::Key {
+                        key,
+                        pressed,
+                        modifiers: _,
+                        repeat,
+                        ..
+                    } => {
+                        let key_code = egui_key_to_vk(*key);
+                        if key_code == 0 {
+                            continue;
+                        }
+                        let code_str = egui_key_to_code_str(*key);
+                        let mut mods = modifiers;
+                        if *repeat {
+                            mods |= PP_INPUTEVENT_MODIFIER_ISAUTOREPEAT;
+                        }
+                        if *pressed {
+                            self.player.send_keyboard_event(
+                                PP_INPUTEVENT_TYPE_RAWKEYDOWN,
+                                key_code,
+                                "",
+                                code_str,
+                                mods,
+                            );
+                        } else {
+                            self.player.send_keyboard_event(
+                                PP_INPUTEVENT_TYPE_KEYUP,
+                                key_code,
+                                "",
+                                code_str,
+                                mods,
+                            );
+                        }
+                    }
+                    egui::Event::Text(text) => {
+                        for ch in text.chars() {
+                            self.player.send_keyboard_event(
+                                PP_INPUTEVENT_TYPE_CHAR,
+                                ch as u32,
+                                &ch.to_string(),
+                                "",
+                                modifiers,
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+    }
+
+    /// Handle scroll/wheel events.
+    fn handle_scroll_events(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        _content_rect: egui::Rect,
+        _display_size: egui::Vec2,
+        _tex_size: egui::Vec2,
+    ) {
+        if !response.hovered() {
+            return;
+        }
+        let scroll_delta = ui.input(|i| i.raw_scroll_delta);
+        if scroll_delta.x.abs() > 0.0 || scroll_delta.y.abs() > 0.0 {
+            let modifiers = ui.input(|i| i.modifiers);
+            let pp_modifiers = Self::egui_modifiers_to_ppapi(&modifiers);
+
+            let delta = PP_FloatPoint {
+                x: scroll_delta.x,
+                y: scroll_delta.y,
+            };
+            // Convert to discrete ticks (a rough approximation).
+            let ticks = PP_FloatPoint {
+                x: if scroll_delta.x.abs() > 0.0 {
+                    scroll_delta.x.signum()
+                } else {
+                    0.0
+                },
+                y: if scroll_delta.y.abs() > 0.0 {
+                    scroll_delta.y.signum()
+                } else {
+                    0.0
+                },
+            };
+            self.player.send_wheel_event(delta, ticks, false, pp_modifiers);
+        }
+    }
+}
+
+/// Map egui::Key to a Windows virtual key code (VK_*), which is what
+/// Pepper/Flash expects for KeyCode values.
+fn egui_key_to_vk(key: egui::Key) -> u32 {
+    match key {
+        egui::Key::A => 0x41,
+        egui::Key::B => 0x42,
+        egui::Key::C => 0x43,
+        egui::Key::D => 0x44,
+        egui::Key::E => 0x45,
+        egui::Key::F => 0x46,
+        egui::Key::G => 0x47,
+        egui::Key::H => 0x48,
+        egui::Key::I => 0x49,
+        egui::Key::J => 0x4A,
+        egui::Key::K => 0x4B,
+        egui::Key::L => 0x4C,
+        egui::Key::M => 0x4D,
+        egui::Key::N => 0x4E,
+        egui::Key::O => 0x4F,
+        egui::Key::P => 0x50,
+        egui::Key::Q => 0x51,
+        egui::Key::R => 0x52,
+        egui::Key::S => 0x53,
+        egui::Key::T => 0x54,
+        egui::Key::U => 0x55,
+        egui::Key::V => 0x56,
+        egui::Key::W => 0x57,
+        egui::Key::X => 0x58,
+        egui::Key::Y => 0x59,
+        egui::Key::Z => 0x5A,
+        egui::Key::Num0 => 0x30,
+        egui::Key::Num1 => 0x31,
+        egui::Key::Num2 => 0x32,
+        egui::Key::Num3 => 0x33,
+        egui::Key::Num4 => 0x34,
+        egui::Key::Num5 => 0x35,
+        egui::Key::Num6 => 0x36,
+        egui::Key::Num7 => 0x37,
+        egui::Key::Num8 => 0x38,
+        egui::Key::Num9 => 0x39,
+        egui::Key::Escape => 0x1B,
+        egui::Key::Tab => 0x09,
+        egui::Key::Backspace => 0x08,
+        egui::Key::Enter => 0x0D,
+        egui::Key::Space => 0x20,
+        egui::Key::ArrowUp => 0x26,
+        egui::Key::ArrowDown => 0x28,
+        egui::Key::ArrowLeft => 0x25,
+        egui::Key::ArrowRight => 0x27,
+        egui::Key::Home => 0x24,
+        egui::Key::End => 0x23,
+        egui::Key::PageUp => 0x21,
+        egui::Key::PageDown => 0x22,
+        egui::Key::Delete => 0x2E,
+        egui::Key::Insert => 0x2D,
+        egui::Key::F1 => 0x70,
+        egui::Key::F2 => 0x71,
+        egui::Key::F3 => 0x72,
+        egui::Key::F4 => 0x73,
+        egui::Key::F5 => 0x74,
+        egui::Key::F6 => 0x75,
+        egui::Key::F7 => 0x76,
+        egui::Key::F8 => 0x77,
+        egui::Key::F9 => 0x78,
+        egui::Key::F10 => 0x79,
+        egui::Key::F11 => 0x7A,
+        egui::Key::F12 => 0x7B,
+        egui::Key::Minus => 0xBD,
+        egui::Key::Plus => 0xBB,
+        _ => 0,
+    }
+}
+
+/// Map egui::Key to a DOM KeyboardEvent.code string.
+fn egui_key_to_code_str(key: egui::Key) -> &'static str {
+    match key {
+        egui::Key::A => "KeyA",
+        egui::Key::B => "KeyB",
+        egui::Key::C => "KeyC",
+        egui::Key::D => "KeyD",
+        egui::Key::E => "KeyE",
+        egui::Key::F => "KeyF",
+        egui::Key::G => "KeyG",
+        egui::Key::H => "KeyH",
+        egui::Key::I => "KeyI",
+        egui::Key::J => "KeyJ",
+        egui::Key::K => "KeyK",
+        egui::Key::L => "KeyL",
+        egui::Key::M => "KeyM",
+        egui::Key::N => "KeyN",
+        egui::Key::O => "KeyO",
+        egui::Key::P => "KeyP",
+        egui::Key::Q => "KeyQ",
+        egui::Key::R => "KeyR",
+        egui::Key::S => "KeyS",
+        egui::Key::T => "KeyT",
+        egui::Key::U => "KeyU",
+        egui::Key::V => "KeyV",
+        egui::Key::W => "KeyW",
+        egui::Key::X => "KeyX",
+        egui::Key::Y => "KeyY",
+        egui::Key::Z => "KeyZ",
+        egui::Key::Num0 => "Digit0",
+        egui::Key::Num1 => "Digit1",
+        egui::Key::Num2 => "Digit2",
+        egui::Key::Num3 => "Digit3",
+        egui::Key::Num4 => "Digit4",
+        egui::Key::Num5 => "Digit5",
+        egui::Key::Num6 => "Digit6",
+        egui::Key::Num7 => "Digit7",
+        egui::Key::Num8 => "Digit8",
+        egui::Key::Num9 => "Digit9",
+        egui::Key::Escape => "Escape",
+        egui::Key::Tab => "Tab",
+        egui::Key::Backspace => "Backspace",
+        egui::Key::Enter => "Enter",
+        egui::Key::Space => "Space",
+        egui::Key::ArrowUp => "ArrowUp",
+        egui::Key::ArrowDown => "ArrowDown",
+        egui::Key::ArrowLeft => "ArrowLeft",
+        egui::Key::ArrowRight => "ArrowRight",
+        egui::Key::Home => "Home",
+        egui::Key::End => "End",
+        egui::Key::PageUp => "PageUp",
+        egui::Key::PageDown => "PageDown",
+        egui::Key::Delete => "Delete",
+        egui::Key::Insert => "Insert",
+        egui::Key::F1 => "F1",
+        egui::Key::F2 => "F2",
+        egui::Key::F3 => "F3",
+        egui::Key::F4 => "F4",
+        egui::Key::F5 => "F5",
+        egui::Key::F6 => "F6",
+        egui::Key::F7 => "F7",
+        egui::Key::F8 => "F8",
+        egui::Key::F9 => "F9",
+        egui::Key::F10 => "F10",
+        egui::Key::F11 => "F11",
+        egui::Key::F12 => "F12",
+        egui::Key::Minus => "Minus",
+        egui::Key::Plus => "Equal",
+        _ => "",
     }
 }
 

@@ -453,6 +453,118 @@ impl FlashPlayer {
         self.instance_id.is_some()
     }
 
+    /// Get the current instance ID (if any).
+    pub fn instance_id(&self) -> Option<PP_Instance> {
+        self.instance_id
+    }
+
+    /// Send a mouse event to the plugin.
+    ///
+    /// `event_type` should be one of `PP_INPUTEVENT_TYPE_MOUSE*`.
+    /// `position` is in plugin-local coordinates (CSS pixels).
+    pub fn send_mouse_event(
+        &self,
+        event_type: PP_InputEvent_Type,
+        button: PP_InputEvent_MouseButton,
+        position: PP_Point,
+        click_count: i32,
+        modifiers: u32,
+    ) {
+        let Some(instance_id) = self.instance_id else {
+            return;
+        };
+        let Some(host) = ppapi_host::HOST.get() else {
+            return;
+        };
+
+        let timestamp = Self::current_time_ticks();
+        let ev = ppapi_host::interfaces::input_event::InputEventResource::new_mouse(
+            event_type,
+            timestamp,
+            modifiers,
+            button,
+            position,
+            click_count,
+            PP_Point { x: 0, y: 0 },
+        );
+        let resource_id = host.resources.insert(instance_id, Box::new(ev));
+        self.send_input_event(resource_id);
+        host.resources.release(resource_id);
+    }
+
+    /// Send a keyboard event to the plugin.
+    ///
+    /// `event_type` should be one of `PP_INPUTEVENT_TYPE_KEYDOWN`, `KEYUP`,
+    /// `RAWKEYDOWN`, or `CHAR`.
+    pub fn send_keyboard_event(
+        &self,
+        event_type: PP_InputEvent_Type,
+        key_code: u32,
+        character_text: &str,
+        code: &str,
+        modifiers: u32,
+    ) {
+        let Some(instance_id) = self.instance_id else {
+            return;
+        };
+        let Some(host) = ppapi_host::HOST.get() else {
+            return;
+        };
+
+        let timestamp = Self::current_time_ticks();
+        let char_var = host.vars.var_from_str(character_text);
+        let code_var = host.vars.var_from_str(code);
+
+        let ev = ppapi_host::interfaces::input_event::InputEventResource::new_keyboard(
+            event_type,
+            timestamp,
+            modifiers,
+            key_code,
+            char_var,
+            code_var,
+        );
+        let resource_id = host.resources.insert(instance_id, Box::new(ev));
+        self.send_input_event(resource_id);
+        host.resources.release(resource_id);
+    }
+
+    /// Send a wheel/scroll event to the plugin.
+    pub fn send_wheel_event(
+        &self,
+        delta: PP_FloatPoint,
+        ticks: PP_FloatPoint,
+        scroll_by_page: bool,
+        modifiers: u32,
+    ) {
+        let Some(instance_id) = self.instance_id else {
+            return;
+        };
+        let Some(host) = ppapi_host::HOST.get() else {
+            return;
+        };
+
+        let timestamp = Self::current_time_ticks();
+        let ev = ppapi_host::interfaces::input_event::InputEventResource::new_wheel(
+            timestamp,
+            modifiers,
+            delta,
+            ticks,
+            scroll_by_page,
+        );
+        let resource_id = host.resources.insert(instance_id, Box::new(ev));
+        self.send_input_event(resource_id);
+        host.resources.release(resource_id);
+    }
+
+    /// Get a monotonic timestamp in seconds (matching PPB_Core::GetTimeTicks).
+    fn current_time_ticks() -> PP_TimeTicks {
+        use std::sync::OnceLock;
+        use std::time::Instant;
+        static EPOCH: OnceLock<Instant> = OnceLock::new();
+        let epoch = EPOCH.get_or_init(Instant::now);
+        epoch.elapsed().as_secs_f64()
+    }
+
     /// Poll the main-thread message loop, executing any pending callbacks.
     ///
     /// This must be called regularly from the UI thread's update loop so

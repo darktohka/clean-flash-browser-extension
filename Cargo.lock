@@ -2575,6 +2575,7 @@ dependencies = [
  "player-core",
  "player-ui-traits",
  "ppapi-host",
+ "ppapi-sys",
  "rfd",
  "tracing",
  "tracing-subscriber",
