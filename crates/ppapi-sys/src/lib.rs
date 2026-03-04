@@ -1676,16 +1676,16 @@ pub struct PP_DirContents_Dev {
 
 #[repr(C)]
 pub struct PPB_Flash_File_ModuleLocal_3 {
-    pub CreateThreadAdapterForInstance: Option<unsafe extern "C" fn(instance: PP_Instance) -> PP_Bool>,
+    pub CreateThreadAdapterForInstance: Option<unsafe extern "C" fn(instance: PP_Instance) -> bool>,
     pub ClearThreadAdapterForInstance: Option<unsafe extern "C" fn(instance: PP_Instance)>,
-    pub OpenFile: Option<unsafe extern "C" fn(instance: PP_Instance, path: *const c_char, mode: i32, file: *mut i32) -> i32>,
+    pub OpenFile: Option<unsafe extern "C" fn(instance: PP_Instance, path: *const c_char, mode: i32, file: *mut PP_FileHandle) -> i32>,
     pub RenameFile: Option<unsafe extern "C" fn(instance: PP_Instance, path_from: *const c_char, path_to: *const c_char) -> i32>,
     pub DeleteFileOrDir: Option<unsafe extern "C" fn(instance: PP_Instance, path: *const c_char, recursive: PP_Bool) -> i32>,
     pub CreateDir: Option<unsafe extern "C" fn(instance: PP_Instance, path: *const c_char) -> i32>,
     pub QueryFile: Option<unsafe extern "C" fn(instance: PP_Instance, path: *const c_char, info: *mut PP_FileInfo) -> i32>,
-    pub GetDirContents: Option<unsafe extern "C" fn(instance: PP_Instance, path: *const c_char, contents: *mut PP_DirContents_Dev) -> i32>,
+    pub GetDirContents: Option<unsafe extern "C" fn(instance: PP_Instance, path: *const c_char, contents: *mut *mut PP_DirContents_Dev) -> i32>,
     pub FreeDirContents: Option<unsafe extern "C" fn(instance: PP_Instance, contents: *mut PP_DirContents_Dev)>,
-    pub CreateTemporaryFile: Option<unsafe extern "C" fn(instance: PP_Instance, file: *mut i32) -> i32>,
+    pub CreateTemporaryFile: Option<unsafe extern "C" fn(instance: PP_Instance, file: *mut PP_FileHandle) -> i32>,
 }
 
 unsafe impl Send for PPB_Flash_File_ModuleLocal_3 {}

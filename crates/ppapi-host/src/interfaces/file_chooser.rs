@@ -49,6 +49,13 @@ static VTABLE_0_6: PPB_FileChooser_Dev_0_6 = PPB_FileChooser_Dev_0_6 {
     Show: Some(show_0_6),
 };
 
+static VTABLE_0_5: PPB_FileChooser_Dev_0_5 = PPB_FileChooser_Dev_0_5 {
+    Create: Some(create),
+    IsFileChooser: Some(is_file_chooser),
+    Show: Some(show_0_5),
+    GetNextChosenFile: Some(get_next_chosen_file_0_5),
+};
+
 static VTABLE_TRUSTED_0_6: PPB_FileChooserTrusted_0_6 = PPB_FileChooserTrusted_0_6 {
     ShowWithoutUserGesture: Some(show_without_user_gesture_0_6),
 };
@@ -60,12 +67,7 @@ static VTABLE_TRUSTED_0_5: PPB_FileChooserTrusted_0_5 = PPB_FileChooserTrusted_0
 pub unsafe fn register(registry: &mut InterfaceRegistry) {
     unsafe {
         registry.register(PPB_FILECHOOSER_DEV_INTERFACE_0_6, &VTABLE_0_6);
-        // 0.5 has a different vtable shape, but Flash typically uses 0.6.
-        // We register 0.6 for both since Flash will call the 0.6 methods.
-        registry.register_raw(
-            PPB_FILECHOOSER_DEV_INTERFACE_0_5,
-            &VTABLE_0_6 as *const _ as *const c_void,
-        );
+        registry.register(PPB_FILECHOOSER_DEV_INTERFACE_0_5, &VTABLE_0_5);
         registry.register(PPB_FILECHOOSER_TRUSTED_INTERFACE_0_6, &VTABLE_TRUSTED_0_6);
         registry.register_raw(
             PPB_FILECHOOSER_TRUSTED_INTERFACE_0_5,
@@ -113,6 +115,23 @@ unsafe extern "C" fn show_0_6(
 ) -> i32 {
     tracing::debug!("PPB_FileChooser::Show(chooser={})", chooser);
     do_show(chooser, PP_FALSE, "", output, callback)
+}
+
+/// Show the file chooser dialog (0.5 API without PP_ArrayOutput).
+unsafe extern "C" fn show_0_5(
+    chooser: PP_Resource,
+    callback: PP_CompletionCallback,
+) -> i32 {
+    tracing::debug!("PPB_FileChooser(0.5)::Show(chooser={})", chooser);
+    // We don't maintain a 0.5-style chosen-file iterator state yet.
+    // Complete asynchronously with cancel, rather than exposing an ABI-mismatched vtable.
+    fire_callback(callback, PP_ERROR_USERCANCEL);
+    PP_OK_COMPLETIONPENDING
+}
+
+/// 0.5 API iterator accessor.
+unsafe extern "C" fn get_next_chosen_file_0_5(_chooser: PP_Resource) -> PP_Resource {
+    0
 }
 
 /// ShowWithoutUserGesture (0.6 API with PP_ArrayOutput).

@@ -109,5 +109,5 @@ pub unsafe fn register_all(registry: &mut InterfaceRegistry) {
         self::video_capture::register(registry);
     }
     // Register stub vtables for all remaining required interfaces
-    self::stubs::register(registry);
+    //self::stubs::register(registry);
 }

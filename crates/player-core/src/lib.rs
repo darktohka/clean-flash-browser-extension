@@ -188,16 +188,19 @@ impl FlashPlayer {
 
         // Prepare argc/argn/argv — mirror what the browser passes for a
         // full-frame plugin: src + type (like Chrome's internal embed).
-        let src_key = std::ffi::CString::new("src").unwrap();
-        let src_val = std::ffi::CString::new(instance_url.as_str()).unwrap();
-        let type_key = std::ffi::CString::new("type").unwrap();
-        let type_val = std::ffi::CString::new("application/x-shockwave-flash").unwrap();
+        //let src_key = std::ffi::CString::new("src").unwrap();
+        //let src_val = std::ffi::CString::new(instance_url.as_str()).unwrap();
+        //let type_key = std::ffi::CString::new("type").unwrap();
+        //let type_val = std::ffi::CString::new("application/x-shockwave-flash").unwrap();
 
-        println!("DidCreate args:");
-        println!("  {} = {}", src_key.to_str().unwrap(), src_val.to_str().unwrap());
-
-        let argn = [src_key.as_ptr(), type_key.as_ptr()];
-        let argv = [src_val.as_ptr(), type_val.as_ptr()];
+        //println!("DidCreate args:");
+        //println!("  {} = {}", src_key.to_str().unwrap(), src_val.to_str().unwrap());
+//
+        //let argn = [src_key.as_ptr(), type_key.as_ptr()];
+        //let argv = [src_val.as_ptr(), type_val.as_ptr()];
+        // Make empty argn and argv
+        let argn: [*const i8; 0] = [];
+        let argv: [*const i8; 0] = [];
         let argc = argn.len() as u32;
 
         let result = unsafe {

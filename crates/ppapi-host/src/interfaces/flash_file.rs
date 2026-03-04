@@ -65,9 +65,9 @@ fn resolve_path(rel: &str) -> Option<PathBuf> {
     }
 }
 
-unsafe extern "C" fn create_thread_adapter(_instance: PP_Instance) -> PP_Bool {
+unsafe extern "C" fn create_thread_adapter(_instance: PP_Instance) -> bool {
     tracing::debug!("PPB_Flash_File_ModuleLocal::CreateThreadAdapterForInstance");
-    PP_TRUE
+    true
 }
 
 unsafe extern "C" fn clear_thread_adapter(_instance: PP_Instance) {
@@ -78,7 +78,7 @@ unsafe extern "C" fn open_file(
     _instance: PP_Instance,
     path: *const c_char,
     mode: i32,
-    file: *mut i32,
+    file: *mut PP_FileHandle,
 ) -> i32 {
     tracing::debug!(
         "PPB_Flash_File_ModuleLocal::OpenFile(path={:?}, mode={})",
@@ -239,7 +239,7 @@ unsafe extern "C" fn query_file(
 unsafe extern "C" fn get_dir_contents(
     _instance: PP_Instance,
     path: *const c_char,
-    contents: *mut PP_DirContents_Dev,
+    contents: *mut *mut PP_DirContents_Dev,
 ) -> i32 {
     tracing::debug!(
         "PPB_Flash_File_ModuleLocal::GetDirContents(path={:?})",
@@ -257,34 +257,44 @@ unsafe extern "C" fn get_dir_contents(
     };
 
     let count = entries.len() as i32;
-    // Allocate space for entries, ensuring at least 1 slot for valid pointer even if empty
-    let alloc_size = if entries.is_empty() { 1 } else { entries.len() };
-    let layout = std::alloc::Layout::array::<PP_DirEntry_Dev>(alloc_size).unwrap();
-    let ptr = unsafe { std::alloc::alloc_zeroed(layout) as *mut PP_DirEntry_Dev };
-    if ptr.is_null() {
-        return PP_ERROR_FAILED;
-    }
+
+    let mut dir_contents = Box::new(PP_DirContents_Dev {
+        count,
+        entries: std::ptr::null_mut(),
+    });
+
+    // Allocate entries array only if needed. For empty directories, keep
+    // entries=NULL and count=0 exactly like C implementations typically do.
+    let entries_ptr = if entries.is_empty() {
+        std::ptr::null_mut()
+    } else {
+        let layout = std::alloc::Layout::array::<PP_DirEntry_Dev>(entries.len()).unwrap();
+        let ptr = unsafe { std::alloc::alloc_zeroed(layout) as *mut PP_DirEntry_Dev };
+        if ptr.is_null() {
+            return PP_ERROR_FAILED;
+        }
+        ptr
+    };
 
     for (i, entry) in entries.iter().enumerate() {
         let name = entry.file_name();
         let name_c = CString::new(name.to_string_lossy().as_bytes()).unwrap_or_default();
-        let name_ptr = name_c.into_raw(); // leak, freed in FreeDirContents
+        let name_ptr = name_c.into_raw(); // reclaimed in FreeDirContents
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
         unsafe {
-            *ptr.add(i) = PP_DirEntry_Dev {
+            *entries_ptr.add(i) = PP_DirEntry_Dev {
                 name: name_ptr,
                 is_dir: pp_from_bool(is_dir),
             };
         }
     }
 
+    dir_contents.entries = entries_ptr;
+
     tracing::trace!("PPB_Flash_File_ModuleLocal::GetDirContents: found {} entries", count);
 
     unsafe {
-        *contents = PP_DirContents_Dev {
-            count,
-            entries: ptr,
-        };
+        *contents = Box::into_raw(dir_contents);
     }
     PP_OK
 }
@@ -300,25 +310,26 @@ unsafe extern "C" fn free_dir_contents(
     if contents.is_null() {
         return;
     }
-    let c = unsafe { &*contents };
-    for i in 0..c.count as usize {
-        let entry = unsafe { &*c.entries.add(i) };
+
+    let contents_box = unsafe { Box::from_raw(contents) };
+
+    for i in 0..contents_box.count as usize {
+        let entry = unsafe { &*contents_box.entries.add(i) };
         if !entry.name.is_null() {
-            // Reclaim the CString we leaked in get_dir_contents
             let _ = unsafe { CString::from_raw(entry.name as *mut c_char) };
         }
     }
-    // Deallocate the entries array (always has room for at least 1)
-    if !c.entries.is_null() {
-        let alloc_size = if c.count == 0 { 1 } else { c.count as usize };
-        let layout = std::alloc::Layout::array::<PP_DirEntry_Dev>(alloc_size).unwrap();
-        unsafe { std::alloc::dealloc(c.entries as *mut u8, layout) };
+
+    if !contents_box.entries.is_null() && contents_box.count > 0 {
+        let layout =
+            std::alloc::Layout::array::<PP_DirEntry_Dev>(contents_box.count as usize).unwrap();
+        unsafe { std::alloc::dealloc(contents_box.entries as *mut u8, layout) };
     }
 }
 
 unsafe extern "C" fn create_temporary_file(
     _instance: PP_Instance,
-    file: *mut i32,
+    file: *mut PP_FileHandle,
 ) -> i32 {
     tracing::debug!(
         "PPB_Flash_File_ModuleLocal::CreateTemporaryFile(file={:?})",

@@ -43,8 +43,8 @@ unsafe extern "C" fn get_screen_size(
         // Return a reasonable default screen size.
         unsafe {
             *size = PP_Size {
-                width: 1920,
-                height: 1080,
+                width: 640,
+                height: 480,
             };
         }
     }
