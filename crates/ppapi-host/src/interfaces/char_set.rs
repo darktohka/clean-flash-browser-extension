@@ -70,6 +70,20 @@ unsafe extern "C" fn utf16_to_char_set(
     on_error: PP_CharSet_ConversionError,
     output_length: *mut u32,
 ) -> *mut c_char {
+    tracing::debug!(
+        "PPB_CharSet::UTF16ToCharSet called with utf16_len={}, output_char_set={:?}, on_error={:?}",
+        utf16_len,
+        if output_char_set.is_null() {
+            None
+        } else {
+            Some(
+                unsafe { CStr::from_ptr(output_char_set) }
+                    .to_str()
+                    .unwrap_or("<invalid UTF-8>"),
+            )
+        },
+        on_error
+    );
     if output_length.is_null() {
         return std::ptr::null_mut();
     }
@@ -141,6 +155,20 @@ unsafe extern "C" fn char_set_to_utf16(
     on_error: PP_CharSet_ConversionError,
     output_length: *mut u32,
 ) -> *mut u16 {
+    tracing::debug!(
+        "PPB_CharSet::CharSetToUTF16 called with input_len={}, input_char_set={:?}, on_error={:?}",
+        input_len,
+        if input_char_set.is_null() {
+            None
+        } else {
+            Some(
+                unsafe { CStr::from_ptr(input_char_set) }
+                    .to_str()
+                    .unwrap_or("<invalid UTF-8>"),
+            )
+        },
+        on_error
+    );
     if output_length.is_null() {
         return std::ptr::null_mut();
     }
@@ -171,12 +199,10 @@ unsafe extern "C" fn char_set_to_utf16(
         Ok(s) => s.to_owned(),
         Err(_) => match on_error {
             PP_CHARSET_CONVERSIONERROR_FAIL => return std::ptr::null_mut(),
-            PP_CHARSET_CONVERSIONERROR_SKIP => {
-                String::from_utf8_lossy(input_bytes)
-                    .chars()
-                    .filter(|c| *c != '\u{FFFD}')
-                    .collect()
-            }
+            PP_CHARSET_CONVERSIONERROR_SKIP => String::from_utf8_lossy(input_bytes)
+                .chars()
+                .filter(|c| *c != '\u{FFFD}')
+                .collect(),
             _ => {
                 // SUBSTITUTE — from_utf8_lossy already uses U+FFFD, but the
                 // spec says use '?' for non-Unicode charsets. We'll use '?'.
@@ -225,6 +251,7 @@ unsafe extern "C" fn char_set_to_utf16(
 }
 
 unsafe extern "C" fn get_default_char_set(_instance: PP_Instance) -> PP_Var {
+    tracing::debug!("PPB_CharSet::GetDefaultCharSet called");
     let Some(host) = HOST.get() else {
         return PP_Var::undefined();
     };

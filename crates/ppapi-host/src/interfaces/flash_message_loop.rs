@@ -1,15 +1,19 @@
 //! PPB_Flash_MessageLoop;0.1 implementation.
 //!
 //! Provides a nested message loop for synchronous Flash operations.
-//! The Run() method blocks until Quit() is called.
+//! The Run() method blocks until Quit() is called, while continuing
+//! to pump the main-thread message loop so that `CallOnMainThread`
+//! callbacks and other scheduled work keep flowing.
 
 use crate::interface_registry::InterfaceRegistry;
 use crate::resource::Resource;
 use ppapi_sys::*;
 use std::any::Any;
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 use super::super::HOST;
+use super::message_loop::MessageLoopResource;
 
 /// Flash message loop resource.
 pub struct FlashMessageLoopResource {
@@ -69,13 +73,45 @@ unsafe extern "C" fn run(flash_message_loop: PP_Resource) -> i32 {
         return PP_ERROR_BADRESOURCE;
     };
 
+    // Get the main loop resource ID so we can pump it while waiting.
+    let main_loop_id = host
+        .main_message_loop_resource
+        .load(std::sync::atomic::Ordering::SeqCst);
+
     let (lock, cvar) = &*signal;
-    let mut quit = lock.lock().unwrap();
-    while !*quit {
-        quit = cvar.wait(quit).unwrap();
+
+    // Pump the main message loop while waiting for the quit signal.
+    // Use a short timeout on the condvar so we wake up regularly to
+    // process any pending main-loop callbacks (timers, async
+    // completions, etc.).  This mirrors Chromium's
+    // EnableMessagePumping() behaviour for PPB_Flash_MessageLoop.
+    loop {
+        let quit_guard = lock.lock().unwrap();
+        if *quit_guard {
+            // Reset for potential reuse.
+            drop(quit_guard);
+            let mut q = lock.lock().unwrap();
+            *q = false;
+            break;
+        }
+        // Wait with a short timeout so we can pump the main loop.
+        let _result = cvar.wait_timeout(quit_guard, Duration::from_millis(5)).unwrap();
+
+        // Pump the main message loop while we're blocked.
+        // Drain under the resource lock, then execute callbacks with the
+        // lock released so they can freely access resources.
+        if main_loop_id != 0 {
+            let ready = host.resources
+                .with_downcast_mut::<MessageLoopResource, _>(main_loop_id, |ml| {
+                    ml.loop_handle.drain_ready()
+                });
+            if let Some(ready) = ready {
+                for (callback, result) in ready {
+                    unsafe { callback.run(result); }
+                }
+            }
+        }
     }
-    // Reset for potential reuse.
-    *quit = false;
 
     PP_OK
 }

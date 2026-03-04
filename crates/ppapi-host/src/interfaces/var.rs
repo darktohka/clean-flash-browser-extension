@@ -95,6 +95,7 @@ unsafe extern "C" fn var_to_utf8(var: PP_Var, len: *mut u32) -> *const c_char {
 }
 
 unsafe extern "C" fn var_to_resource(var: PP_Var) -> PP_Resource {
+    tracing::trace!("PPB_Var::VarToResource({:?})", var);
     if var.type_ != PP_VARTYPE_RESOURCE {
         return 0;
     }
@@ -102,5 +103,6 @@ unsafe extern "C" fn var_to_resource(var: PP_Var) -> PP_Resource {
 }
 
 unsafe extern "C" fn var_from_resource(resource: PP_Resource) -> PP_Var {
+    tracing::trace!("PPB_Var::VarFromResource({})", resource);
     PP_Var::from_resource(resource)
 }

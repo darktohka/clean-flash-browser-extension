@@ -17,6 +17,7 @@ pub unsafe fn register(registry: &mut InterfaceRegistry) {
 }
 
 unsafe extern "C" fn bind_graphics(instance: PP_Instance, device: PP_Resource) -> PP_Bool {
+    tracing::trace!("BindGraphics called with instance {} and device {}", instance, device);
     let Some(host) = HOST.get() else {
         return PP_FALSE;
     };
@@ -61,6 +62,7 @@ unsafe extern "C" fn bind_graphics(instance: PP_Instance, device: PP_Resource) -
 }
 
 unsafe extern "C" fn is_full_frame(_instance: PP_Instance) -> PP_Bool {
+    tracing::trace!("IsFullFrame called");
     // In our projector, the Flash content always fills the full frame.
     PP_TRUE
 }

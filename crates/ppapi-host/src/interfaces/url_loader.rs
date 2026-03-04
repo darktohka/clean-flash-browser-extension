@@ -1,41 +1,107 @@
-//! PPB_URLLoader;1.0 implementation.
+//! PPB_URLLoader;1.0 implementation — chunked async download/upload.
+//!
+//! `Open()` spawns a background I/O thread that calls
+//! [`HostCallbacks::on_url_open`] and then streams the response body
+//! through a shared ring-buffer.  `ReadResponseBody()` serves data from
+//! that buffer with proper PPAPI completion-callback semantics.
+//!
+//! Upload progress is tracked by bytes delivered to the HTTP request body.
+//! Download progress is tracked by bytes streamed into the buffer.
 
 use crate::interface_registry::InterfaceRegistry;
 use crate::resource::Resource;
 use ppapi_sys::*;
 use std::any::Any;
+use std::collections::VecDeque;
 use std::ffi::c_void;
+use std::io::Read;
+use std::sync::Arc;
+
+use parking_lot::Mutex;
 
 use super::super::HOST;
 
-/// URLLoader resource state.
-#[derive(Debug)]
+// ---------------------------------------------------------------------------
+// Pending read request — stored when ReadResponseBody has no data yet
+// ---------------------------------------------------------------------------
+
+struct PendingRead {
+    buffer: *mut u8,
+    bytes_to_read: usize,
+    callback: PP_CompletionCallback,
+}
+
+// Safety: the buffer pointer is provided by the plugin and remains valid
+// until the callback fires.  We only write to it *before* posting the
+// callback, so the pointer access is safe.
+unsafe impl Send for PendingRead {}
+unsafe impl Sync for PendingRead {}
+
+// ---------------------------------------------------------------------------
+// Shared streaming state between main thread and background I/O thread
+// ---------------------------------------------------------------------------
+
+pub struct URLLoaderInner {
+    /// Buffered response body data received from the network / filesystem.
+    buffer: VecDeque<u8>,
+
+    /// Total bytes received so far.
+    pub bytes_received: i64,
+    /// Total expected bytes (−1 when unknown / chunked transfer).
+    pub total_bytes: i64,
+
+    /// Bytes of request body sent.
+    pub bytes_sent: i64,
+    /// Total request body size.
+    pub total_bytes_to_send: i64,
+
+    /// All response body data has been received (EOF or error).
+    pub finished: bool,
+    /// `Open` has completed (headers are available).
+    pub open_complete: bool,
+    /// Error code if the request failed (`None` = no error).
+    pub error: Option<i32>,
+
+    /// A single pending `ReadResponseBody` waiting for data.
+    pending_read: Option<PendingRead>,
+
+    /// Whether download progress should be tracked.
+    pub record_download_progress: bool,
+    /// Whether upload progress should be tracked.
+    pub record_upload_progress: bool,
+
+    /// The URL being loaded.
+    pub url: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// URLLoader resource
+// ---------------------------------------------------------------------------
+
+/// PPB_URLLoader resource — one per `Create()` call.
 pub struct URLLoaderResource {
     pub instance: PP_Instance,
-    pub url: Option<String>,
-    pub response_info: Option<PP_Resource>,
-    pub response_body: Vec<u8>,
-    pub read_offset: usize,
-    /// Set to true once Open() has been called (or the loader was pre-loaded).
-    /// Flash may check this implicitly via GetResponseInfo/GetDownloadProgress.
-    pub open_complete: bool,
-    /// Set to true once all data has been delivered (EOF).
-    pub finished_loading: bool,
+    /// ID of the associated `URLResponseInfo` resource (set after Open).
+    pub response_info_id: Option<PP_Resource>,
+    /// Shared state for streaming I/O.
+    pub inner: Arc<Mutex<URLLoaderInner>>,
 }
 
 impl Resource for URLLoaderResource {
     fn resource_type(&self) -> &'static str {
         "PPB_URLLoader"
     }
-
     fn as_any(&self) -> &dyn Any {
         self
     }
-
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 }
+
+// ---------------------------------------------------------------------------
+// Vtable
+// ---------------------------------------------------------------------------
 
 static VTABLE: PPB_URLLoader_1_0 = PPB_URLLoader_1_0 {
     Create: Some(create),
@@ -63,33 +129,54 @@ pub unsafe fn register(registry: &mut InterfaceRegistry) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Create / IsURLLoader
+// ---------------------------------------------------------------------------
+
 unsafe extern "C" fn create(instance: PP_Instance) -> PP_Resource {
     tracing::trace!("PPB_URLLoader::Create(instance={})", instance);
-    let Some(host) = HOST.get() else {
-        return 0;
+    let Some(host) = HOST.get() else { return 0 };
+
+    let inner = URLLoaderInner {
+        buffer: VecDeque::new(),
+        bytes_received: 0,
+        total_bytes: -1,
+        bytes_sent: 0,
+        total_bytes_to_send: 0,
+        finished: false,
+        open_complete: false,
+        error: None,
+        pending_read: None,
+        record_download_progress: false,
+        record_upload_progress: false,
+        url: None,
     };
     let loader = URLLoaderResource {
         instance,
-        url: None,
-        response_info: None,
-        response_body: Vec::new(),
-        read_offset: 0,
-        open_complete: false,
-        finished_loading: false,
+        response_info_id: None,
+        inner: Arc::new(Mutex::new(inner)),
     };
     let id = host.resources.insert(instance, Box::new(loader));
-    tracing::debug!("PPB_URLLoader::Create(instance={}) -> resource={}", instance, id);
+    tracing::debug!(
+        "PPB_URLLoader::Create(instance={}) -> resource={}",
+        instance,
+        id
+    );
     id
 }
 
 unsafe extern "C" fn is_url_loader(resource: PP_Resource) -> PP_Bool {
-    tracing::info!("PPB_URLLoader::IsURLLoader(resource={}) <-- Flash checking if this is a URLLoader", resource);
-    let result = HOST.get()
+    HOST.get()
         .map(|h| pp_from_bool(h.resources.is_type(resource, "PPB_URLLoader")))
-        .unwrap_or(PP_FALSE);
-    tracing::info!("PPB_URLLoader::IsURLLoader(resource={}) -> {}", resource, result);
-    result
+        .unwrap_or(PP_FALSE)
 }
+
+// ---------------------------------------------------------------------------
+// Open — spawn background I/O thread for async download + upload
+// ---------------------------------------------------------------------------
+
+/// Chunk size for reading the response body from the network.
+const STREAM_CHUNK_SIZE: usize = 64 * 1024; // 64 KiB
 
 unsafe extern "C" fn open(
     loader: PP_Resource,
@@ -106,100 +193,256 @@ unsafe extern "C" fn open(
         return PP_ERROR_FAILED;
     };
 
-    // Read the URL from the request info resource.
-    let url: Option<String> = host.resources.with_downcast::<super::url_request_info::URLRequestInfoResource, _>(
-        request_info,
-        |req| req.url.clone().unwrap_or_default(),
+    // --- Extract request parameters from URLRequestInfoResource ----------
+    let req_data = host
+        .resources
+        .with_downcast::<super::url_request_info::URLRequestInfoResource, _>(
+            request_info,
+            |req| {
+                (
+                    req.url.clone().unwrap_or_default(),
+                    req.method.clone().unwrap_or_else(|| "GET".to_string()),
+                    req.headers.clone().unwrap_or_default(),
+                    if req.body.is_empty() {
+                        None
+                    } else {
+                        Some(req.body.clone())
+                    },
+                    req.stream_to_file,
+                    req.follow_redirects,
+                    req.record_download_progress,
+                    req.record_upload_progress,
+                )
+            },
+        );
+
+    let Some((url, method, headers, body, _stream_to_file, _follow_redirects, record_dl, record_ul)) =
+        req_data
+    else {
+        tracing::warn!(
+            "PPB_URLLoader::Open: bad request_info resource {}",
+            request_info
+        );
+        return PP_ERROR_BADRESOURCE;
+    };
+
+    tracing::info!(
+        "PPB_URLLoader::Open: loader={} url={:?} method={}",
+        loader,
+        url,
+        method
     );
 
-    let url_str = url.clone().unwrap_or_default();
-    tracing::debug!("PPB_URLLoader::Open: loader={} url={:?}", loader, url_str);
-
-    if let Some(url) = url {
-        // Notify the host that a URL load is requested.
-        if let Some(cb) = host.host_callbacks.lock().as_ref() {
-            let body: Vec<u8> = cb.on_url_load(&url);
-            let body_len = body.len();
-            
-            tracing::debug!("PPB_URLLoader::Open: on_url_load returned {} bytes", body_len);
-            
-            if body_len == 0 {
-                tracing::warn!("PPB_URLLoader::Open: on_url_load returned empty body for {}", url);
+    // --- Configure the loader's inner state ------------------------------
+    let inner_arc = host
+        .resources
+        .with_downcast_mut::<URLLoaderResource, _>(loader, |l| {
+            {
+                let mut inner = l.inner.lock();
+                inner.url = Some(url.clone());
+                inner.record_download_progress = record_dl;
+                inner.record_upload_progress = record_ul;
+                if let Some(ref b) = body {
+                    inner.total_bytes_to_send = b.len() as i64;
+                }
             }
+            l.inner.clone()
+        });
 
-            // Create response info eagerly with basic HTTP-like metadata.
-            // Flash commonly queries response headers and may reject loads
-            // when Content-Type is missing.
-            let content_type = if url.to_ascii_lowercase().ends_with(".swf") {
-                "application/x-shockwave-flash"
-            } else {
-                "application/octet-stream"
-            };
-            // Headers must be properly formatted with CRLF line endings and blank line terminator.
-            // This matches HTTP response header format that Flash expects.
-            let headers = format!(
-                "Content-Type: {}\r\nContent-Length: {}\r\nServer: PepperFlash\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n",
-                content_type,
-                body_len,
-            );
-            let response_info = super::url_response_info::URLResponseInfoResource {
-                url: url.clone(),
-                status_code: 200,
-                status_line: "200 OK".to_string(),
-                headers,
-            };
-            let loader_instance = host
-                .resources
-                .with_downcast::<URLLoaderResource, _>(loader, |l| l.instance)
-                .unwrap_or(0);
-            let response_info_id = host.resources.insert(
-                loader_instance,
-                Box::new(response_info),
-            );
+    let Some(inner_arc) = inner_arc else {
+        return PP_ERROR_BADRESOURCE;
+    };
 
-            host.resources.with_downcast_mut::<URLLoaderResource, _>(loader, |l| {
-                l.url = Some(url.clone());
-                l.response_body = body;
-                l.read_offset = 0;
-                l.open_complete = true;
-                l.finished_loading = true;
-                l.response_info = Some(response_info_id);
-            });
-            tracing::debug!(
-                "PPB_URLLoader::Open: loader={} loaded {} bytes from {:?}, response_info={}",
-                loader,
-                body_len,
-                url,
-                response_info_id
-            );
-        }
-    }
+    let loader_instance = host
+        .resources
+        .with_downcast::<URLLoaderResource, _>(loader, |l| l.instance)
+        .unwrap_or(0);
 
-    // Complete: fire callback with PP_OK.
-    // Use FLAG_OPTIONAL semantics: if the callback has FLAG_OPTIONAL set,
-    // return the result directly. Otherwise fire the callback.
-    if callback.is_null() {
-        tracing::debug!("PPB_URLLoader::Open: loader={} -> PP_OK (blocking)", loader);
-        PP_OK
-    } else if callback.flags == PP_COMPLETIONCALLBACK_FLAG_OPTIONAL {
-        tracing::debug!("PPB_URLLoader::Open: loader={} -> PP_OK (optional, sync)", loader);
-        PP_OK
-    } else {
-        tracing::debug!("PPB_URLLoader::Open: loader={} -> PP_OK_COMPLETIONPENDING", loader);
-        // Post callback to message loop so it fires asynchronously.
-        // Use main_loop_poster (channel-based) instead of locking
-        // main_message_loop directly — avoids deadlock when Open is
-        // called from within a callback dispatched by poll_main_loop
-        // (which already holds the main_message_loop lock).
-        if let Some(poster) = &*host.main_loop_poster.lock() {
-            poster.post_work(callback, 0, PP_OK);
+    // Clone the poster and the Arc<HostCallbacks> so the background thread
+    // does NOT hold the host_callbacks mutex during long-running I/O.
+    let poster = host.main_loop_poster.lock().clone();
+    let host_cbs: Option<std::sync::Arc<dyn crate::HostCallbacks>> =
+        host.host_callbacks.lock().clone();
+
+    // --- Spawn background I/O thread -------------------------------------
+    let cb = callback;
+    let resource_id = loader;
+    let instance_id = loader_instance;
+
+    std::thread::spawn(move || {
+        let Some(host) = HOST.get() else { return };
+
+        // Call the host's on_url_open (may block for HTTP / file I/O).
+        let result = if let Some(ref hcb) = host_cbs {
+            hcb.on_url_open(&url, &method, &headers, body.as_deref())
         } else {
-            // Fallback: fire inline if no message loop.
-            unsafe { callback.run(PP_OK) };
+            Err(PP_ERROR_FAILED)
+        };
+
+        match result {
+            Ok(mut response) => {
+                // ------ Headers received —— populate metadata ------
+                {
+                    let mut inner = inner_arc.lock();
+                    inner.open_complete = true;
+                    inner.total_bytes = response.content_length.unwrap_or(-1);
+                    // Upload is delivered atomically via the request body,
+                    // so mark it fully sent once headers come back.
+                    inner.bytes_sent = inner.total_bytes_to_send;
+                }
+
+                // Create the URLResponseInfo resource.
+                let ri = super::url_response_info::URLResponseInfoResource {
+                    url: url.clone(),
+                    status_code: response.status_code as i32,
+                    status_line: response.status_line.clone(),
+                    headers: response.headers.clone(),
+                    redirect_url: String::new(),
+                };
+                let ri_id = host.resources.insert(instance_id, Box::new(ri));
+                host.resources
+                    .with_downcast_mut::<URLLoaderResource, _>(resource_id, |l| {
+                        l.response_info_id = Some(ri_id);
+                    });
+
+                tracing::debug!(
+                    "PPB_URLLoader::Open: loader={} headers received, status={}, \
+                     content_length={:?}, response_info={}",
+                    resource_id,
+                    response.status_code,
+                    response.content_length,
+                    ri_id
+                );
+
+                // Fire the Open completion callback (headers ready).
+                if let Some(ref p) = poster {
+                    p.post_work(cb, 0, PP_OK);
+                } else {
+                    unsafe { cb.run(PP_OK) };
+                }
+
+                // ------ Stream the response body in chunks ------
+                let mut chunk_buf = vec![0u8; STREAM_CHUNK_SIZE];
+                loop {
+                    let n = match response.body.read(&mut chunk_buf) {
+                        Ok(0) => {
+                            // --- EOF ---
+                            let mut inner = inner_arc.lock();
+                            inner.finished = true;
+                            tracing::debug!(
+                                "PPB_URLLoader: loader={} download complete, total {} bytes",
+                                resource_id,
+                                inner.bytes_received
+                            );
+                            // Satisfy any pending ReadResponseBody with 0 (EOF).
+                            if let Some(pending) = inner.pending_read.take() {
+                                drop(inner);
+                                if let Some(ref p) = poster {
+                                    p.post_work(pending.callback, 0, 0);
+                                } else {
+                                    unsafe { pending.callback.run(0) };
+                                }
+                            }
+                            break;
+                        }
+                        Ok(n) => n,
+                        Err(e) => {
+                            tracing::warn!(
+                                "PPB_URLLoader: loader={} read error: {}",
+                                resource_id,
+                                e
+                            );
+                            let mut inner = inner_arc.lock();
+                            inner.finished = true;
+                            inner.error = Some(PP_ERROR_FAILED);
+                            if let Some(pending) = inner.pending_read.take() {
+                                drop(inner);
+                                if let Some(ref p) = poster {
+                                    p.post_work(pending.callback, 0, PP_ERROR_FAILED);
+                                } else {
+                                    unsafe { pending.callback.run(PP_ERROR_FAILED) };
+                                }
+                            }
+                            break;
+                        }
+                    };
+
+                    // We got `n` bytes — deliver them.
+                    let mut inner = inner_arc.lock();
+                    inner.bytes_received += n as i64;
+
+                    if let Some(pending) = inner.pending_read.take() {
+                        // A ReadResponseBody is waiting — serve directly into
+                        // the plugin's buffer, bypassing the VecDeque.
+                        let to_copy = n.min(pending.bytes_to_read);
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(
+                                chunk_buf.as_ptr(),
+                                pending.buffer,
+                                to_copy,
+                            );
+                        }
+                        // Buffer any leftover bytes.
+                        if n > to_copy {
+                            inner.buffer.extend(&chunk_buf[to_copy..n]);
+                        }
+                        drop(inner);
+                        if let Some(ref p) = poster {
+                            p.post_work(pending.callback, 0, to_copy as i32);
+                        } else {
+                            unsafe { pending.callback.run(to_copy as i32) };
+                        }
+                    } else {
+                        // No pending read — accumulate in the buffer.
+                        inner.buffer.extend(&chunk_buf[..n]);
+                    }
+                }
+            }
+            Err(error_code) => {
+                // ------- Request failed -------
+                {
+                    let mut inner = inner_arc.lock();
+                    inner.open_complete = true;
+                    inner.finished = true;
+                    inner.error = Some(error_code);
+                }
+                tracing::warn!(
+                    "PPB_URLLoader::Open: loader={} request failed with {}",
+                    resource_id,
+                    error_code
+                );
+
+                // Create a minimal response-info so GetResponseInfo
+                // doesn't return 0 (which confuses Flash).
+                let ri = super::url_response_info::URLResponseInfoResource {
+                    url: url.clone(),
+                    status_code: 0,
+                    status_line: String::new(),
+                    headers: String::new(),
+                    redirect_url: String::new(),
+                };
+                let ri_id = host.resources.insert(instance_id, Box::new(ri));
+                host.resources
+                    .with_downcast_mut::<URLLoaderResource, _>(resource_id, |l| {
+                        l.response_info_id = Some(ri_id);
+                    });
+
+                // Fire Open callback with the error code.
+                if let Some(ref p) = poster {
+                    p.post_work(cb, 0, error_code);
+                } else {
+                    unsafe { cb.run(error_code) };
+                }
+            }
         }
-        PP_OK_COMPLETIONPENDING
-    }
+    });
+
+    PP_OK_COMPLETIONPENDING
 }
+
+// ---------------------------------------------------------------------------
+// FollowRedirect
+// ---------------------------------------------------------------------------
 
 unsafe extern "C" fn follow_redirect(
     loader: PP_Resource,
@@ -209,19 +452,38 @@ unsafe extern "C" fn follow_redirect(
     crate::callback::complete_immediately(callback, PP_OK)
 }
 
+// ---------------------------------------------------------------------------
+// Upload / download progress
+// ---------------------------------------------------------------------------
+
 unsafe extern "C" fn get_upload_progress(
     loader: PP_Resource,
     bytes_sent: *mut i64,
     total_bytes_to_be_sent: *mut i64,
 ) -> PP_Bool {
-    tracing::debug!("PPB_URLLoader::GetUploadProgress(loader={})", loader);
-    if !bytes_sent.is_null() {
-        unsafe { *bytes_sent = 0 };
-    }
-    if !total_bytes_to_be_sent.is_null() {
-        unsafe { *total_bytes_to_be_sent = 0 };
-    }
-    PP_FALSE
+    let Some(host) = HOST.get() else { return PP_FALSE };
+
+    host.resources
+        .with_downcast::<URLLoaderResource, _>(loader, |l| {
+            let inner = l.inner.lock();
+            if !inner.record_upload_progress {
+                return PP_FALSE;
+            }
+            if !bytes_sent.is_null() {
+                unsafe { *bytes_sent = inner.bytes_sent };
+            }
+            if !total_bytes_to_be_sent.is_null() {
+                unsafe { *total_bytes_to_be_sent = inner.total_bytes_to_send };
+            }
+            tracing::trace!(
+                "PPB_URLLoader::GetUploadProgress(loader={}) -> sent={}, total={}",
+                loader,
+                inner.bytes_sent,
+                inner.total_bytes_to_send
+            );
+            PP_TRUE
+        })
+        .unwrap_or(PP_FALSE)
 }
 
 unsafe extern "C" fn get_download_progress(
@@ -229,79 +491,77 @@ unsafe extern "C" fn get_download_progress(
     bytes_received: *mut i64,
     total_bytes_to_be_received: *mut i64,
 ) -> PP_Bool {
-    tracing::debug!("PPB_URLLoader::GetDownloadProgress(loader={})", loader);
-    let Some(host) = HOST.get() else {
-        return PP_FALSE;
-    };
+    let Some(host) = HOST.get() else { return PP_FALSE };
 
-    let result = host.resources
+    host.resources
         .with_downcast::<URLLoaderResource, _>(loader, |l| {
-            let total = l.response_body.len() as i64;
+            let inner = l.inner.lock();
+            if !inner.record_download_progress {
+                // Even without progress tracking we report what we know,
+                // but the spec says to return PP_FALSE.
+                if !bytes_received.is_null() {
+                    unsafe { *bytes_received = inner.bytes_received };
+                }
+                if !total_bytes_to_be_received.is_null() {
+                    unsafe { *total_bytes_to_be_received = inner.total_bytes };
+                }
+                return PP_FALSE;
+            }
             if !bytes_received.is_null() {
-                unsafe { *bytes_received = total };
+                unsafe { *bytes_received = inner.bytes_received };
             }
             if !total_bytes_to_be_received.is_null() {
-                unsafe { *total_bytes_to_be_received = total };
+                unsafe { *total_bytes_to_be_received = inner.total_bytes };
             }
-            tracing::debug!(
+            tracing::trace!(
                 "PPB_URLLoader::GetDownloadProgress(loader={}) -> received={}, total={}",
-                loader, total, total
+                loader,
+                inner.bytes_received,
+                inner.total_bytes
             );
             PP_TRUE
         })
-        .unwrap_or(PP_FALSE);
-    if result == PP_FALSE {
-        tracing::debug!("PPB_URLLoader::GetDownloadProgress(loader={}) -> PP_FALSE (bad resource)", loader);
-    }
-    result
+        .unwrap_or(PP_FALSE)
 }
 
-unsafe extern "C" fn get_response_info(loader: PP_Resource) -> PP_Resource {
-    tracing::info!("PPB_URLLoader::GetResponseInfo(loader={}) <-- Flash querying response info", loader);
-    let Some(host) = HOST.get() else {
-        tracing::warn!("PPB_URLLoader::GetResponseInfo(loader={}) -> 0 (no host)", loader);
-        return 0;
-    };
+// ---------------------------------------------------------------------------
+// GetResponseInfo
+// ---------------------------------------------------------------------------
 
-    // Check if we already have a response info resource.
-    let existing = host.resources
-        .with_downcast::<URLLoaderResource, _>(loader, |l| l.response_info)
+unsafe extern "C" fn get_response_info(loader: PP_Resource) -> PP_Resource {
+    tracing::trace!(
+        "PPB_URLLoader::GetResponseInfo(loader={})",
+        loader
+    );
+    let Some(host) = HOST.get() else { return 0 };
+
+    let existing = host
+        .resources
+        .with_downcast::<URLLoaderResource, _>(loader, |l| l.response_info_id)
         .unwrap_or(None);
 
     if let Some(id) = existing {
-        // Add a ref since we're returning a new handle to the caller.
+        // Return a new reference to the existing response info.
         host.resources.add_ref(id);
-        tracing::info!("PPB_URLLoader::GetResponseInfo(loader={}) -> {} (existing response)", loader, id);
+        tracing::debug!(
+            "PPB_URLLoader::GetResponseInfo(loader={}) -> {} (existing)",
+            loader,
+            id
+        );
         return id;
     }
 
-    // Lazily create a response info for loaders opened via Open().
-    let instance = host.resources.get_instance(loader);
-    let Some(instance_id) = instance else {
-        tracing::debug!("PPB_URLLoader::GetResponseInfo(loader={}) -> 0 (no instance)", loader);
-        return 0;
-    };
-
-    // Use the URL from the loader if available.
-    let url = host.resources
-        .with_downcast::<URLLoaderResource, _>(loader, |l| l.url.clone().unwrap_or_default())
-        .unwrap_or_default();
-
-    let ri = super::url_response_info::URLResponseInfoResource {
-        url,
-        status_code: 200,
-        status_line: "OK".to_string(),
-        headers: String::new(),
-    };
-    let ri_id = host.resources.insert(instance_id, Box::new(ri));
-
-    host.resources.with_downcast_mut::<URLLoaderResource, _>(loader, |l| {
-        l.response_info = Some(ri_id);
-    });
-
-    tracing::debug!("PPB_URLLoader::GetResponseInfo(loader={}) -> {} (created)", loader, ri_id);
-    ri_id
+    // If Open hasn't completed yet there is no response info.
+    tracing::debug!(
+        "PPB_URLLoader::GetResponseInfo(loader={}) -> 0 (not yet available)",
+        loader
+    );
+    0
 }
+
+// ---------------------------------------------------------------------------
+// ReadResponseBody — serve from buffer or pend for async delivery
+// ---------------------------------------------------------------------------
 
 unsafe extern "C" fn read_response_body(
     loader: PP_Resource,
@@ -310,61 +570,158 @@ unsafe extern "C" fn read_response_body(
     callback: PP_CompletionCallback,
 ) -> i32 {
     tracing::trace!(
-        "PPB_URLLoader::ReadResponseBody(loader={}, buffer={:?}, bytes_to_read={}, callback={:?})",
+        "PPB_URLLoader::ReadResponseBody(loader={}, bytes_to_read={})",
         loader,
-        buffer,
-        bytes_to_read,
-        callback
+        bytes_to_read
     );
 
+    if buffer.is_null() || bytes_to_read <= 0 {
+        return PP_ERROR_BADARGUMENT;
+    }
+
     let Some(host) = HOST.get() else {
-        tracing::trace!("PPB_URLLoader::ReadResponseBody -> host not initialized");
         return PP_ERROR_FAILED;
     };
 
-    let bytes_read = host.resources.with_downcast_mut::<URLLoaderResource, _>(loader, |l| {
-        let remaining = l.response_body.len() - l.read_offset;
-        let to_read = (bytes_to_read as usize).min(remaining);
-        if to_read > 0 && !buffer.is_null() {
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    l.response_body.as_ptr().add(l.read_offset),
-                    buffer as *mut u8,
-                    to_read,
-                );
-            }
-            l.read_offset += to_read;
-        }
-        to_read as i32
-    }).unwrap_or(PP_ERROR_BADRESOURCE);
+    let result = host
+        .resources
+        .with_downcast::<URLLoaderResource, _>(loader, |l| {
+            let mut inner = l.inner.lock();
+            let available = inner.buffer.len();
 
-    if callback.is_null() {
-        tracing::debug!("PPB_URLLoader::ReadResponseBody(loader={}, buffer={:?}, bytes_to_read={}, callback=null) -> bytes_read={}", loader, buffer, bytes_to_read, bytes_read);
-        bytes_read
-    } else {
-        tracing::debug!("PPB_URLLoader::ReadResponseBody(loader={}, buffer={:?}, bytes_to_read={}, callback={:?}) -> bytes_read={}", loader, buffer, bytes_to_read, callback, bytes_read);
-        unsafe { callback.run(bytes_read) };
-        PP_OK_COMPLETIONPENDING
+            if available > 0 {
+                // --- Data ready — copy into the caller's buffer ---
+                let to_read = (bytes_to_read as usize).min(available);
+                let dst = buffer as *mut u8;
+
+                // Make the VecDeque contiguous so we can memcpy.
+                {
+                    let contiguous = inner.buffer.make_contiguous();
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            contiguous.as_ptr(),
+                            dst,
+                            to_read,
+                        );
+                    }
+                }
+                let _ = inner.buffer.drain(..to_read);
+
+                tracing::trace!(
+                    "PPB_URLLoader::ReadResponseBody: loader={} served {} bytes \
+                     ({} buffered)",
+                    loader,
+                    to_read,
+                    inner.buffer.len()
+                );
+                to_read as i32
+            } else if inner.finished {
+                // --- No data, stream done ---
+                if let Some(err) = inner.error {
+                    tracing::debug!(
+                        "PPB_URLLoader::ReadResponseBody: loader={} -> error {}",
+                        loader,
+                        err
+                    );
+                    err
+                } else {
+                    tracing::debug!(
+                        "PPB_URLLoader::ReadResponseBody: loader={} -> EOF (0)",
+                        loader
+                    );
+                    0
+                }
+            } else {
+                // --- No data yet, stream still active — pend the read ---
+                if inner.pending_read.is_some() {
+                    tracing::warn!(
+                        "PPB_URLLoader::ReadResponseBody: loader={} \
+                         already has a pending read!",
+                        loader
+                    );
+                    return PP_ERROR_INPROGRESS;
+                }
+                inner.pending_read = Some(PendingRead {
+                    buffer: buffer as *mut u8,
+                    bytes_to_read: bytes_to_read as usize,
+                    callback,
+                });
+                tracing::trace!(
+                    "PPB_URLLoader::ReadResponseBody: loader={} -> PENDING",
+                    loader
+                );
+                PP_OK_COMPLETIONPENDING
+            }
+        });
+
+    match result {
+        Some(PP_OK_COMPLETIONPENDING) => PP_OK_COMPLETIONPENDING,
+        Some(bytes) => {
+            // Synchronous completion (data was available or EOF/error).
+            if callback.is_null()
+                || callback.flags == PP_COMPLETIONCALLBACK_FLAG_OPTIONAL
+            {
+                // Return the value directly.
+                bytes
+            } else {
+                // Non-optional async callback: post it, return PENDING.
+                if let Some(poster) = &*host.main_loop_poster.lock() {
+                    poster.post_work(callback, 0, bytes);
+                } else {
+                    unsafe { callback.run(bytes) };
+                }
+                PP_OK_COMPLETIONPENDING
+            }
+        }
+        None => PP_ERROR_BADRESOURCE,
     }
 }
+
+// ---------------------------------------------------------------------------
+// FinishStreamingToFile / Close
+// ---------------------------------------------------------------------------
 
 unsafe extern "C" fn finish_streaming_to_file(
     loader: PP_Resource,
     callback: PP_CompletionCallback,
 ) -> i32 {
-    tracing::debug!("PPB_URLLoader::FinishStreamingToFile(loader={})", loader);
+    tracing::debug!(
+        "PPB_URLLoader::FinishStreamingToFile(loader={})",
+        loader
+    );
     crate::callback::complete_immediately(callback, PP_OK)
 }
 
 unsafe extern "C" fn close(loader: PP_Resource) {
     tracing::debug!("PPB_URLLoader::Close(loader={})", loader);
-    // Resource will be cleaned up when released.
+    // Mark the stream as finished so the background thread stops writing
+    // and any pending read gets cancelled.
+    let Some(host) = HOST.get() else { return };
+    host.resources
+        .with_downcast::<URLLoaderResource, _>(loader, |l| {
+            let mut inner = l.inner.lock();
+            inner.finished = true;
+            inner.error = Some(PP_ERROR_ABORTED);
+            if let Some(pending) = inner.pending_read.take() {
+                drop(inner);
+                if let Some(poster) = &*host.main_loop_poster.lock() {
+                    poster.post_work(pending.callback, 0, PP_ERROR_ABORTED);
+                } else {
+                    unsafe { pending.callback.run(PP_ERROR_ABORTED) };
+                }
+            }
+        });
 }
 
-// --- Trusted ---
+// ---------------------------------------------------------------------------
+// Trusted interface stubs
+// ---------------------------------------------------------------------------
 
 unsafe extern "C" fn grant_universal_access(loader: PP_Resource) {
-    tracing::debug!("PPB_URLLoaderTrusted::GrantUniversalAccess(loader={})", loader);
+    tracing::debug!(
+        "PPB_URLLoaderTrusted::GrantUniversalAccess(loader={})",
+        loader
+    );
     // No-op: we always grant access in our standalone projector.
 }
 
@@ -372,6 +729,9 @@ unsafe extern "C" fn register_status_callback(
     loader: PP_Resource,
     _cb: PP_URLLoaderTrusted_StatusCallback,
 ) {
-    tracing::debug!("PPB_URLLoaderTrusted::RegisterStatusCallback(loader={})", loader);
+    tracing::debug!(
+        "PPB_URLLoaderTrusted::RegisterStatusCallback(loader={})",
+        loader
+    );
     // No-op stub.
 }

@@ -21,6 +21,10 @@ pub struct MessageLoop {
     receiver: Receiver<WorkItem>,
     running: bool,
     depth: u32,
+    /// Whether the loop has been destroyed via `PostQuit(PP_TRUE)`.
+    destroyed: bool,
+    /// Whether this is the main-thread message loop (cannot be Run or PostQuit).
+    is_main_thread_loop: bool,
 }
 
 impl MessageLoop {
@@ -32,7 +36,24 @@ impl MessageLoop {
             receiver,
             running: false,
             depth: 0,
+            destroyed: false,
+            is_main_thread_loop: false,
         }
+    }
+
+    /// Mark this loop as the main-thread message loop.
+    pub fn set_main_thread_loop(&mut self, is_main: bool) {
+        self.is_main_thread_loop = is_main;
+    }
+
+    /// Returns true if this is the main-thread message loop.
+    pub fn is_main_thread_loop(&self) -> bool {
+        self.is_main_thread_loop
+    }
+
+    /// Returns true if this loop has been destroyed.
+    pub fn is_destroyed(&self) -> bool {
+        self.destroyed
     }
 
     /// Get a handle for posting work to this loop.
@@ -43,7 +64,19 @@ impl MessageLoop {
     }
 
     /// Post a callback to be executed after `delay_ms` milliseconds.
+    ///
+    /// Returns `PP_ERROR_BADARGUMENT` if the callback is null (blocking).
+    /// Returns `PP_ERROR_FAILED` if the loop has been destroyed.
     pub fn post_work(&self, callback: PP_CompletionCallback, delay_ms: i64, result: i32) -> i32 {
+        // Reject null/blocking callbacks per spec.
+        if callback.is_null() {
+            return PP_ERROR_BADARGUMENT;
+        }
+        // Reject if the loop was destroyed via PostQuit(PP_TRUE).
+        if self.destroyed {
+            return PP_ERROR_FAILED;
+        }
+
         let fire_at = if delay_ms > 0 {
             Instant::now() + Duration::from_millis(delay_ms as u64)
         } else {
@@ -63,7 +96,21 @@ impl MessageLoop {
     }
 
     /// Post a "quit" sentinel to stop the run loop.
-    pub fn post_quit(&self) -> i32 {
+    ///
+    /// If `should_destroy` is true, the loop is marked as destroyed and
+    /// future `post_work` calls will return `PP_ERROR_FAILED`.
+    ///
+    /// Returns `PP_ERROR_WRONG_THREAD` if this is the main-thread loop.
+    pub fn post_quit(&mut self, should_destroy: bool) -> i32 {
+        // Main thread loop cannot be quit per spec.
+        if self.is_main_thread_loop {
+            return PP_ERROR_WRONG_THREAD;
+        }
+
+        if should_destroy {
+            self.destroyed = true;
+        }
+
         // Send a null callback as a quit sentinel.
         let item = WorkItem {
             callback: PP_CompletionCallback::blocking(), // null sentinel
@@ -78,11 +125,22 @@ impl MessageLoop {
 
     /// Run the message loop, processing callbacks until a quit message is received.
     ///
-    /// Supports re-entrant (nested) calls for synchronous cross-thread operations.
+    /// Per the PPAPI spec:
+    /// - The loop must not be the main-thread loop (`PP_ERROR_INPROGRESS`).
+    /// - Nested calls are not allowed (`PP_ERROR_INPROGRESS`).
     ///
     /// # Safety
     /// Callbacks are executed with their user_data pointers.
     pub unsafe fn run(&mut self) -> i32 {
+        // Main thread loop is run by the system (via poll), not by plugin.
+        if self.is_main_thread_loop {
+            return PP_ERROR_INPROGRESS;
+        }
+        // Nested run loops are not allowed per spec.
+        if self.depth > 0 {
+            return PP_ERROR_INPROGRESS;
+        }
+
         self.running = true;
         self.depth += 1;
 
@@ -116,18 +174,26 @@ impl MessageLoop {
         if self.depth == 0 {
             self.running = false;
         }
+
+        // If should_destroy was requested, finalize destruction.
+        if self.destroyed && self.depth == 0 {
+            // Drop remaining queued items so callbacks are not leaked silently.
+            while self.receiver.try_recv().is_ok() {}
+        }
+
         PP_OK
     }
 
-    /// Non-blocking poll: drain all ready callbacks.
+    /// Non-blocking drain: collect all ready callbacks without executing them.
     ///
-    /// Returns the number of callbacks executed.
+    /// Returns a list of `(callback, result)` pairs that are ready to fire.
+    /// Deferred (delayed) items are re-posted to the channel.
     ///
-    /// # Safety
-    /// Callbacks are executed with their user_data pointers.
-    pub unsafe fn poll(&mut self) -> usize {
-        let mut count = 0;
-        // First, drain all items from the channel, separating ready and deferred.
+    /// This is designed to be called while holding an external lock (e.g. the
+    /// resource manager lock), so that the lock can be released before the
+    /// caller actually invokes the callbacks.
+    pub fn drain_ready(&mut self) -> Vec<(PP_CompletionCallback, i32)> {
+        let mut ready: Vec<(PP_CompletionCallback, i32)> = Vec::new();
         let mut deferred: Vec<WorkItem> = Vec::new();
         loop {
             match self.receiver.try_recv() {
@@ -142,11 +208,7 @@ impl MessageLoop {
                         // Not ready yet — save for re-posting.
                         deferred.push(item);
                     } else {
-                        println!("Running: callback with result {}", item.result);
-                        unsafe {
-                            item.callback.run(item.result);
-                        }
-                        count += 1;
+                        ready.push((item.callback, item.result));
                     }
                 }
                 Err(crossbeam_channel::TryRecvError::Empty) => break,
@@ -156,6 +218,27 @@ impl MessageLoop {
         // Re-post deferred items.
         for item in deferred {
             let _ = self.sender.send(item);
+        }
+        ready
+    }
+
+    /// Non-blocking poll: drain all ready callbacks and execute them.
+    ///
+    /// Returns the number of callbacks executed.
+    ///
+    /// **WARNING**: Do not call this while holding the resource manager lock
+    /// or any other lock that callbacks may need — use `drain_ready()` +
+    /// manual execution instead.
+    ///
+    /// # Safety
+    /// Callbacks are executed with their user_data pointers.
+    pub unsafe fn poll(&mut self) -> usize {
+        let ready = self.drain_ready();
+        let count = ready.len();
+        for (callback, result) in ready {
+            unsafe {
+                callback.run(result);
+            }
         }
         count
     }
@@ -185,7 +268,16 @@ pub struct MessageLoopPoster {
 
 impl MessageLoopPoster {
     /// Post a callback with an optional delay.
+    ///
+    /// Note: The poster does not track the `destroyed` state itself — it
+    /// is intended for use via `CallOnMainThread` where the host is
+    /// known-alive.  The channel `send` will fail if the receiver has
+    /// been dropped.
     pub fn post_work(&self, callback: PP_CompletionCallback, delay_ms: i64, result: i32) -> i32 {
+        if callback.is_null() {
+            return PP_ERROR_BADARGUMENT;
+        }
+
         let fire_at = if delay_ms > 0 {
             Instant::now() + Duration::from_millis(delay_ms as u64)
         } else {

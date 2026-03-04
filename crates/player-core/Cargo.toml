@@ -11,4 +11,4 @@ ppapi-host = { workspace = true }
 player-ui-traits = { workspace = true }
 tracing = { workspace = true }
 parking_lot = "0.12"
-reqwest = { workspace = true }
+ureq = { workspace = true }

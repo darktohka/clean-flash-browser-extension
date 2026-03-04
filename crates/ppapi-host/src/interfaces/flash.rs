@@ -245,12 +245,22 @@ unsafe extern "C" fn set_crash_data(
 unsafe extern "C" fn enumerate_video_capture_devices(
     _instance: PP_Instance,
     _video_capture: PP_Resource,
-    _devices: *mut c_void,
+    devices: *mut c_void,
 ) -> i32 {
     tracing::debug!("PPB_Flash::EnumerateVideoCaptureDevices(instance={}, video_capture={}, devices={:?})",
-        _instance, _video_capture, _devices);
-    // No video capture devices available.
-    PP_ERROR_NOTSUPPORTED
+        _instance, _video_capture, devices);
+    
+    // Convert void pointer to PP_ArrayOutput reference
+    let output = unsafe { &*(devices as *const PP_ArrayOutput) };
+    
+    // Return an empty device list — no video capture devices available.
+    if let Some(get_data_buffer) = output.GetDataBuffer {
+        unsafe {
+            get_data_buffer(output.user_data, 0, std::mem::size_of::<PP_Resource>() as u32);
+        }
+    }
+    
+    PP_OK
 }
 
 // ---------------------------------------------------------------------------

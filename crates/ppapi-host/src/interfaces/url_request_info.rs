@@ -49,6 +49,7 @@ pub unsafe fn register(registry: &mut InterfaceRegistry) {
 }
 
 unsafe extern "C" fn create(instance: PP_Instance) -> PP_Resource {
+    tracing::debug!("PPB_URLRequestInfo::Create(instance={})", instance);
     let Some(host) = HOST.get() else {
         return 0;
     };
@@ -66,6 +67,7 @@ unsafe extern "C" fn create(instance: PP_Instance) -> PP_Resource {
 }
 
 unsafe extern "C" fn is_url_request_info(resource: PP_Resource) -> PP_Bool {
+    tracing::trace!("PPB_URLRequestInfo::IsURLRequestInfo(resource={})", resource);
     HOST.get()
         .map(|h| pp_from_bool(h.resources.is_type(resource, "PPB_URLRequestInfo")))
         .unwrap_or(PP_FALSE)
@@ -76,6 +78,12 @@ unsafe extern "C" fn set_property(
     property: PP_URLRequestProperty,
     value: PP_Var,
 ) -> PP_Bool {
+    tracing::trace!(
+        "PPB_URLRequestInfo::SetProperty called: request={}, property={}, value={:?}",
+        request,
+        property,
+        value
+    );
     let Some(host) = HOST.get() else {
         return PP_FALSE;
     };
@@ -118,6 +126,12 @@ unsafe extern "C" fn append_data_to_body(
     data: *const c_void,
     len: u32,
 ) -> PP_Bool {
+    tracing::trace!(
+        "PPB_URLRequestInfo::AppendDataToBody called: request={}, data={:?}, len={}",
+        request,
+        data,
+        len
+    );
     let Some(host) = HOST.get() else {
         return PP_FALSE;
     };
@@ -142,6 +156,7 @@ unsafe extern "C" fn append_file_to_body(
     _number_of_bytes: i64,
     _expected_last_modified_time: PP_Time,
 ) -> PP_Bool {
+    tracing::trace!("PPB_URLRequestInfo::AppendFileToBody called, but not implemented");
     // Not implemented yet.
     PP_FALSE
 }

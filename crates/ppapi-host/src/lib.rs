@@ -27,12 +27,30 @@ use parking_lot::Mutex;
 use ppapi_sys::PP_Resource;
 use std::ffi::{c_char, c_void, CStr};
 use std::sync::atomic::AtomicI32;
+use std::sync::Arc;
 use std::sync::OnceLock;
 
 // ===========================================================================
 // Host callbacks — trait for the UI/player layer to receive events from
 // the PPAPI host (frame ready, URL load request, etc.)
 // ===========================================================================
+
+/// Response from opening a URL via [`HostCallbacks::on_url_open`].
+///
+/// Contains response metadata and a streaming body reader.  The reader
+/// is consumed in chunks by the URLLoader background thread.
+pub struct UrlLoadResponse {
+    /// HTTP status code (e.g. 200, 404).  For local files use 200.
+    pub status_code: u16,
+    /// HTTP status line (e.g. "HTTP/1.1 200 OK").
+    pub status_line: String,
+    /// Merged response headers, CRLF-delimited with a blank-line terminator.
+    pub headers: String,
+    /// The response body as a streaming reader.
+    pub body: Box<dyn std::io::Read + Send>,
+    /// Content-Length if known, or `None` for chunked / unknown size.
+    pub content_length: Option<i64>,
+}
 
 /// Trait implemented by the player/UI layer to handle host events.
 /// These callbacks are invoked from the PPAPI interface implementations
@@ -42,9 +60,25 @@ pub trait HostCallbacks: Send + Sync {
     /// `pixels` is BGRA_PREMUL, row-major, `width * 4` bytes per row.
     fn on_flush(&self, graphics_2d: PP_Resource, pixels: &[u8], width: i32, height: i32);
 
-    /// Called when PPB_URLLoader::Open is called and a URL load is requested.
-    /// The host should return the response body bytes.
-    fn on_url_load(&self, url: &str) -> Vec<u8>;
+    /// Open a URL and return a streaming response.
+    ///
+    /// Called from a **background thread** — implementations may block
+    /// (e.g. perform HTTP I/O).  The returned reader is consumed in
+    /// chunks by the URLLoader streaming loop.
+    ///
+    /// * `url`     — the resolved URL string.
+    /// * `method`  — HTTP method ("GET", "POST", etc.).
+    /// * `headers` — request headers, CRLF-delimited.
+    /// * `body`    — optional request body (from `AppendDataToBody`).
+    ///
+    /// Return `Err(PP_ERROR_*)` on failure.
+    fn on_url_open(
+        &self,
+        url: &str,
+        method: &str,
+        headers: &str,
+        body: Option<&[u8]>,
+    ) -> Result<UrlLoadResponse, i32>;
 
     /// Show an alert dialog with a message. Blocks until dismissed.
     fn show_alert(&self, message: &str) {
@@ -85,7 +119,9 @@ pub struct HostState {
     /// The main-thread message loop itself (for polling).
     pub main_message_loop: Mutex<Option<message_loop::MessageLoop>>,
     /// Callbacks to the player/UI layer.
-    pub host_callbacks: Mutex<Option<Box<dyn HostCallbacks>>>,
+    /// Wrapped in `Arc` so background threads can clone the handle without
+    /// holding the mutex during long-running operations (HTTP I/O, etc.).
+    pub host_callbacks: Mutex<Option<Arc<dyn HostCallbacks>>>,
     /// File chooser provider for native file dialogs.
     pub file_chooser_provider: Mutex<Option<Box<dyn player_ui_traits::FileChooserProvider>>>,
 }
@@ -119,7 +155,7 @@ impl HostState {
 
     /// Set the host callbacks (from the player/UI layer).
     pub fn set_callbacks(&self, callbacks: Box<dyn HostCallbacks>) {
-        *self.host_callbacks.lock() = Some(callbacks);
+        *self.host_callbacks.lock() = Some(Arc::from(callbacks));
     }
 
     /// Set the file chooser provider for native file dialogs.

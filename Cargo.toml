@@ -21,7 +21,7 @@ player-ui-traits = { path = "crates/player-ui-traits" }
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-reqwest = { version = "0.13", features = ["blocking"] }
+ureq = "2"
 
 [profile."release-lto"]
 inherits = "release"

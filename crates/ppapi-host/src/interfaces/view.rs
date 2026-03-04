@@ -69,12 +69,14 @@ pub unsafe fn register(registry: &mut InterfaceRegistry) {
 }
 
 unsafe extern "C" fn is_view(resource: PP_Resource) -> PP_Bool {
+    tracing::trace!("PPB_View::IsView({})", resource);
     HOST.get()
         .map(|h| pp_from_bool(h.resources.is_type(resource, "PPB_View")))
         .unwrap_or(PP_FALSE)
 }
 
 unsafe extern "C" fn get_rect(resource: PP_Resource, rect: *mut PP_Rect) -> PP_Bool {
+    tracing::trace!("PPB_View::GetRect({}, {:?})", resource, *rect);
     let Some(host) = HOST.get() else {
         return PP_FALSE;
     };
@@ -90,6 +92,7 @@ unsafe extern "C" fn get_rect(resource: PP_Resource, rect: *mut PP_Rect) -> PP_B
 }
 
 unsafe extern "C" fn is_fullscreen(resource: PP_Resource) -> PP_Bool {
+    tracing::trace!("PPB_View::IsFullscreen({})", resource);
     HOST.get()
         .and_then(|h| {
             h.resources
@@ -99,6 +102,7 @@ unsafe extern "C" fn is_fullscreen(resource: PP_Resource) -> PP_Bool {
 }
 
 unsafe extern "C" fn is_visible(resource: PP_Resource) -> PP_Bool {
+    tracing::trace!("PPB_View::IsVisible({})", resource);
     HOST.get()
         .and_then(|h| {
             h.resources
@@ -108,6 +112,7 @@ unsafe extern "C" fn is_visible(resource: PP_Resource) -> PP_Bool {
 }
 
 unsafe extern "C" fn is_page_visible(resource: PP_Resource) -> PP_Bool {
+    tracing::trace!("PPB_View::IsPageVisible({})", resource);
     HOST.get()
         .and_then(|h| {
             h.resources
@@ -117,6 +122,7 @@ unsafe extern "C" fn is_page_visible(resource: PP_Resource) -> PP_Bool {
 }
 
 unsafe extern "C" fn get_clip_rect(resource: PP_Resource, clip: *mut PP_Rect) -> PP_Bool {
+    tracing::trace!("PPB_View::GetClipRect({}, {:?})", resource, *clip);
     let Some(host) = HOST.get() else {
         return PP_FALSE;
     };
@@ -132,6 +138,7 @@ unsafe extern "C" fn get_clip_rect(resource: PP_Resource, clip: *mut PP_Rect) ->
 }
 
 unsafe extern "C" fn get_device_scale(resource: PP_Resource) -> f32 {
+    tracing::trace!("PPB_View::GetDeviceScale({})", resource);
     HOST.get()
         .and_then(|h| {
             h.resources
@@ -141,6 +148,7 @@ unsafe extern "C" fn get_device_scale(resource: PP_Resource) -> f32 {
 }
 
 unsafe extern "C" fn get_css_scale(resource: PP_Resource) -> f32 {
+    tracing::trace!("PPB_View::GetCSSScale({})", resource);
     HOST.get()
         .and_then(|h| {
             h.resources
@@ -150,6 +158,7 @@ unsafe extern "C" fn get_css_scale(resource: PP_Resource) -> f32 {
 }
 
 unsafe extern "C" fn get_scroll_offset(resource: PP_Resource, offset: *mut PP_Point) -> PP_Bool {
+    tracing::trace!("PPB_View::GetScrollOffset({}, {:?})", resource, *offset);
     let Some(host) = HOST.get() else {
         return PP_FALSE;
     };

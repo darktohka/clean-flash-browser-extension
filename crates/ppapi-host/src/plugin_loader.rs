@@ -9,6 +9,12 @@ use libloading::{Library, Symbol};
 use ppapi_sys::*;
 use std::ffi::{c_void, CStr};
 use std::path::Path;
+use std::sync::OnceLock;
+
+/// Global holder for the system() hook library.
+/// This must be loaded with RTLD_GLOBAL before the plugin library
+/// to intercept system() calls from libpepflashplayer.so.
+static SYSTEM_HOOK: OnceLock<Option<Library>> = OnceLock::new();
 
 /// Holds the loaded plugin library and its resolved entry points.
 pub struct PluginLoader {
@@ -19,12 +25,43 @@ pub struct PluginLoader {
 }
 
 impl PluginLoader {
+    /// Load the system() hook library to intercept system() calls.
+    /// This must be called before loading the plugin.
+    fn load_system_hook() {
+        SYSTEM_HOOK.get_or_init(|| {
+            // Try to load system_hook.so from the same directory as the plugin
+            let hook_paths = [
+                "system_hook.so",
+                "./system_hook.so",
+                "../system_hook.so",
+            ];
+            
+            for hook_path in &hook_paths {
+                if let Ok(lib) = unsafe {
+                    libloading::os::unix::Library::open(
+                        Some(hook_path),
+                        libloading::os::unix::RTLD_NOW | libloading::os::unix::RTLD_GLOBAL,
+                    )
+                } {
+                    tracing::info!("Loaded system() hook from: {}", hook_path);
+                    return Some(Library::from(lib));
+                }
+            }
+            
+            tracing::warn!("system_hook.so not found; system() calls will not be intercepted");
+            None
+        });
+    }
+
     /// Load a PPAPI plugin from the given shared-library path.
     ///
     /// # Safety
     /// The .so file is loaded and its entry-point symbols are resolved.
     /// The caller must ensure the library is a valid PPAPI plugin.
     pub unsafe fn load(path: impl AsRef<Path>) -> Result<Self, PluginLoaderError> {
+        // Load the system hook first (with RTLD_GLOBAL) to intercept system() calls
+        Self::load_system_hook();
+        
         let path = path.as_ref();
         let library = unsafe {
             Library::new(path).map_err(|e| PluginLoaderError::LoadFailed {

@@ -1579,11 +1579,19 @@ pub struct PP_URLComponents_Dev {
 }
 
 /// Individual URL component: begin index + length into the URL string.
+/// An absent component is indicated by `len = -1` (matching Chrome's
+/// `url::Component` convention).  Flash uses `len != -1` to test presence.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct PP_URLComponent_Dev {
     pub begin: i32,
     pub len: i32,
+}
+
+impl Default for PP_URLComponent_Dev {
+    fn default() -> Self {
+        Self { begin: 0, len: -1 }
+    }
 }
 
 #[repr(C)]
@@ -1591,12 +1599,12 @@ pub struct PPB_URLUtil_Dev_0_7 {
     pub Canonicalize: Option<unsafe extern "C" fn(url: PP_Var, components: *mut PP_URLComponents_Dev) -> PP_Var>,
     pub ResolveRelativeToURL: Option<unsafe extern "C" fn(base_url: PP_Var, relative_string: PP_Var, components: *mut PP_URLComponents_Dev) -> PP_Var>,
     pub ResolveRelativeToDocument: Option<unsafe extern "C" fn(instance: PP_Instance, relative_string: PP_Var, components: *mut PP_URLComponents_Dev) -> PP_Var>,
-    pub GetDocumentURL: Option<unsafe extern "C" fn(instance: PP_Instance, components: *mut PP_URLComponents_Dev) -> PP_Var>,
-    pub GetPluginInstanceURL: Option<unsafe extern "C" fn(instance: PP_Instance, components: *mut PP_URLComponents_Dev) -> PP_Var>,
-    pub GetPluginReferrerURL: Option<unsafe extern "C" fn(instance: PP_Instance, components: *mut PP_URLComponents_Dev) -> PP_Var>,
     pub IsSameSecurityOrigin: Option<unsafe extern "C" fn(url_a: PP_Var, url_b: PP_Var) -> PP_Bool>,
     pub DocumentCanRequest: Option<unsafe extern "C" fn(instance: PP_Instance, url: PP_Var) -> PP_Bool>,
     pub DocumentCanAccessDocument: Option<unsafe extern "C" fn(active: PP_Instance, target: PP_Instance) -> PP_Bool>,
+    pub GetDocumentURL: Option<unsafe extern "C" fn(instance: PP_Instance, components: *mut PP_URLComponents_Dev) -> PP_Var>,
+    pub GetPluginInstanceURL: Option<unsafe extern "C" fn(instance: PP_Instance, components: *mut PP_URLComponents_Dev) -> PP_Var>,
+    pub GetPluginReferrerURL: Option<unsafe extern "C" fn(instance: PP_Instance, components: *mut PP_URLComponents_Dev) -> PP_Var>,
 }
 
 unsafe impl Send for PPB_URLUtil_Dev_0_7 {}

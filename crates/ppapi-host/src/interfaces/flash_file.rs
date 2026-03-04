@@ -93,16 +93,33 @@ unsafe extern "C" fn open_file(
         return PP_ERROR_NOACCESS;
     };
 
-    // Map mode flags to libc flags
+    // Map PP_FileOpenFlags to libc flags
+    // PP_FILEOPENFLAG_READ = 1, WRITE = 2, CREATE = 4, TRUNCATE = 8, EXCLUSIVE = 16, APPEND = 32
     let mut flags = 0i32;
-    if mode & 1 != 0 { flags |= libc::O_RDONLY; }
-    if mode & 2 != 0 { flags |= libc::O_WRONLY; }
-    if mode & 4 != 0 { flags |= libc::O_RDWR; }
-    if mode & 8 != 0 { flags |= libc::O_CREAT; }
-    if mode & 16 != 0 { flags |= libc::O_TRUNC; }
-    // Ensure parent dir exists
-    if let Some(parent) = abs_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    
+    // Handle access mode (mutually exclusive)
+    if (mode & 1) != 0 && (mode & 2) != 0 {
+        // Both READ and WRITE
+        flags |= libc::O_RDWR;
+    } else if (mode & 2) != 0 {
+        // WRITE only
+        flags |= libc::O_WRONLY;
+    } else if (mode & 1) != 0 {
+        // READ only
+        flags |= libc::O_RDONLY;
+    }
+    
+    // Handle other flags
+    if (mode & 4) != 0 { flags |= libc::O_CREAT; }      // CREATE
+    if (mode & 8) != 0 { flags |= libc::O_TRUNC; }      // TRUNCATE
+    if (mode & 16) != 0 { flags |= libc::O_EXCL; }      // EXCLUSIVE
+    if (mode & 32) != 0 { flags |= libc::O_APPEND; }    // APPEND
+    
+    // Only ensure parent dir exists if we're creating the file
+    if (mode & 4) != 0 {
+        if let Some(parent) = abs_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
     }
 
     let c_path = match CString::new(abs_path.to_string_lossy().as_bytes()) {
@@ -110,9 +127,13 @@ unsafe extern "C" fn open_file(
         Err(_) => return PP_ERROR_FAILED,
     };
 
-    let fd = unsafe { libc::open(c_path.as_ptr(), flags, 0o644) };
+    let fd = unsafe { libc::open(c_path.as_ptr(), flags, 0o666) };
     if fd < 0 {
-        return PP_ERROR_FAILED;
+        match unsafe { *libc::__errno_location() } {
+            libc::ENOENT => return PP_ERROR_FILENOTFOUND,
+            libc::EACCES => return PP_ERROR_NOACCESS,
+            _ => return PP_ERROR_FAILED,
+        }
     }
     unsafe { *file = fd };
     PP_OK
@@ -138,7 +159,11 @@ unsafe extern "C" fn rename_file(
 
     match std::fs::rename(&abs_from, &abs_to) {
         Ok(()) => PP_OK,
-        Err(_) => PP_ERROR_FAILED,
+        Err(e) => match e.kind() {
+            std::io::ErrorKind::NotFound => PP_ERROR_FILENOTFOUND,
+            std::io::ErrorKind::PermissionDenied => PP_ERROR_NOACCESS,
+            _ => PP_ERROR_FAILED,
+        },
     }
 }
 
@@ -170,7 +195,11 @@ unsafe extern "C" fn delete_file_or_dir(
 
     match result {
         Ok(()) => PP_OK,
-        Err(_) => PP_ERROR_FAILED,
+        Err(e) => match e.kind() {
+            std::io::ErrorKind::NotFound => PP_ERROR_FILENOTFOUND,
+            std::io::ErrorKind::PermissionDenied => PP_ERROR_NOACCESS,
+            _ => PP_ERROR_FAILED,
+        },
     }
 }
 
@@ -178,10 +207,10 @@ unsafe extern "C" fn create_dir(
     _instance: PP_Instance,
     path: *const c_char,
 ) -> i32 {
-        tracing::debug!(
-            "PPB_Flash_File_ModuleLocal::CreateDir(path={:?})",
-            unsafe { CStr::from_ptr(path).to_string_lossy() },
-        );
+    tracing::debug!(
+        "PPB_Flash_File_ModuleLocal::CreateDir(path={:?})",
+        unsafe { CStr::from_ptr(path).to_string_lossy() },
+    );
 
     if path.is_null() {
         return PP_ERROR_BADARGUMENT;
@@ -189,9 +218,17 @@ unsafe extern "C" fn create_dir(
     let path_str = unsafe { CStr::from_ptr(path) }.to_str().unwrap_or("");
     let Some(abs_path) = resolve_path(path_str) else { return PP_ERROR_NOACCESS };
 
+    // Check if directory already exists; if so, return OK (idempotent)
+    if abs_path.is_dir() {
+        return PP_OK;
+    }
+
     match std::fs::create_dir_all(&abs_path) {
         Ok(()) => PP_OK,
-        Err(_) => PP_ERROR_FAILED,
+        Err(e) => match e.kind() {
+            std::io::ErrorKind::PermissionDenied => PP_ERROR_NOACCESS,
+            _ => PP_ERROR_FAILED,
+        },
     }
 }
 
@@ -222,15 +259,32 @@ unsafe extern "C" fn query_file(
     } else {
         PP_FILETYPE_OTHER
     };
+    
+    // Get file times; convert SystemTime to seconds since UNIX_EPOCH
+    let creation_time = meta.created()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let last_access_time = meta.accessed()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let last_modified_time = meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
 
     unsafe {
         *info = PP_FileInfo {
             size: meta.len() as i64,
             type_: file_type,
-            system_type: 0,
-            creation_time: 0.0,
-            last_access_time: 0.0,
-            last_modified_time: 0.0,
+            system_type: PP_FILESYSTEMTYPE_ISOLATED,
+            creation_time,
+            last_access_time,
+            last_modified_time,
         };
     }
     PP_OK

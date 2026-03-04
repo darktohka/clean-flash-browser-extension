@@ -36,6 +36,7 @@ unsafe extern "C" fn release_resource(resource: PP_Resource) {
 }
 
 unsafe extern "C" fn get_time() -> PP_Time {
+    tracing::trace!("PPB_core::get_time called");
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
@@ -43,6 +44,7 @@ unsafe extern "C" fn get_time() -> PP_Time {
 }
 
 unsafe extern "C" fn get_time_ticks() -> PP_TimeTicks {
+    tracing::trace!("PPB_core::get_time_ticks called");
     // Use a monotonic clock. We'll use Instant relative to a fixed epoch.
     use std::sync::OnceLock;
     use std::time::Instant;
@@ -56,6 +58,7 @@ unsafe extern "C" fn call_on_main_thread(
     callback: PP_CompletionCallback,
     result: i32,
 ) {
+    tracing::trace!("PPB_core::call_on_main_thread called");
     tracing::debug!("PPB_Core::CallOnMainThread(delay={}ms, result={})", delay_in_milliseconds, result);
     if let Some(host) = HOST.get() {
         if let Some(poster) = &*host.main_loop_poster.lock() {

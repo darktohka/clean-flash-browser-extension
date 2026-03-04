@@ -217,6 +217,7 @@ unsafe extern "C" fn create_1_0(
     audio_callback: PPB_Audio_Callback_1_0,
     user_data: *mut c_void,
 ) -> PP_Resource {
+    tracing::trace!("PPB_audio::create_1_0 called");
     do_create(instance, config, audio_callback, None, user_data)
 }
 
@@ -226,6 +227,7 @@ unsafe extern "C" fn create_1_1(
     audio_callback: PPB_Audio_Callback,
     user_data: *mut c_void,
 ) -> PP_Resource {
+    tracing::trace!("PPB_audio::create_1_1 called");
     do_create(instance, config, None, audio_callback, user_data)
 }
 
@@ -289,6 +291,7 @@ fn do_create(
 }
 
 unsafe extern "C" fn is_audio(resource: PP_Resource) -> PP_Bool {
+    tracing::trace!("PPB_audio::is_audio called");
     let host = HOST.get().unwrap();
     if host.resources.is_type(resource, "PPB_Audio") {
         PP_TRUE
@@ -298,6 +301,7 @@ unsafe extern "C" fn is_audio(resource: PP_Resource) -> PP_Bool {
 }
 
 unsafe extern "C" fn get_current_config(audio: PP_Resource) -> PP_Resource {
+    tracing::trace!("PPB_audio::get_current_config called");
     let host = HOST.get().unwrap();
 
     let info = host
@@ -322,6 +326,7 @@ unsafe extern "C" fn get_current_config(audio: PP_Resource) -> PP_Resource {
 }
 
 unsafe extern "C" fn start_playback(audio: PP_Resource) -> PP_Bool {
+    tracing::trace!("PPB_audio::start_playback called");
     let host = HOST.get().unwrap();
 
     let result = host
@@ -369,6 +374,7 @@ unsafe extern "C" fn start_playback(audio: PP_Resource) -> PP_Bool {
 }
 
 unsafe extern "C" fn stop_playback(audio: PP_Resource) -> PP_Bool {
+    tracing::trace!("PPB_audio::stop_playback called");
     let host = HOST.get().unwrap();
 
     let result = host

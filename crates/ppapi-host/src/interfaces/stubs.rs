@@ -6,12 +6,11 @@
 //! that return 0/null/PP_FALSE. As we implement real functionality, we
 //! move interfaces out of this file into dedicated modules.
 
-use crate::interface_registry::InterfaceRegistry;
-use parking_lot::Mutex;
-use std::collections::HashMap;
-use std::ffi::c_void;
-use std::sync::OnceLock;
-
+//use crate::interface_registry::InterfaceRegistry;
+//use parking_lot::Mutex;
+//use std::collections::HashMap;
+//use std::sync::OnceLock;
+//
 // ---------------------------------------------------------------------------
 // Named-stub machinery
 //
@@ -22,6 +21,7 @@ use std::sync::OnceLock;
 // invoked.
 // ---------------------------------------------------------------------------
 
+/*
 /// Global registry: function-pointer value → (interface_name, slot_index).
 static STUB_REGISTRY: OnceLock<Mutex<HashMap<usize, (&'static str, usize)>>> = OnceLock::new();
 
@@ -201,3 +201,5 @@ pub fn register(registry: &mut InterfaceRegistry) {
     // PPB_OpenGLES2 extensions and PPB_Printing are now in dedicated modules
     } // unsafe
 }
+
+*/

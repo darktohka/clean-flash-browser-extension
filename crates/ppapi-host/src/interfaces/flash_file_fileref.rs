@@ -167,7 +167,7 @@ unsafe extern "C" fn query_file(
             size: sb.st_size,
             type_: pp_type,
             system_type: PP_FILESYSTEMTYPE_EXTERNAL,
-            creation_time: 0.0,
+            creation_time: sb.st_ctime as f64,
             last_access_time: sb.st_atime as f64,
             last_modified_time: sb.st_mtime as f64,
         };

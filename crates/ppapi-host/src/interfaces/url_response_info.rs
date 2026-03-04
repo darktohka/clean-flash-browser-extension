@@ -13,6 +13,7 @@ pub struct URLResponseInfoResource {
     pub status_code: i32,
     pub status_line: String,
     pub headers: String,
+    pub redirect_url: String,
 }
 
 impl Resource for URLResponseInfoResource {
@@ -53,6 +54,7 @@ unsafe extern "C" fn get_property(
     response: PP_Resource,
     property: PP_URLResponseProperty,
 ) -> PP_Var {
+    tracing::trace!("PPB_URLResponseInfo::GetProperty(response={}, property={}) called", response, property);
     let Some(host) = HOST.get() else {
         tracing::debug!("PPB_URLResponseInfo::GetProperty(response={}, property={}) -> undefined (no host)", response, property);
         return PP_Var::undefined();
@@ -77,7 +79,16 @@ unsafe extern "C" fn get_property(
                 tracing::info!("PPB_URLResponseInfo::GetProperty(response={}, HEADERS) -> {:?} <-- Flash querying headers", response, r.headers);
                 host.vars.var_from_str(&r.headers)
             }
-            PP_URLRESPONSEPROPERTY_REDIRECTURL | PP_URLRESPONSEPROPERTY_REDIRECTMETHOD => {
+            PP_URLRESPONSEPROPERTY_REDIRECTURL => {
+                if r.redirect_url.is_empty() {
+                    tracing::trace!("PPB_URLResponseInfo::GetProperty(response={}, REDIRECTURL) -> undefined", response);
+                    PP_Var::undefined()
+                } else {
+                    tracing::trace!("PPB_URLResponseInfo::GetProperty(response={}, REDIRECTURL) -> {:?}", response, r.redirect_url);
+                    host.vars.var_from_str(&r.redirect_url)
+                }
+            }
+            PP_URLRESPONSEPROPERTY_REDIRECTMETHOD => {
                 tracing::info!("PPB_URLResponseInfo::GetProperty(response={}, property={}) -> undefined <-- Flash querying redirect", response, property);
                 PP_Var::undefined()
             }

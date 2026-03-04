@@ -68,6 +68,7 @@ unsafe extern "C" fn create_stereo_16_bit(
     sample_rate: PP_AudioSampleRate,
     sample_frame_count: u32,
 ) -> PP_Resource {
+    tracing::trace!("PPB_audio_config::create_stereo_16_bit called");
     let host = HOST.get().unwrap();
 
     if !host.instances.exists(instance) {
@@ -93,10 +94,12 @@ unsafe extern "C" fn recommend_sample_frame_count(
     _sample_rate: PP_AudioSampleRate,
     requested_sample_frame_count: u32,
 ) -> u32 {
+    tracing::trace!("PPB_audio_config::recommend_sample_frame_count called");
     clamp_sample_frame_count(requested_sample_frame_count)
 }
 
 unsafe extern "C" fn is_audio_config(resource: PP_Resource) -> PP_Bool {
+    tracing::trace!("PPB_audio_config::is_audio_config called");
     let host = HOST.get().unwrap();
     if host.resources.is_type(resource, "PPB_AudioConfig") {
         PP_TRUE
@@ -106,6 +109,7 @@ unsafe extern "C" fn is_audio_config(resource: PP_Resource) -> PP_Bool {
 }
 
 unsafe extern "C" fn get_sample_rate(config: PP_Resource) -> PP_AudioSampleRate {
+    tracing::trace!("PPB_audio_config::get_sample_rate called");
     let host = HOST.get().unwrap();
     host.resources
         .with_downcast::<AudioConfigResource, _>(config, |ac| ac.sample_rate)
@@ -116,6 +120,7 @@ unsafe extern "C" fn get_sample_rate(config: PP_Resource) -> PP_AudioSampleRate 
 }
 
 unsafe extern "C" fn get_sample_frame_count(config: PP_Resource) -> u32 {
+    tracing::trace!("PPB_audio_config::get_sample_frame_count called");
     let host = HOST.get().unwrap();
     host.resources
         .with_downcast::<AudioConfigResource, _>(config, |ac| ac.sample_frame_count)
@@ -126,5 +131,6 @@ unsafe extern "C" fn get_sample_frame_count(config: PP_Resource) -> u32 {
 }
 
 unsafe extern "C" fn recommend_sample_rate(_instance: PP_Instance) -> PP_AudioSampleRate {
+    tracing::trace!("PPB_audio_config::recommend_sample_rate called");
     PP_AUDIOSAMPLERATE_48000
 }
