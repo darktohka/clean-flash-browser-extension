@@ -1,0 +1,8 @@
+[package]
+name = "ppapi-sys"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Raw FFI bindings for PPAPI (Pepper Plugin API) C types"
+
+[dependencies]

@@ -1,0 +1,29 @@
+[workspace]
+members = [
+    "crates/ppapi-sys",
+    "crates/ppapi-host",
+    "crates/player-core",
+    "crates/player-ui-traits",
+    "crates/player-egui",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+rust-version = "1.75"
+
+[workspace.dependencies]
+ppapi-sys = { path = "crates/ppapi-sys" }
+ppapi-host = { path = "crates/ppapi-host" }
+player-core = { path = "crates/player-core" }
+player-ui-traits = { path = "crates/player-ui-traits" }
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile."release-lto"]
+inherits = "release"
+lto = "fat"
+strip = true
+codegen-units = 1
