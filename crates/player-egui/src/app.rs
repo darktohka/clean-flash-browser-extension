@@ -163,8 +163,8 @@ impl FlashPlayerApp {
         match self.player.open_swf(path) {
             Ok(()) => {
                 self.status_message = format!("Playing: {}", path);
-                // The UI update loop will send the real content area size
-                // via notify_view_change on the next frame.
+                let (width, height) = self.last_content_size;
+                self.player.notify_view_change(width, height);
             }
             Err(e) => {
                 self.status_message = format!("Error opening {}: {}", path, e);
