@@ -8,6 +8,7 @@ use player_ui_traits::{DialogProvider, FileChooserProvider, FrameData, PlayerSta
 use ppapi_host::{HostCallbacks, HostState, PluginLoader};
 use ppapi_sys::*;
 use std::path::Path;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 
 /// The main Flash Player controller.
@@ -23,6 +24,8 @@ pub struct FlashPlayer {
     state: Arc<Mutex<PlayerState>>,
     /// Latest frame data from the plugin, shared with the UI thread.
     latest_frame: Arc<Mutex<Option<FrameData>>>,
+    /// Current cursor type requested by the plugin (PP_CursorType_Dev).
+    cursor_type: Arc<AtomicI32>,
     /// Path to the PepperFlash plugin .so file.
     plugin_path: Option<String>,
     /// Dialog provider for alert/confirm/prompt (from the UI layer).
@@ -39,6 +42,7 @@ impl FlashPlayer {
             instance_id: None,
             state: Arc::new(Mutex::new(PlayerState::Idle)),
             latest_frame: Arc::new(Mutex::new(None)),
+            cursor_type: Arc::new(AtomicI32::new(0)),
             plugin_path: None,
             dialog_provider: None,
             file_chooser_provider: None,
@@ -68,6 +72,12 @@ impl FlashPlayer {
     /// Get a handle to the player state (for the UI to read).
     pub fn state(&self) -> Arc<Mutex<PlayerState>> {
         self.state.clone()
+    }
+
+    /// Get a handle to the current cursor type (for the UI to read).
+    /// The value is a `PP_CursorType_Dev` integer.
+    pub fn cursor_type(&self) -> Arc<AtomicI32> {
+        self.cursor_type.clone()
     }
 
     /// Initialize the PPAPI host and load the plugin.
@@ -110,6 +120,7 @@ impl FlashPlayer {
 
         host.set_callbacks(Box::new(PlayerHostCallbacks {
             latest_frame: frame_handle,
+            cursor_type: self.cursor_type.clone(),
             dialog_provider: dialog,
         }));
 
@@ -641,6 +652,7 @@ impl Drop for FlashPlayer {
 
 struct PlayerHostCallbacks {
     latest_frame: Arc<Mutex<Option<FrameData>>>,
+    cursor_type: Arc<AtomicI32>,
     dialog_provider: Option<Arc<dyn DialogProvider>>,
 }
 
@@ -819,6 +831,10 @@ impl HostCallbacks for PlayerHostCallbacks {
             tracing::info!("Prompt: {} (default: {})", message, default);
             Some(default.to_string())
         }
+    }
+
+    fn on_cursor_changed(&self, cursor_type: i32) {
+        self.cursor_type.store(cursor_type, Ordering::Relaxed);
     }
 }
 

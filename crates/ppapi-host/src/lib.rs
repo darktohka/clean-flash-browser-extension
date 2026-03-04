@@ -96,6 +96,12 @@ pub trait HostCallbacks: Send + Sync {
         tracing::info!("Prompt: {} (default: {})", message, default);
         Some(default.to_string())
     }
+
+    /// Called when the plugin requests a cursor shape change via PPB_CursorControl.
+    /// `cursor_type` is a `PP_CursorType_Dev` value.
+    fn on_cursor_changed(&self, cursor_type: i32) {
+        let _ = cursor_type;
+    }
 }
 
 // ===========================================================================

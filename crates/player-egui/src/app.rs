@@ -10,6 +10,7 @@ use parking_lot::Mutex;
 use player_core::FlashPlayer;
 use player_ui_traits::{FrameData, PlayerState};
 use ppapi_sys::*;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 
 use crate::dialogs;
@@ -41,6 +42,8 @@ pub struct FlashPlayerApp {
     active_dialog: Option<dialogs::ActiveDialog>,
     /// Last mouse position sent (to avoid duplicate MOUSEMOVE events).
     last_mouse_pos: Option<PP_Point>,
+    /// Current cursor type requested by the plugin.
+    cursor_type: Arc<AtomicI32>,
     /// Last content area size sent to the plugin (to detect resize).
     last_content_size: (i32, i32),
     /// Whether the window currently has focus.
@@ -52,6 +55,7 @@ impl FlashPlayerApp {
         let mut player = FlashPlayer::new();
         let frame_handle = player.latest_frame();
         let state_handle = player.state();
+        let cursor_type = player.cursor_type();
 
         // Default plugin path — can be overridden.
         let plugin_path =
@@ -85,6 +89,7 @@ impl FlashPlayerApp {
             dialog_state,
             active_dialog: None,
             last_mouse_pos: None,
+            cursor_type,
             last_content_size: (0, 0),
             has_focus: true,
         }
@@ -692,6 +697,12 @@ impl eframe::App for FlashPlayerApp {
         // Update frame texture from the latest plugin output.
         self.update_frame_texture(ctx);
 
+        // Apply the cursor type requested by the plugin.
+        if self.player.is_running() {
+            let cursor = pp_cursor_to_egui(self.cursor_type.load(Ordering::Relaxed));
+            ctx.set_cursor_icon(cursor);
+        }
+
         // Detect focus changes and notify the plugin.
         let focused = ctx.input(|i| i.focused);
         if focused != self.has_focus {
@@ -752,5 +763,60 @@ impl eframe::App for FlashPlayerApp {
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.player.shutdown();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PP_CursorType_Dev → egui::CursorIcon mapping
+// ---------------------------------------------------------------------------
+
+fn pp_cursor_to_egui(cursor_type: i32) -> egui::CursorIcon {
+    match cursor_type {
+        PP_CURSORTYPE_POINTER => egui::CursorIcon::Default,
+        PP_CURSORTYPE_CROSS => egui::CursorIcon::Crosshair,
+        PP_CURSORTYPE_HAND => egui::CursorIcon::PointingHand,
+        PP_CURSORTYPE_IBEAM => egui::CursorIcon::Text,
+        PP_CURSORTYPE_WAIT => egui::CursorIcon::Wait,
+        PP_CURSORTYPE_HELP => egui::CursorIcon::Help,
+        PP_CURSORTYPE_EASTRESIZE => egui::CursorIcon::ResizeEast,
+        PP_CURSORTYPE_NORTHRESIZE => egui::CursorIcon::ResizeNorth,
+        PP_CURSORTYPE_NORTHEASTRESIZE => egui::CursorIcon::ResizeNorthEast,
+        PP_CURSORTYPE_NORTHWESTRESIZE => egui::CursorIcon::ResizeNorthWest,
+        PP_CURSORTYPE_SOUTHRESIZE => egui::CursorIcon::ResizeSouth,
+        PP_CURSORTYPE_SOUTHEASTRESIZE => egui::CursorIcon::ResizeSouthEast,
+        PP_CURSORTYPE_SOUTHWESTRESIZE => egui::CursorIcon::ResizeSouthWest,
+        PP_CURSORTYPE_WESTRESIZE => egui::CursorIcon::ResizeWest,
+        PP_CURSORTYPE_NORTHSOUTHRESIZE => egui::CursorIcon::ResizeVertical,
+        PP_CURSORTYPE_EASTWESTRESIZE => egui::CursorIcon::ResizeHorizontal,
+        PP_CURSORTYPE_NORTHEASTSOUTHWESTRESIZE => egui::CursorIcon::ResizeNorthEast,
+        PP_CURSORTYPE_NORTHWESTSOUTHEASTRESIZE => egui::CursorIcon::ResizeNorthWest,
+        PP_CURSORTYPE_COLUMNRESIZE => egui::CursorIcon::ResizeColumn,
+        PP_CURSORTYPE_ROWRESIZE => egui::CursorIcon::ResizeRow,
+        PP_CURSORTYPE_MOVE => egui::CursorIcon::Move,
+        PP_CURSORTYPE_VERTICALTEXT => egui::CursorIcon::VerticalText,
+        PP_CURSORTYPE_CELL => egui::CursorIcon::Cell,
+        PP_CURSORTYPE_CONTEXTMENU => egui::CursorIcon::ContextMenu,
+        PP_CURSORTYPE_ALIAS => egui::CursorIcon::Alias,
+        PP_CURSORTYPE_PROGRESS => egui::CursorIcon::Progress,
+        PP_CURSORTYPE_NODROP => egui::CursorIcon::NoDrop,
+        PP_CURSORTYPE_COPY => egui::CursorIcon::Copy,
+        PP_CURSORTYPE_NONE => egui::CursorIcon::None,
+        PP_CURSORTYPE_NOTALLOWED => egui::CursorIcon::NotAllowed,
+        PP_CURSORTYPE_ZOOMIN => egui::CursorIcon::ZoomIn,
+        PP_CURSORTYPE_ZOOMOUT => egui::CursorIcon::ZoomOut,
+        PP_CURSORTYPE_GRAB => egui::CursorIcon::Grab,
+        PP_CURSORTYPE_GRABBING => egui::CursorIcon::Grabbing,
+        // Panning cursors → AllScroll (closest match)
+        PP_CURSORTYPE_MIDDLEPANNING
+        | PP_CURSORTYPE_EASTPANNING
+        | PP_CURSORTYPE_NORTHPANNING
+        | PP_CURSORTYPE_NORTHEASTPANNING
+        | PP_CURSORTYPE_NORTHWESTPANNING
+        | PP_CURSORTYPE_SOUTHPANNING
+        | PP_CURSORTYPE_SOUTHEASTPANNING
+        | PP_CURSORTYPE_SOUTHWESTPANNING
+        | PP_CURSORTYPE_WESTPANNING => egui::CursorIcon::AllScroll,
+        // Custom / unknown → default arrow
+        _ => egui::CursorIcon::Default,
     }
 }

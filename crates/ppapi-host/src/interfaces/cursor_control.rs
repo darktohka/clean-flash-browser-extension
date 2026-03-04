@@ -57,9 +57,12 @@ unsafe extern "C" fn set_cursor(
         cursor_type_name(type_)
     );
 
-    // TODO: Forward cursor type to the UI layer via HostCallbacks
-    // so the windowing system can update the actual cursor shape.
-    // For now, we accept and ignore the request.
+    // Forward cursor type to the UI layer via HostCallbacks.
+    let callbacks_guard = host.host_callbacks.lock();
+    if let Some(cb) = callbacks_guard.as_ref() {
+        cb.on_cursor_changed(type_ as i32);
+    }
+    drop(callbacks_guard);
 
     PP_TRUE
 }
