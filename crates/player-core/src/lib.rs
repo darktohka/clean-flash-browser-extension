@@ -325,9 +325,11 @@ impl FlashPlayer {
         //self.notify_view_change(800, 600);
 
         tracing::info!("Instance {} created for {}", instance_id, swf_path);
+        // Start with 0×0 — the UI layer will immediately send the real
+        // available size via notify_view_change.
         *self.state.lock() = PlayerState::Running {
-            width: 800,
-            height: 600,
+            width: 0,
+            height: 0,
         };
 
         Ok(())
@@ -378,6 +380,31 @@ impl FlashPlayer {
         });
 
         *self.state.lock() = PlayerState::Running { width, height };
+    }
+
+    /// Notify the plugin that focus has been gained or lost.
+    ///
+    /// Calls `PPP_Instance::DidChangeFocus` on the plugin.
+    pub fn notify_focus_change(&self, has_focus: bool) {
+        tracing::debug!("notify_focus_change: has_focus={}", has_focus);
+        let Some(instance_id) = self.instance_id else {
+            return;
+        };
+        let Some(plugin) = &self.plugin else { return };
+
+        let ppp_instance: Option<&'static PPP_Instance_1_1> = unsafe {
+            plugin.get_interface_typed(
+                std::ffi::CStr::from_bytes_with_nul(b"PPP_Instance;1.1\0").unwrap(),
+            )
+        };
+
+        if let Some(ppp) = ppp_instance {
+            if let Some(did_change_focus) = ppp.DidChangeFocus {
+                let pp_has_focus = if has_focus { PP_TRUE } else { PP_FALSE };
+                unsafe { did_change_focus(instance_id, pp_has_focus) };
+                tracing::debug!("notify_focus_change: DidChangeFocus returned");
+            }
+        }
     }
 
     /// Send an input event to the plugin.

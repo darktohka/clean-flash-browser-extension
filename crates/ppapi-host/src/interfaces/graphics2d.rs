@@ -151,21 +151,19 @@ unsafe extern "C" fn paint_image_data(
         return;
     };
 
-    // Read image data pixels first.
-    let img_pixels: Option<(Vec<u8>, PP_Size, i32)> =
-        host.resources
-            .with_downcast::<super::image_data::ImageDataResource, _>(image_data, |img| {
-                (img.pixels.clone(), img.size, img.stride)
-            });
-
-    let Some((img_pixels, img_size, img_stride)) = img_pixels else {
-        return;
-    };
-
     let tl = if top_left.is_null() {
         PP_Point { x: 0, y: 0 }
     } else {
         unsafe { *top_left }
+    };
+
+    // We need the image size to build the default src_rect.  Read it
+    // first (cheap — no pixel data touched).
+    let img_size: Option<PP_Size> = host
+        .resources
+        .with_downcast::<super::image_data::ImageDataResource, _>(image_data, |img| img.size);
+    let Some(img_size) = img_size else {
+        return;
     };
 
     let src = if src_rect.is_null() {
@@ -177,30 +175,47 @@ unsafe extern "C" fn paint_image_data(
         unsafe { *src_rect }
     };
 
+    // Access both resources simultaneously through the resource manager,
+    // avoiding a full clone of the image pixel buffer.
     host.resources
-        .with_downcast_mut::<Graphics2DResource, _>(graphics_2d, |g| {
-            // Blit src region from image_data into graphics_2d.
-            // Per PPAPI spec: destination = top_left + src_rect.point + (col, row)
-            for row in 0..src.size.height {
-                let dst_y = tl.y + src.point.y + row;
-                if dst_y < 0 || dst_y >= g.size.height {
-                    continue;
-                }
-                for col in 0..src.size.width {
-                    let dst_x = tl.x + src.point.x + col;
-                    if dst_x < 0 || dst_x >= g.size.width {
+        .with_downcast_pair::<super::image_data::ImageDataResource, Graphics2DResource, _>(
+            image_data,
+            graphics_2d,
+            |img, g| {
+                let img_pixels = &img.pixels;
+                let img_stride = img.stride;
+
+                // Blit src region from image_data into graphics_2d using
+                // row-level memcpy for performance.
+                for row in 0..src.size.height {
+                    let dst_y = tl.y + src.point.y + row;
+                    if dst_y < 0 || dst_y >= g.size.height {
                         continue;
                     }
-                    let src_off =
-                        ((src.point.y + row) * img_stride + (src.point.x + col) * 4) as usize;
-                    let dst_off = (dst_y * g.stride + dst_x * 4) as usize;
-                    if src_off + 4 <= img_pixels.len() && dst_off + 4 <= g.pixels.len() {
-                        g.pixels[dst_off..dst_off + 4]
-                            .copy_from_slice(&img_pixels[src_off..src_off + 4]);
+
+                    let dst_x_start = tl.x + src.point.x;
+                    let col_start = if dst_x_start < 0 { -dst_x_start } else { 0 };
+                    let col_end = src.size.width.min(g.size.width - dst_x_start);
+                    if col_start >= col_end {
+                        continue;
+                    }
+
+                    let src_row_off =
+                        ((src.point.y + row) * img_stride + (src.point.x + col_start) * 4)
+                            as usize;
+                    let dst_row_off =
+                        (dst_y * g.stride + (dst_x_start + col_start) * 4) as usize;
+                    let byte_count = ((col_end - col_start) * 4) as usize;
+
+                    if src_row_off + byte_count <= img_pixels.len()
+                        && dst_row_off + byte_count <= g.pixels.len()
+                    {
+                        g.pixels[dst_row_off..dst_row_off + byte_count]
+                            .copy_from_slice(&img_pixels[src_row_off..src_row_off + byte_count]);
                     }
                 }
-            }
-        });
+            },
+        );
 }
 
 unsafe extern "C" fn scroll(
@@ -216,20 +231,18 @@ unsafe extern "C" fn replace_contents(graphics_2d: PP_Resource, image_data: PP_R
         return;
     };
 
-    let img_pixels: Option<Vec<u8>> = host
-        .resources
-        .with_downcast::<super::image_data::ImageDataResource, _>(image_data, |img| {
-            img.pixels.clone()
-        });
-
-    if let Some(pixels) = img_pixels {
-        host.resources
-            .with_downcast_mut::<Graphics2DResource, _>(graphics_2d, |g| {
-                if pixels.len() == g.pixels.len() {
-                    g.pixels = pixels;
+    // Copy pixel buffer directly between the two resources without
+    // allocating a temporary clone.
+    host.resources
+        .with_downcast_pair::<super::image_data::ImageDataResource, Graphics2DResource, _>(
+            image_data,
+            graphics_2d,
+            |img, g| {
+                if img.pixels.len() == g.pixels.len() {
+                    g.pixels.copy_from_slice(&img.pixels);
                 }
-            });
-    }
+            },
+        );
 }
 
 unsafe extern "C" fn flush(graphics_2d: PP_Resource, callback: PP_CompletionCallback) -> i32 {
@@ -275,16 +288,17 @@ unsafe extern "C" fn flush(graphics_2d: PP_Resource, callback: PP_CompletionCall
     });
 
     // Read the current pixel data and notify the host callbacks.
-    let pixels: Option<(Vec<u8>, PP_Size)> = host
-        .resources
-        .with_downcast::<Graphics2DResource, _>(graphics_2d, |g| (g.pixels.clone(), g.size));
-
-    if let Some((pixels, size)) = pixels {
-        // Notify the UI that a new frame is available.
-        if let Some(cb) = host.host_callbacks.lock().as_ref() {
-            cb.on_flush(graphics_2d, &pixels, size.width, size.height);
-        }
-    }
+    // Call on_flush inside the resource closure to avoid cloning
+    // the entire pixel buffer — on_flush only stores data in an
+    // Arc<Mutex> so there is no resource-manager re-entry risk.
+    let callbacks_guard = host.host_callbacks.lock();
+    host.resources
+        .with_downcast::<Graphics2DResource, _>(graphics_2d, |g| {
+            if let Some(cb) = callbacks_guard.as_ref() {
+                cb.on_flush(graphics_2d, &g.pixels, g.size.width, g.size.height);
+            }
+        });
+    drop(callbacks_guard);
 
     // Clear in-progress and fire the callback asynchronously via the main
     // message loop.  The PPAPI spec requires Flush to return

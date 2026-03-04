@@ -64,6 +64,10 @@ pub enum PlayerCommand {
         key_code: u32,
         modifiers: u32,
     },
+    /// Focus changed (gained or lost).
+    FocusChange {
+        has_focus: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

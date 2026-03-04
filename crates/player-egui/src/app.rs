@@ -41,6 +41,10 @@ pub struct FlashPlayerApp {
     active_dialog: Option<dialogs::ActiveDialog>,
     /// Last mouse position sent (to avoid duplicate MOUSEMOVE events).
     last_mouse_pos: Option<PP_Point>,
+    /// Last content area size sent to the plugin (to detect resize).
+    last_content_size: (i32, i32),
+    /// Whether the window currently has focus.
+    has_focus: bool,
 }
 
 impl FlashPlayerApp {
@@ -81,6 +85,8 @@ impl FlashPlayerApp {
             dialog_state,
             active_dialog: None,
             last_mouse_pos: None,
+            last_content_size: (0, 0),
+            has_focus: true,
         }
     }
 
@@ -152,8 +158,8 @@ impl FlashPlayerApp {
         match self.player.open_swf(path) {
             Ok(()) => {
                 self.status_message = format!("Playing: {}", path);
-                // Notify of initial view size.
-                self.player.notify_view_change(800, 600);
+                // The UI update loop will send the real content area size
+                // via notify_view_change on the next frame.
             }
             Err(e) => {
                 self.status_message = format!("Error opening {}: {}", path, e);
@@ -222,27 +228,24 @@ impl FlashPlayerApp {
 
     /// Update the frame texture from the latest frame data.
     fn update_frame_texture(&mut self, ctx: &egui::Context) {
-        let frame_opt = self.frame_handle.lock().clone();
-        if let Some(frame) = frame_opt {
+        // Take the frame data out of the mutex instead of cloning it,
+        // avoiding a full pixel-buffer copy.
+        let frame_opt = self.frame_handle.lock().take();
+        if let Some(mut frame) = frame_opt {
             let size = (frame.width, frame.height);
             if size != self.last_frame_size || self.frame_texture.is_none() {
                 self.last_frame_size = size;
             }
 
-            // Convert BGRA_PREMUL to RGBA for egui.
-            let mut rgba = vec![0u8; frame.pixels.len()];
-            for i in (0..frame.pixels.len()).step_by(4) {
-                if i + 3 < frame.pixels.len() {
-                    rgba[i] = frame.pixels[i + 2]; // R = B
-                    rgba[i + 1] = frame.pixels[i + 1]; // G = G
-                    rgba[i + 2] = frame.pixels[i]; // B = R
-                    rgba[i + 3] = frame.pixels[i + 3]; // A = A
-                }
+            // Convert BGRA_PREMUL → RGBA in-place using chunk-level swaps
+            // for better auto-vectorization.
+            for chunk in frame.pixels.chunks_exact_mut(4) {
+                chunk.swap(0, 2); // swap B and R
             }
 
             let image = egui::ColorImage::from_rgba_unmultiplied(
                 [frame.width as usize, frame.height as usize],
-                &rgba,
+                &frame.pixels,
             );
 
             self.frame_texture = Some(ctx.load_texture(
@@ -255,18 +258,25 @@ impl FlashPlayerApp {
 
     /// Draw the central content area and handle input events.
     fn draw_content(&mut self, ui: &mut egui::Ui) {
+        // Always track the available content area so we can notify the
+        // plugin when the window is resized, even before a frame exists.
+        let available = ui.available_size();
+        let new_w = available.x as i32;
+        let new_h = available.y as i32;
+        if (new_w, new_h) != self.last_content_size && new_w > 0 && new_h > 0 {
+            self.last_content_size = (new_w, new_h);
+            if self.player.is_running() {
+                self.player.notify_view_change(new_w, new_h);
+            }
+        }
+
         if let Some(ref texture) = self.frame_texture {
-            let available = ui.available_size();
             let tex_size = texture.size_vec2();
 
-            // Scale to fit while maintaining aspect ratio.
-            let scale = (available.x / tex_size.x).min(available.y / tex_size.y).min(1.0);
-            let display_size = tex_size * scale;
-
-            // Centre the image in the available space.
-            let offset = (available - display_size) * 0.5;
-            let content_origin = ui.min_rect().min + egui::vec2(offset.x, offset.y);
-            let content_rect = egui::Rect::from_min_size(content_origin, display_size);
+            // Fill the entire available area — the plugin is told
+            // the real size and will render at that resolution.
+            let display_size = available;
+            let content_rect = egui::Rect::from_min_size(ui.min_rect().min, display_size);
 
             // Paint the frame.
             ui.painter().image(
@@ -682,6 +692,15 @@ impl eframe::App for FlashPlayerApp {
         // Update frame texture from the latest plugin output.
         self.update_frame_texture(ctx);
 
+        // Detect focus changes and notify the plugin.
+        let focused = ctx.input(|i| i.focused);
+        if focused != self.has_focus {
+            self.has_focus = focused;
+            if self.player.is_running() {
+                self.player.notify_focus_change(focused);
+            }
+        }
+
         // Check for and draw any pending dialog (alert/confirm/prompt).
         self.draw_pending_dialog(ctx);
 
@@ -725,8 +744,9 @@ impl eframe::App for FlashPlayerApp {
         });
 
         // Request continuous repainting when running (for animation).
+        // Use ZERO duration to repaint every vsync without artificial throttling.
         if self.player.is_running() {
-            ctx.request_repaint();
+            ctx.request_repaint_after(std::time::Duration::ZERO);
         }
     }
 

@@ -126,6 +126,33 @@ impl ResourceManager {
         })
     }
 
+    /// Access two *distinct* resources simultaneously: `src_id` immutably as `S`
+    /// and `dst_id` mutably as `D`, without cloning either buffer.
+    ///
+    /// # Panics
+    /// Panics if `src_id == dst_id`.
+    pub fn with_downcast_pair<S: 'static, D: 'static, R>(
+        &self,
+        src_id: PP_Resource,
+        dst_id: PP_Resource,
+        f: impl FnOnce(&S, &mut D) -> R,
+    ) -> Option<R> {
+        assert_ne!(src_id, dst_id, "source and destination resources must differ");
+        let mut map = self.resources.lock();
+        // Use a raw pointer to the map to obtain two non-overlapping
+        // references (one shared, one exclusive) to entries at different
+        // keys.  This is sound because HashMap entries at distinct keys
+        // occupy disjoint memory.
+        let map_ptr: *mut HashMap<PP_Resource, ResourceEntry> = &mut *map;
+        unsafe {
+            let src_entry = (*map_ptr).get(&src_id)?;
+            let dst_entry = (*map_ptr).get_mut(&dst_id)?;
+            let src = src_entry.resource.as_any().downcast_ref::<S>()?;
+            let dst = dst_entry.resource.as_any_mut().downcast_mut::<D>()?;
+            Some(f(src, dst))
+        }
+    }
+
     /// Check if a resource exists and is of the expected type.
     pub fn is_type(&self, id: PP_Resource, type_name: &str) -> bool {
         self.with_resource(id, |entry| entry.resource.resource_type() == type_name)
