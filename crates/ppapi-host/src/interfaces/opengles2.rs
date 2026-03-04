@@ -432,6 +432,9 @@ pub unsafe fn register(registry: &mut InterfaceRegistry) {
         registry.register(PPB_OPENGLES2_FRAMEBUFFERMULTISAMPLE_INTERFACE_1_0, &FRAMEBUFFER_MULTISAMPLE_VTABLE);
         registry.register(PPB_OPENGLES2_CHROMIUMENABLEFEATURE_INTERFACE_1_0, &CHROMIUM_ENABLE_VTABLE);
         registry.register(PPB_OPENGLES2_CHROMIUMMAPSUB_INTERFACE_1_0, &CHROMIUM_MAP_SUB_VTABLE);
+        // Legacy Dev variant names for the same ChromiumMapSub vtable
+        registry.register("PPB_OpenGLES2ChromiumMapSub(Dev);1.0\0", &CHROMIUM_MAP_SUB_VTABLE);
+        registry.register("PPB_GLESChromiumTextureMapping(Dev);0.1\0", &CHROMIUM_MAP_SUB_VTABLE);
         registry.register(PPB_OPENGLES2_QUERY_INTERFACE_1_0, &QUERY_VTABLE);
         registry.register(PPB_OPENGLES2_VERTEXARRAYOBJECT_INTERFACE_1_0, &VAO_VTABLE);
         registry.register(PPB_OPENGLES2_DRAWBUFFERS_DEV_INTERFACE_1_0, &DRAW_BUFFERS_VTABLE);

@@ -9,6 +9,7 @@ use std::ffi::c_void;
 use super::super::HOST;
 
 /// URLLoader resource state.
+#[derive(Debug)]
 pub struct URLLoaderResource {
     pub instance: PP_Instance,
     pub url: Option<String>,

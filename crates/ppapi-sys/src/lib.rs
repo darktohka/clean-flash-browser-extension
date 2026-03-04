@@ -229,6 +229,63 @@ impl PP_Var {
 }
 
 // ===========================================================================
+// PPP_Class_Deprecated (used by PPB_Var(Deprecated);0.3)
+// ===========================================================================
+
+#[repr(C)]
+pub struct PPP_Class_Deprecated {
+    pub HasProperty: Option<
+        unsafe extern "C" fn(object: *mut c_void, name: PP_Var, exception: *mut PP_Var) -> PP_Bool,
+    >,
+    pub HasMethod: Option<
+        unsafe extern "C" fn(object: *mut c_void, name: PP_Var, exception: *mut PP_Var) -> PP_Bool,
+    >,
+    pub GetProperty: Option<
+        unsafe extern "C" fn(object: *mut c_void, name: PP_Var, exception: *mut PP_Var) -> PP_Var,
+    >,
+    pub GetAllPropertyNames: Option<
+        unsafe extern "C" fn(
+            object: *mut c_void,
+            property_count: *mut u32,
+            properties: *mut *mut PP_Var,
+            exception: *mut PP_Var,
+        ),
+    >,
+    pub SetProperty: Option<
+        unsafe extern "C" fn(
+            object: *mut c_void,
+            name: PP_Var,
+            value: PP_Var,
+            exception: *mut PP_Var,
+        ),
+    >,
+    pub RemoveProperty: Option<
+        unsafe extern "C" fn(object: *mut c_void, name: PP_Var, exception: *mut PP_Var),
+    >,
+    pub Call: Option<
+        unsafe extern "C" fn(
+            object: *mut c_void,
+            method_name: PP_Var,
+            argc: u32,
+            argv: *mut PP_Var,
+            exception: *mut PP_Var,
+        ) -> PP_Var,
+    >,
+    pub Construct: Option<
+        unsafe extern "C" fn(
+            object: *mut c_void,
+            argc: u32,
+            argv: *mut PP_Var,
+            exception: *mut PP_Var,
+        ) -> PP_Var,
+    >,
+    pub Deallocate: Option<unsafe extern "C" fn(object: *mut c_void)>,
+}
+
+unsafe impl Send for PPP_Class_Deprecated {}
+unsafe impl Sync for PPP_Class_Deprecated {}
+
+// ===========================================================================
 // Geometry types
 // ===========================================================================
 
@@ -595,6 +652,173 @@ unsafe impl Send for PPB_Var_1_0 {}
 unsafe impl Sync for PPB_Var_1_0 {}
 
 // ===========================================================================
+// PPB_Var(Deprecated);0.3
+// ===========================================================================
+
+pub const PPB_VAR_DEPRECATED_INTERFACE_0_3: &str = "PPB_Var(Deprecated);0.3\0";
+
+#[repr(C)]
+pub struct PPB_Var_Deprecated_0_3 {
+    pub AddRef: Option<unsafe extern "C" fn(var: PP_Var)>,
+    pub Release: Option<unsafe extern "C" fn(var: PP_Var)>,
+    pub VarFromUtf8:
+        Option<unsafe extern "C" fn(module: PP_Module, data: *const c_char, len: u32) -> PP_Var>,
+    pub VarToUtf8: Option<unsafe extern "C" fn(var: PP_Var, len: *mut u32) -> *const c_char>,
+    pub HasProperty: Option<
+        unsafe extern "C" fn(
+            object: PP_Var,
+            name: PP_Var,
+            exception: *mut PP_Var,
+        ) -> PP_Bool,
+    >,
+    pub HasMethod: Option<
+        unsafe extern "C" fn(
+            object: PP_Var,
+            name: PP_Var,
+            exception: *mut PP_Var,
+        ) -> PP_Bool,
+    >,
+    pub GetProperty: Option<
+        unsafe extern "C" fn(
+            object: PP_Var,
+            name: PP_Var,
+            exception: *mut PP_Var,
+        ) -> PP_Var,
+    >,
+    pub GetAllPropertyNames: Option<
+        unsafe extern "C" fn(
+            object: PP_Var,
+            property_count: *mut u32,
+            properties: *mut *mut PP_Var,
+            exception: *mut PP_Var,
+        ),
+    >,
+    pub SetProperty: Option<
+        unsafe extern "C" fn(
+            object: PP_Var,
+            name: PP_Var,
+            value: PP_Var,
+            exception: *mut PP_Var,
+        ),
+    >,
+    pub RemoveProperty: Option<
+        unsafe extern "C" fn(
+            object: PP_Var,
+            name: PP_Var,
+            exception: *mut PP_Var,
+        ),
+    >,
+    pub Call: Option<
+        unsafe extern "C" fn(
+            object: PP_Var,
+            method_name: PP_Var,
+            argc: u32,
+            argv: *mut PP_Var,
+            exception: *mut PP_Var,
+        ) -> PP_Var,
+    >,
+    pub Construct: Option<
+        unsafe extern "C" fn(
+            object: PP_Var,
+            argc: u32,
+            argv: *mut PP_Var,
+            exception: *mut PP_Var,
+        ) -> PP_Var,
+    >,
+    pub IsInstanceOf: Option<
+        unsafe extern "C" fn(
+            var: PP_Var,
+            object_class: *const PPP_Class_Deprecated,
+            object_data: *mut *mut c_void,
+        ) -> PP_Bool,
+    >,
+    pub CreateObject: Option<
+        unsafe extern "C" fn(
+            instance: PP_Instance,
+            object_class: *const PPP_Class_Deprecated,
+            object_data: *mut c_void,
+        ) -> PP_Var,
+    >,
+    pub CreateObjectWithModuleDeprecated: Option<
+        unsafe extern "C" fn(
+            module: PP_Module,
+            object_class: *const PPP_Class_Deprecated,
+            object_data: *mut c_void,
+        ) -> PP_Var,
+    >,
+}
+
+unsafe impl Send for PPB_Var_Deprecated_0_3 {}
+unsafe impl Sync for PPB_Var_Deprecated_0_3 {}
+
+// ===========================================================================
+// PPB_NetworkMonitor;1.0
+// ===========================================================================
+
+pub const PPB_NETWORKMONITOR_INTERFACE_1_0: &str = "PPB_NetworkMonitor;1.0\0";
+
+#[repr(C)]
+pub struct PPB_NetworkMonitor_1_0 {
+    pub Create: Option<unsafe extern "C" fn(instance: PP_Instance) -> PP_Resource>,
+    pub UpdateNetworkList: Option<
+        unsafe extern "C" fn(
+            network_monitor: PP_Resource,
+            network_list: *mut PP_Resource,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub IsNetworkMonitor: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+}
+
+unsafe impl Send for PPB_NetworkMonitor_1_0 {}
+unsafe impl Sync for PPB_NetworkMonitor_1_0 {}
+
+// ===========================================================================
+// PPB_BrokerTrusted;0.3 / 0.2
+// ===========================================================================
+
+pub const PPB_BROKER_TRUSTED_INTERFACE_0_3: &str = "PPB_BrokerTrusted;0.3\0";
+pub const PPB_BROKER_TRUSTED_INTERFACE_0_2: &str = "PPB_BrokerTrusted;0.2\0";
+
+#[repr(C)]
+pub struct PPB_BrokerTrusted_0_3 {
+    pub CreateTrusted: Option<unsafe extern "C" fn(instance: PP_Instance) -> PP_Resource>,
+    pub IsBrokerTrusted: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub Connect: Option<
+        unsafe extern "C" fn(
+            broker: PP_Resource,
+            connect_callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub GetHandle: Option<
+        unsafe extern "C" fn(broker: PP_Resource, handle: *mut i32) -> i32,
+    >,
+    pub IsAllowed: Option<unsafe extern "C" fn(broker: PP_Resource) -> PP_Bool>,
+}
+
+unsafe impl Send for PPB_BrokerTrusted_0_3 {}
+unsafe impl Sync for PPB_BrokerTrusted_0_3 {}
+
+/// 0.2 is the same as 0.3 minus IsAllowed.
+#[repr(C)]
+pub struct PPB_BrokerTrusted_0_2 {
+    pub CreateTrusted: Option<unsafe extern "C" fn(instance: PP_Instance) -> PP_Resource>,
+    pub IsBrokerTrusted: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub Connect: Option<
+        unsafe extern "C" fn(
+            broker: PP_Resource,
+            connect_callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub GetHandle: Option<
+        unsafe extern "C" fn(broker: PP_Resource, handle: *mut i32) -> i32,
+    >,
+}
+
+unsafe impl Send for PPB_BrokerTrusted_0_2 {}
+unsafe impl Sync for PPB_BrokerTrusted_0_2 {}
+
+// ===========================================================================
 // PPB_View;1.0, 1.1, 1.2
 // ===========================================================================
 
@@ -915,6 +1139,121 @@ pub struct PPB_KeyboardInputEvent_1_2 {
 
 unsafe impl Send for PPB_KeyboardInputEvent_1_2 {}
 unsafe impl Sync for PPB_KeyboardInputEvent_1_2 {}
+
+// ===========================================================================
+// PPB_IMEInputEvent(Dev);0.2 / 0.1
+// ===========================================================================
+
+pub const PPB_IME_INPUT_EVENT_DEV_INTERFACE_0_1: &str = "PPB_IMEInputEvent(Dev);0.1\0";
+pub const PPB_IME_INPUT_EVENT_DEV_INTERFACE_0_2: &str = "PPB_IMEInputEvent(Dev);0.2\0";
+
+#[repr(C)]
+pub struct PPB_IMEInputEvent_Dev_0_2 {
+    pub Create: Option<
+        unsafe extern "C" fn(
+            instance: PP_Instance,
+            type_: PP_InputEvent_Type,
+            time_stamp: PP_TimeTicks,
+            text: PP_Var,
+            segment_number: u32,
+            segment_offsets: *const u32,
+            target_segment: i32,
+            selection_start: u32,
+            selection_end: u32,
+        ) -> PP_Resource,
+    >,
+    pub IsIMEInputEvent: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub GetText: Option<unsafe extern "C" fn(ime_event: PP_Resource) -> PP_Var>,
+    pub GetSegmentNumber: Option<unsafe extern "C" fn(ime_event: PP_Resource) -> u32>,
+    pub GetSegmentOffset:
+        Option<unsafe extern "C" fn(ime_event: PP_Resource, index: u32) -> u32>,
+    pub GetTargetSegment: Option<unsafe extern "C" fn(ime_event: PP_Resource) -> i32>,
+    pub GetSelection: Option<
+        unsafe extern "C" fn(ime_event: PP_Resource, start: *mut u32, end: *mut u32),
+    >,
+}
+
+unsafe impl Send for PPB_IMEInputEvent_Dev_0_2 {}
+unsafe impl Sync for PPB_IMEInputEvent_Dev_0_2 {}
+
+#[repr(C)]
+pub struct PPB_IMEInputEvent_Dev_0_1 {
+    pub IsIMEInputEvent: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub GetText: Option<unsafe extern "C" fn(ime_event: PP_Resource) -> PP_Var>,
+    pub GetSegmentNumber: Option<unsafe extern "C" fn(ime_event: PP_Resource) -> u32>,
+    pub GetSegmentOffset:
+        Option<unsafe extern "C" fn(ime_event: PP_Resource, index: u32) -> u32>,
+    pub GetTargetSegment: Option<unsafe extern "C" fn(ime_event: PP_Resource) -> i32>,
+    pub GetSelection: Option<
+        unsafe extern "C" fn(ime_event: PP_Resource, start: *mut u32, end: *mut u32),
+    >,
+}
+
+unsafe impl Send for PPB_IMEInputEvent_Dev_0_1 {}
+unsafe impl Sync for PPB_IMEInputEvent_Dev_0_1 {}
+
+// ===========================================================================
+// PPB_TextInput(Dev);0.2 / 0.1
+// ===========================================================================
+
+/// Text input type enum (Dev variant).
+pub type PP_TextInput_Type_Dev = i32;
+pub const PP_TEXTINPUT_TYPE_DEV_NONE: PP_TextInput_Type_Dev = 0;
+pub const PP_TEXTINPUT_TYPE_DEV_TEXT: PP_TextInput_Type_Dev = 1;
+pub const PP_TEXTINPUT_TYPE_DEV_PASSWORD: PP_TextInput_Type_Dev = 2;
+pub const PP_TEXTINPUT_TYPE_DEV_SEARCH: PP_TextInput_Type_Dev = 3;
+pub const PP_TEXTINPUT_TYPE_DEV_EMAIL: PP_TextInput_Type_Dev = 4;
+pub const PP_TEXTINPUT_TYPE_DEV_NUMBER: PP_TextInput_Type_Dev = 5;
+pub const PP_TEXTINPUT_TYPE_DEV_TELEPHONE: PP_TextInput_Type_Dev = 6;
+pub const PP_TEXTINPUT_TYPE_DEV_URL: PP_TextInput_Type_Dev = 7;
+
+pub const PPB_TEXTINPUT_DEV_INTERFACE_0_1: &str = "PPB_TextInput(Dev);0.1\0";
+pub const PPB_TEXTINPUT_DEV_INTERFACE_0_2: &str = "PPB_TextInput(Dev);0.2\0";
+
+#[repr(C)]
+pub struct PPB_TextInput_Dev_0_2 {
+    pub SetTextInputType: Option<
+        unsafe extern "C" fn(instance: PP_Instance, type_: PP_TextInput_Type_Dev),
+    >,
+    pub UpdateCaretPosition: Option<
+        unsafe extern "C" fn(
+            instance: PP_Instance,
+            caret: *const PP_Rect,
+            bounding_box: *const PP_Rect,
+        ),
+    >,
+    pub CancelCompositionText: Option<unsafe extern "C" fn(instance: PP_Instance)>,
+    pub UpdateSurroundingText: Option<
+        unsafe extern "C" fn(
+            instance: PP_Instance,
+            text: *const c_char,
+            caret: u32,
+            anchor: u32,
+        ),
+    >,
+    pub SelectionChanged: Option<unsafe extern "C" fn(instance: PP_Instance)>,
+}
+
+unsafe impl Send for PPB_TextInput_Dev_0_2 {}
+unsafe impl Sync for PPB_TextInput_Dev_0_2 {}
+
+#[repr(C)]
+pub struct PPB_TextInput_Dev_0_1 {
+    pub SetTextInputType: Option<
+        unsafe extern "C" fn(instance: PP_Instance, type_: PP_TextInput_Type_Dev),
+    >,
+    pub UpdateCaretPosition: Option<
+        unsafe extern "C" fn(
+            instance: PP_Instance,
+            caret: *const PP_Rect,
+            bounding_box: *const PP_Rect,
+        ),
+    >,
+    pub CancelCompositionText: Option<unsafe extern "C" fn(instance: PP_Instance)>,
+}
+
+unsafe impl Send for PPB_TextInput_Dev_0_1 {}
+unsafe impl Sync for PPB_TextInput_Dev_0_1 {}
 
 // ===========================================================================
 // PPB_URLLoader;1.0
@@ -1813,6 +2152,81 @@ unsafe impl Send for PPB_AudioInput_Dev_0_4 {}
 unsafe impl Sync for PPB_AudioInput_Dev_0_4 {}
 
 // ===========================================================================
+// PPB_AudioOutput(Dev);0.1
+// ===========================================================================
+
+pub const PPB_AUDIO_OUTPUT_DEV_INTERFACE_0_1: &str = "PPB_AudioOutput(Dev);0.1\0";
+
+/// Audio output callback — the plugin fills the sample buffer.
+pub type PPB_AudioOutput_Callback = Option<
+    unsafe extern "C" fn(
+        sample_buffer: *mut c_void,
+        buffer_size_in_bytes: u32,
+        latency: PP_TimeDelta,
+        user_data: *mut c_void,
+    ),
+>;
+
+#[repr(C)]
+pub struct PPB_AudioOutput_Dev_0_1 {
+    pub Create: Option<unsafe extern "C" fn(instance: PP_Instance) -> PP_Resource>,
+    pub IsAudioOutput: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub EnumerateDevices: Option<
+        unsafe extern "C" fn(
+            audio_output: PP_Resource,
+            output: PP_ArrayOutput,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub MonitorDeviceChange: Option<
+        unsafe extern "C" fn(
+            audio_output: PP_Resource,
+            callback: PP_MonitorDeviceChangeCallback,
+            user_data: *mut c_void,
+        ) -> i32,
+    >,
+    pub Open: Option<
+        unsafe extern "C" fn(
+            audio_output: PP_Resource,
+            device_ref: PP_Resource,
+            config: PP_Resource,
+            audio_output_callback: PPB_AudioOutput_Callback,
+            user_data: *mut c_void,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub GetCurrentConfig: Option<unsafe extern "C" fn(audio_output: PP_Resource) -> PP_Resource>,
+    pub StartPlayback: Option<unsafe extern "C" fn(audio_output: PP_Resource) -> PP_Bool>,
+    pub StopPlayback: Option<unsafe extern "C" fn(audio_output: PP_Resource) -> PP_Bool>,
+    pub Close: Option<unsafe extern "C" fn(audio_output: PP_Resource)>,
+}
+
+unsafe impl Send for PPB_AudioOutput_Dev_0_1 {}
+unsafe impl Sync for PPB_AudioOutput_Dev_0_1 {}
+
+// ===========================================================================
+// PPB_Instance_Private;0.1
+// ===========================================================================
+
+pub const PPB_INSTANCE_PRIVATE_INTERFACE_0_1: &str = "PPB_Instance_Private;0.1\0";
+
+#[repr(C)]
+pub struct PPB_Instance_Private_0_1 {
+    pub GetWindowObject: Option<unsafe extern "C" fn(instance: PP_Instance) -> PP_Var>,
+    pub GetOwnerElementObject: Option<unsafe extern "C" fn(instance: PP_Instance) -> PP_Var>,
+    pub ExecuteScript: Option<
+        unsafe extern "C" fn(
+            instance: PP_Instance,
+            script: PP_Var,
+            exception: *mut PP_Var,
+        ) -> PP_Var,
+    >,
+}
+
+unsafe impl Send for PPB_Instance_Private_0_1 {}
+unsafe impl Sync for PPB_Instance_Private_0_1 {}
+
+// ===========================================================================
 // PPB_BrowserFont_Trusted;1.0
 // ===========================================================================
 
@@ -2062,6 +2476,681 @@ pub struct PPB_CursorControl_Dev_0_4 {
 
 unsafe impl Send for PPB_CursorControl_Dev_0_4 {}
 unsafe impl Sync for PPB_CursorControl_Dev_0_4 {}
+
+// ===========================================================================
+// PPB_PDF — PDF-specific private interface
+// ===========================================================================
+
+pub const PPB_PDF_INTERFACE: &str = "PPB_PDF;1\0";
+
+pub type PP_PDFFeature = u32;
+pub const PP_PDFFEATURE_HIDPI: PP_PDFFeature = 0;
+pub const PP_PDFFEATURE_PRINTING: PP_PDFFeature = 1;
+
+pub type PP_PrivateFontCharset = u32;
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct PP_PrivateFontFileDescription {
+    pub face: *const std::ffi::c_char,
+    pub weight: u32,
+    pub italic: bool,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct PP_PrivateFindResult {
+    pub start_index: i32,
+    pub length: i32,
+}
+
+#[repr(C)]
+pub struct PPB_PDF {
+    pub GetFontFileWithFallback: Option<
+        unsafe extern "C" fn(
+            instance: PP_Instance,
+            description: *const PP_BrowserFont_Trusted_Description,
+            charset: PP_PrivateFontCharset,
+        ) -> PP_Resource,
+    >,
+    pub GetFontTableForPrivateFontFile: Option<
+        unsafe extern "C" fn(
+            font_file: PP_Resource,
+            table: u32,
+            output: *mut c_void,
+            output_length: *mut u32,
+        ) -> PP_Bool,
+    >,
+    pub SearchString: Option<
+        unsafe extern "C" fn(
+            instance: PP_Instance,
+            string: *const u16,
+            term: *const u16,
+            case_sensitive: PP_Bool,
+            results: *mut *mut PP_PrivateFindResult,
+            count: *mut i32,
+        ),
+    >,
+    pub DidStartLoading: Option<unsafe extern "C" fn(instance: PP_Instance)>,
+    pub DidStopLoading: Option<unsafe extern "C" fn(instance: PP_Instance)>,
+    pub SetContentRestriction:
+        Option<unsafe extern "C" fn(instance: PP_Instance, restrictions: i32)>,
+    pub UserMetricsRecordAction:
+        Option<unsafe extern "C" fn(instance: PP_Instance, action: PP_Var)>,
+    pub HasUnsupportedFeature: Option<unsafe extern "C" fn(instance: PP_Instance)>,
+    pub SaveAs: Option<unsafe extern "C" fn(instance: PP_Instance)>,
+    pub Print: Option<unsafe extern "C" fn(instance: PP_Instance)>,
+    pub IsFeatureEnabled: Option<
+        unsafe extern "C" fn(instance: PP_Instance, feature: PP_PDFFeature) -> PP_Bool,
+    >,
+    pub SetSelectedText: Option<
+        unsafe extern "C" fn(instance: PP_Instance, selected_text: *const std::ffi::c_char),
+    >,
+    pub SetLinkUnderCursor:
+        Option<unsafe extern "C" fn(instance: PP_Instance, url: *const std::ffi::c_char)>,
+    pub GetV8ExternalSnapshotData: Option<
+        unsafe extern "C" fn(
+            instance: PP_Instance,
+            natives_data_out: *mut *const std::ffi::c_char,
+            natives_size_out: *mut i32,
+            snapshot_data_out: *mut *const std::ffi::c_char,
+            snapshot_size_out: *mut i32,
+        ),
+    >,
+}
+
+unsafe impl Send for PPB_PDF {}
+unsafe impl Sync for PPB_PDF {}
+
+// ===========================================================================
+// PPB_VideoCapture(Dev);0.3 — video capture device interface
+// ===========================================================================
+
+pub const PPB_VIDEOCAPTURE_DEV_INTERFACE_0_3: &str = "PPB_VideoCapture(Dev);0.3\0";
+
+/// Video capture device info (resolution + frame rate).
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct PP_VideoCaptureDeviceInfo_Dev {
+    pub width: u32,
+    pub height: u32,
+    pub frames_per_second: u32,
+}
+
+#[repr(C)]
+pub struct PPB_VideoCapture_Dev_0_3 {
+    pub Create: Option<unsafe extern "C" fn(instance: PP_Instance) -> PP_Resource>,
+    pub IsVideoCapture: Option<unsafe extern "C" fn(video_capture: PP_Resource) -> PP_Bool>,
+    pub EnumerateDevices: Option<
+        unsafe extern "C" fn(
+            video_capture: PP_Resource,
+            output: PP_ArrayOutput,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub MonitorDeviceChange: Option<
+        unsafe extern "C" fn(
+            video_capture: PP_Resource,
+            callback: PP_MonitorDeviceChangeCallback,
+            user_data: *mut c_void,
+        ) -> i32,
+    >,
+    pub Open: Option<
+        unsafe extern "C" fn(
+            video_capture: PP_Resource,
+            device_ref: PP_Resource,
+            requested_info: *const PP_VideoCaptureDeviceInfo_Dev,
+            buffer_count: u32,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub StartCapture: Option<unsafe extern "C" fn(video_capture: PP_Resource) -> i32>,
+    pub ReuseBuffer:
+        Option<unsafe extern "C" fn(video_capture: PP_Resource, buffer: u32) -> i32>,
+    pub StopCapture: Option<unsafe extern "C" fn(video_capture: PP_Resource) -> i32>,
+    pub Close: Option<unsafe extern "C" fn(video_capture: PP_Resource)>,
+}
+
+unsafe impl Send for PPB_VideoCapture_Dev_0_3 {}
+unsafe impl Sync for PPB_VideoCapture_Dev_0_3 {}
+
+// ===========================================================================
+// PP_NetAddress_Private — opaque network address structure
+// ===========================================================================
+
+/// Opaque network address — plugins must never access members directly.
+/// The `data` field stores a `sockaddr_in` or `sockaddr_in6` in practice.
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct PP_NetAddress_Private {
+    pub size: u32,
+    pub data: [u8; 128],
+}
+
+impl Default for PP_NetAddress_Private {
+    fn default() -> Self {
+        Self {
+            size: 0,
+            data: [0u8; 128],
+        }
+    }
+}
+
+impl std::fmt::Debug for PP_NetAddress_Private {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PP_NetAddress_Private")
+            .field("size", &self.size)
+            .finish()
+    }
+}
+
+// Compile-time size check: must be 132 bytes (4 + 128)
+const _: () = assert!(std::mem::size_of::<PP_NetAddress_Private>() == 132);
+
+/// Network address family for PP_NetAddress_Private.
+pub type PP_NetAddressFamily_Private = i32;
+pub const PP_NETADDRESSFAMILY_PRIVATE_UNSPECIFIED: PP_NetAddressFamily_Private = 0;
+pub const PP_NETADDRESSFAMILY_PRIVATE_IPV4: PP_NetAddressFamily_Private = 1;
+pub const PP_NETADDRESSFAMILY_PRIVATE_IPV6: PP_NetAddressFamily_Private = 2;
+
+// ===========================================================================
+// PPB_NetAddress_Private;1.1 / 1.0 / 0.1
+// ===========================================================================
+
+pub const PPB_NETADDRESS_PRIVATE_INTERFACE_0_1: &str = "PPB_NetAddress_Private;0.1\0";
+pub const PPB_NETADDRESS_PRIVATE_INTERFACE_1_0: &str = "PPB_NetAddress_Private;1.0\0";
+pub const PPB_NETADDRESS_PRIVATE_INTERFACE_1_1: &str = "PPB_NetAddress_Private;1.1\0";
+
+#[repr(C)]
+pub struct PPB_NetAddress_Private_1_1 {
+    pub AreEqual: Option<
+        unsafe extern "C" fn(
+            addr1: *const PP_NetAddress_Private,
+            addr2: *const PP_NetAddress_Private,
+        ) -> PP_Bool,
+    >,
+    pub AreHostsEqual: Option<
+        unsafe extern "C" fn(
+            addr1: *const PP_NetAddress_Private,
+            addr2: *const PP_NetAddress_Private,
+        ) -> PP_Bool,
+    >,
+    pub Describe: Option<
+        unsafe extern "C" fn(
+            module: PP_Module,
+            addr: *const PP_NetAddress_Private,
+            include_port: PP_Bool,
+        ) -> PP_Var,
+    >,
+    pub ReplacePort: Option<
+        unsafe extern "C" fn(
+            src_addr: *const PP_NetAddress_Private,
+            port: u16,
+            addr_out: *mut PP_NetAddress_Private,
+        ) -> PP_Bool,
+    >,
+    pub GetAnyAddress: Option<
+        unsafe extern "C" fn(is_ipv6: PP_Bool, addr: *mut PP_NetAddress_Private),
+    >,
+    pub GetFamily: Option<
+        unsafe extern "C" fn(
+            addr: *const PP_NetAddress_Private,
+        ) -> PP_NetAddressFamily_Private,
+    >,
+    pub GetPort: Option<
+        unsafe extern "C" fn(addr: *const PP_NetAddress_Private) -> u16,
+    >,
+    pub GetAddress: Option<
+        unsafe extern "C" fn(
+            addr: *const PP_NetAddress_Private,
+            address: *mut c_void,
+            address_size: u16,
+        ) -> PP_Bool,
+    >,
+    pub GetScopeID: Option<
+        unsafe extern "C" fn(addr: *const PP_NetAddress_Private) -> u32,
+    >,
+    pub CreateFromIPv4Address: Option<
+        unsafe extern "C" fn(
+            ip: *const u8,
+            port: u16,
+            addr_out: *mut PP_NetAddress_Private,
+        ),
+    >,
+    pub CreateFromIPv6Address: Option<
+        unsafe extern "C" fn(
+            ip: *const u8,
+            scope_id: u32,
+            port: u16,
+            addr_out: *mut PP_NetAddress_Private,
+        ),
+    >,
+}
+
+unsafe impl Send for PPB_NetAddress_Private_1_1 {}
+unsafe impl Sync for PPB_NetAddress_Private_1_1 {}
+
+#[repr(C)]
+pub struct PPB_NetAddress_Private_1_0 {
+    pub AreEqual: Option<
+        unsafe extern "C" fn(
+            addr1: *const PP_NetAddress_Private,
+            addr2: *const PP_NetAddress_Private,
+        ) -> PP_Bool,
+    >,
+    pub AreHostsEqual: Option<
+        unsafe extern "C" fn(
+            addr1: *const PP_NetAddress_Private,
+            addr2: *const PP_NetAddress_Private,
+        ) -> PP_Bool,
+    >,
+    pub Describe: Option<
+        unsafe extern "C" fn(
+            module: PP_Module,
+            addr: *const PP_NetAddress_Private,
+            include_port: PP_Bool,
+        ) -> PP_Var,
+    >,
+    pub ReplacePort: Option<
+        unsafe extern "C" fn(
+            src_addr: *const PP_NetAddress_Private,
+            port: u16,
+            addr_out: *mut PP_NetAddress_Private,
+        ) -> PP_Bool,
+    >,
+    pub GetAnyAddress: Option<
+        unsafe extern "C" fn(is_ipv6: PP_Bool, addr: *mut PP_NetAddress_Private),
+    >,
+    pub GetFamily: Option<
+        unsafe extern "C" fn(
+            addr: *const PP_NetAddress_Private,
+        ) -> PP_NetAddressFamily_Private,
+    >,
+    pub GetPort: Option<
+        unsafe extern "C" fn(addr: *const PP_NetAddress_Private) -> u16,
+    >,
+    pub GetAddress: Option<
+        unsafe extern "C" fn(
+            addr: *const PP_NetAddress_Private,
+            address: *mut c_void,
+            address_size: u16,
+        ) -> PP_Bool,
+    >,
+}
+
+unsafe impl Send for PPB_NetAddress_Private_1_0 {}
+unsafe impl Sync for PPB_NetAddress_Private_1_0 {}
+
+#[repr(C)]
+pub struct PPB_NetAddress_Private_0_1 {
+    pub AreEqual: Option<
+        unsafe extern "C" fn(
+            addr1: *const PP_NetAddress_Private,
+            addr2: *const PP_NetAddress_Private,
+        ) -> PP_Bool,
+    >,
+    pub AreHostsEqual: Option<
+        unsafe extern "C" fn(
+            addr1: *const PP_NetAddress_Private,
+            addr2: *const PP_NetAddress_Private,
+        ) -> PP_Bool,
+    >,
+    pub Describe: Option<
+        unsafe extern "C" fn(
+            module: PP_Module,
+            addr: *const PP_NetAddress_Private,
+            include_port: PP_Bool,
+        ) -> PP_Var,
+    >,
+    pub ReplacePort: Option<
+        unsafe extern "C" fn(
+            src_addr: *const PP_NetAddress_Private,
+            port: u16,
+            addr_out: *mut PP_NetAddress_Private,
+        ) -> PP_Bool,
+    >,
+    pub GetAnyAddress: Option<
+        unsafe extern "C" fn(is_ipv6: PP_Bool, addr: *mut PP_NetAddress_Private),
+    >,
+}
+
+unsafe impl Send for PPB_NetAddress_Private_0_1 {}
+unsafe impl Sync for PPB_NetAddress_Private_0_1 {}
+
+// ===========================================================================
+// PPB_TCPSocket_Private;0.5 / 0.4 / 0.3
+// ===========================================================================
+
+/// TCP socket option identifiers.
+pub type PP_TCPSocketOption_Private = i32;
+pub const PP_TCPSOCKETOPTION_PRIVATE_INVALID: PP_TCPSocketOption_Private = 0;
+pub const PP_TCPSOCKETOPTION_PRIVATE_NO_DELAY: PP_TCPSocketOption_Private = 1;
+
+pub const PPB_TCPSOCKET_PRIVATE_INTERFACE_0_3: &str = "PPB_TCPSocket_Private;0.3\0";
+pub const PPB_TCPSOCKET_PRIVATE_INTERFACE_0_4: &str = "PPB_TCPSocket_Private;0.4\0";
+pub const PPB_TCPSOCKET_PRIVATE_INTERFACE_0_5: &str = "PPB_TCPSocket_Private;0.5\0";
+
+#[repr(C)]
+pub struct PPB_TCPSocket_Private_0_5 {
+    pub Create: Option<unsafe extern "C" fn(instance: PP_Instance) -> PP_Resource>,
+    pub IsTCPSocket: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub Connect: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            host: *const c_char,
+            port: u16,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub ConnectWithNetAddress: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            addr: *const PP_NetAddress_Private,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub GetLocalAddress: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            local_addr: *mut PP_NetAddress_Private,
+        ) -> PP_Bool,
+    >,
+    pub GetRemoteAddress: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            remote_addr: *mut PP_NetAddress_Private,
+        ) -> PP_Bool,
+    >,
+    pub SSLHandshake: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            server_name: *const c_char,
+            server_port: u16,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub GetServerCertificate:
+        Option<unsafe extern "C" fn(tcp_socket: PP_Resource) -> PP_Resource>,
+    pub AddChainBuildingCertificate: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            certificate: PP_Resource,
+            is_trusted: PP_Bool,
+        ) -> PP_Bool,
+    >,
+    pub Read: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            buffer: *mut c_char,
+            bytes_to_read: i32,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub Write: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            buffer: *const c_char,
+            bytes_to_write: i32,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub Disconnect: Option<unsafe extern "C" fn(tcp_socket: PP_Resource)>,
+    pub SetOption: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            name: PP_TCPSocketOption_Private,
+            value: PP_Var,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+}
+
+unsafe impl Send for PPB_TCPSocket_Private_0_5 {}
+unsafe impl Sync for PPB_TCPSocket_Private_0_5 {}
+
+#[repr(C)]
+pub struct PPB_TCPSocket_Private_0_4 {
+    pub Create: Option<unsafe extern "C" fn(instance: PP_Instance) -> PP_Resource>,
+    pub IsTCPSocket: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub Connect: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            host: *const c_char,
+            port: u16,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub ConnectWithNetAddress: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            addr: *const PP_NetAddress_Private,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub GetLocalAddress: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            local_addr: *mut PP_NetAddress_Private,
+        ) -> PP_Bool,
+    >,
+    pub GetRemoteAddress: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            remote_addr: *mut PP_NetAddress_Private,
+        ) -> PP_Bool,
+    >,
+    pub SSLHandshake: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            server_name: *const c_char,
+            server_port: u16,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub GetServerCertificate:
+        Option<unsafe extern "C" fn(tcp_socket: PP_Resource) -> PP_Resource>,
+    pub AddChainBuildingCertificate: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            certificate: PP_Resource,
+            is_trusted: PP_Bool,
+        ) -> PP_Bool,
+    >,
+    pub Read: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            buffer: *mut c_char,
+            bytes_to_read: i32,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub Write: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            buffer: *const c_char,
+            bytes_to_write: i32,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub Disconnect: Option<unsafe extern "C" fn(tcp_socket: PP_Resource)>,
+}
+
+unsafe impl Send for PPB_TCPSocket_Private_0_4 {}
+unsafe impl Sync for PPB_TCPSocket_Private_0_4 {}
+
+#[repr(C)]
+pub struct PPB_TCPSocket_Private_0_3 {
+    pub Create: Option<unsafe extern "C" fn(instance: PP_Instance) -> PP_Resource>,
+    pub IsTCPSocket: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub Connect: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            host: *const c_char,
+            port: u16,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub ConnectWithNetAddress: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            addr: *const PP_NetAddress_Private,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub GetLocalAddress: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            local_addr: *mut PP_NetAddress_Private,
+        ) -> PP_Bool,
+    >,
+    pub GetRemoteAddress: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            remote_addr: *mut PP_NetAddress_Private,
+        ) -> PP_Bool,
+    >,
+    pub SSLHandshake: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            server_name: *const c_char,
+            server_port: u16,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub Read: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            buffer: *mut c_char,
+            bytes_to_read: i32,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub Write: Option<
+        unsafe extern "C" fn(
+            tcp_socket: PP_Resource,
+            buffer: *const c_char,
+            bytes_to_write: i32,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub Disconnect: Option<unsafe extern "C" fn(tcp_socket: PP_Resource)>,
+}
+
+unsafe impl Send for PPB_TCPSocket_Private_0_3 {}
+unsafe impl Sync for PPB_TCPSocket_Private_0_3 {}
+
+// ===========================================================================
+// PPB_UDPSocket_Private;0.4 / 0.3 / 0.2
+// ===========================================================================
+
+/// UDP socket feature identifiers.
+pub type PP_UDPSocketFeature_Private = i32;
+pub const PP_UDPSOCKETFEATURE_PRIVATE_ADDRESS_REUSE: PP_UDPSocketFeature_Private = 0;
+pub const PP_UDPSOCKETFEATURE_PRIVATE_BROADCAST: PP_UDPSocketFeature_Private = 1;
+pub const PP_UDPSOCKETFEATURE_PRIVATE_COUNT: PP_UDPSocketFeature_Private = 2;
+
+pub const PPB_UDPSOCKET_PRIVATE_INTERFACE_0_2: &str = "PPB_UDPSocket_Private;0.2\0";
+pub const PPB_UDPSOCKET_PRIVATE_INTERFACE_0_3: &str = "PPB_UDPSocket_Private;0.3\0";
+pub const PPB_UDPSOCKET_PRIVATE_INTERFACE_0_4: &str = "PPB_UDPSocket_Private;0.4\0";
+
+#[repr(C)]
+pub struct PPB_UDPSocket_Private_0_4 {
+    pub Create: Option<unsafe extern "C" fn(instance_id: PP_Instance) -> PP_Resource>,
+    pub IsUDPSocket: Option<unsafe extern "C" fn(resource_id: PP_Resource) -> PP_Bool>,
+    pub SetSocketFeature: Option<
+        unsafe extern "C" fn(
+            udp_socket: PP_Resource,
+            name: PP_UDPSocketFeature_Private,
+            value: PP_Var,
+        ) -> i32,
+    >,
+    pub Bind: Option<
+        unsafe extern "C" fn(
+            udp_socket: PP_Resource,
+            addr: *const PP_NetAddress_Private,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub GetBoundAddress: Option<
+        unsafe extern "C" fn(
+            udp_socket: PP_Resource,
+            addr: *mut PP_NetAddress_Private,
+        ) -> PP_Bool,
+    >,
+    pub RecvFrom: Option<
+        unsafe extern "C" fn(
+            udp_socket: PP_Resource,
+            buffer: *mut c_char,
+            num_bytes: i32,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub GetRecvFromAddress: Option<
+        unsafe extern "C" fn(
+            udp_socket: PP_Resource,
+            addr: *mut PP_NetAddress_Private,
+        ) -> PP_Bool,
+    >,
+    pub SendTo: Option<
+        unsafe extern "C" fn(
+            udp_socket: PP_Resource,
+            buffer: *const c_char,
+            num_bytes: i32,
+            addr: *const PP_NetAddress_Private,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub Close: Option<unsafe extern "C" fn(udp_socket: PP_Resource)>,
+}
+
+unsafe impl Send for PPB_UDPSocket_Private_0_4 {}
+unsafe impl Sync for PPB_UDPSocket_Private_0_4 {}
+
+#[repr(C)]
+pub struct PPB_UDPSocket_Private_0_3 {
+    pub Create: Option<unsafe extern "C" fn(instance_id: PP_Instance) -> PP_Resource>,
+    pub IsUDPSocket: Option<unsafe extern "C" fn(resource_id: PP_Resource) -> PP_Bool>,
+    pub Bind: Option<
+        unsafe extern "C" fn(
+            udp_socket: PP_Resource,
+            addr: *const PP_NetAddress_Private,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub GetBoundAddress: Option<
+        unsafe extern "C" fn(
+            udp_socket: PP_Resource,
+            addr: *mut PP_NetAddress_Private,
+        ) -> PP_Bool,
+    >,
+    pub RecvFrom: Option<
+        unsafe extern "C" fn(
+            udp_socket: PP_Resource,
+            buffer: *mut c_char,
+            num_bytes: i32,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub GetRecvFromAddress: Option<
+        unsafe extern "C" fn(
+            udp_socket: PP_Resource,
+            addr: *mut PP_NetAddress_Private,
+        ) -> PP_Bool,
+    >,
+    pub SendTo: Option<
+        unsafe extern "C" fn(
+            udp_socket: PP_Resource,
+            buffer: *const c_char,
+            num_bytes: i32,
+            addr: *const PP_NetAddress_Private,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub Close: Option<unsafe extern "C" fn(udp_socket: PP_Resource)>,
+}
+
+unsafe impl Send for PPB_UDPSocket_Private_0_3 {}
+unsafe impl Sync for PPB_UDPSocket_Private_0_3 {}
 
 // ===========================================================================
 // Compile-time size assertions (match C static assertions)

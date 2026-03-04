@@ -171,9 +171,10 @@ impl FlashPlayer {
 
         let argn = [src_key.as_ptr(), type_key.as_ptr()];
         let argv = [src_val.as_ptr(), type_val.as_ptr()];
+        let argc = argn.len() as u32;
 
         let result = unsafe {
-            did_create(instance_id, 2, argn.as_ptr(), argv.as_ptr())
+            did_create(instance_id, argc, argn.as_ptr(), argv.as_ptr())
         };
         tracing::info!("open_swf: DidCreate returned {}", result);
 
@@ -483,16 +484,48 @@ fn create_document_url_loader(
     if let Some(cb) = host.host_callbacks.lock().as_ref() {
         let body = cb.on_url_load(url);
         let body_len = body.len();
+
+        println!("Body: {:?}", body);
+
+        // 3a. Create a URLResponseInfo eagerly with proper Content-Type.
+        //     Flash calls GetResponseInfo() during HandleDocumentLoad and
+        //     checks the Content-Type header to validate the response.
+        //     Without this, the lazily-created response info would have
+        //     empty headers, causing Flash to reject the document load.
+        use ppapi_host::interfaces::url_response_info::URLResponseInfoResource;
+        let response_info = URLResponseInfoResource {
+            url: url.to_string(),
+            status_code: 200,
+            status_line: "OK".to_string(),
+            headers: format!(
+                "Content-Type: application/x-shockwave-flash\nContent-Length: {}",
+                body_len,
+            ),
+        };
+        let response_info_id = host.resources.insert(instance_id, Box::new(response_info));
+
         host.resources.with_downcast_mut::<URLLoaderResource, _>(loader_id, |l| {
             l.url = Some(url.to_string());
             l.response_body = body;
             l.read_offset = 0;
             l.open_complete = true;
+            l.instance = instance_id;
             l.finished_loading = true;
+            l.response_info = Some(response_info_id);
+            tracing::debug!(
+                "URLLoader downcast: {:?}", l
+            );
+        });
+        // Print the URLLoaderResource state to verify
+        host.resources.with_downcast::<URLLoaderResource, _>(loader_id, |l| {
+            tracing::debug!(
+                "URLLoader state after open: {:?}",
+                l
+            );
         });
         tracing::debug!(
-            "Document URLLoader open: loader={} loaded {} bytes from {:?}",
-            loader_id, body_len, url
+            "Document URLLoader open: loader={} loaded {} bytes, response_info={}",
+            loader_id, body_len, response_info_id
         );
     }
 

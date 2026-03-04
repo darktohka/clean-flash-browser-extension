@@ -7,21 +7,100 @@
 //! move interfaces out of this file into dedicated modules.
 
 use crate::interface_registry::InterfaceRegistry;
+use parking_lot::Mutex;
+use std::collections::HashMap;
 use std::ffi::c_void;
+use std::sync::OnceLock;
 
 // ---------------------------------------------------------------------------
-// Generic stub function — returns 0 which maps to:
-//   PP_FALSE, null pointer, PP_Resource(0), PP_ERROR_FAILED, etc.
-// On x86_64 SysV ABI, extra arguments are harmlessly ignored.
+// Named-stub machinery
+//
+// Each vtable slot gets a DISTINCT function address by instantiating
+// `typed_stub::<N>` with a unique const generic N.  At registration time,
+// `register_named_stubs` maps each function pointer → (interface_name, slot)
+// so that any call to the stub can log exactly which interface and slot was
+// invoked.
 // ---------------------------------------------------------------------------
 
-unsafe extern "C" fn stub() -> usize {
-    tracing::trace!("STUB function called!");
+/// Global registry: function-pointer value → (interface_name, slot_index).
+static STUB_REGISTRY: OnceLock<Mutex<HashMap<usize, (&'static str, usize)>>> = OnceLock::new();
+
+fn stub_registry() -> &'static Mutex<HashMap<usize, (&'static str, usize)>> {
+    STUB_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Called by every typed_stub instantiation.
+fn stub_called(fn_ptr: usize) {
+    let reg = stub_registry().lock();
+    if let Some((iface, slot)) = reg.get(&fn_ptr) {
+        tracing::warn!("STUB called: {}[{}] (unimplemented)", iface, slot);
+    } else {
+        tracing::warn!("STUB called: fn_ptr=0x{:x} (unregistered)", fn_ptr);
+    }
+}
+
+/// Slot-N stub: each monomorphisation is a distinct symbol with a distinct
+/// address, so Flash's vtable lookup can be traced back to interface + slot.
+unsafe extern "C" fn typed_stub<const N: usize>() -> usize {
+    stub_called(typed_stub::<N> as *const () as usize);
     0
 }
 
-/// A stub function pointer, as a const for array init.
-const STUB_FN: unsafe extern "C" fn() -> usize = stub;
+/// Populate the registry for a vtable array.
+/// Call once per interface name after declaring the vtable static.
+fn register_named_stubs(iface: &'static str, ptrs: &[unsafe extern "C" fn() -> usize]) {
+    let mut reg = stub_registry().lock();
+    for (slot, &ptr) in ptrs.iter().enumerate() {
+        reg.insert(ptr as *const () as usize, (iface, slot));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// stub_array!(N) — builds a const array of N distinct typed_stub<i> pointers.
+// Add arms here as needed (max slot count across all vtables below).
+// ---------------------------------------------------------------------------
+macro_rules! stub_array {
+    (1)  => { [typed_stub::<0>] };
+    (2)  => { [typed_stub::<0>, typed_stub::<1>] };
+    (3)  => { [typed_stub::<0>, typed_stub::<1>, typed_stub::<2>] };
+    (4)  => { [typed_stub::<0>, typed_stub::<1>, typed_stub::<2>, typed_stub::<3>] };
+    (5)  => { [typed_stub::<0>, typed_stub::<1>, typed_stub::<2>, typed_stub::<3>,
+               typed_stub::<4>] };
+    (6)  => { [typed_stub::<0>, typed_stub::<1>, typed_stub::<2>, typed_stub::<3>,
+               typed_stub::<4>, typed_stub::<5>] };
+    (7)  => { [typed_stub::<0>, typed_stub::<1>, typed_stub::<2>, typed_stub::<3>,
+               typed_stub::<4>, typed_stub::<5>, typed_stub::<6>] };
+    (8)  => { [typed_stub::<0>, typed_stub::<1>, typed_stub::<2>, typed_stub::<3>,
+               typed_stub::<4>, typed_stub::<5>, typed_stub::<6>, typed_stub::<7>] };
+    (9)  => { [typed_stub::<0>, typed_stub::<1>, typed_stub::<2>, typed_stub::<3>,
+               typed_stub::<4>, typed_stub::<5>, typed_stub::<6>, typed_stub::<7>,
+               typed_stub::<8>] };
+    (10) => { [typed_stub::<0>, typed_stub::<1>, typed_stub::<2>, typed_stub::<3>,
+               typed_stub::<4>, typed_stub::<5>, typed_stub::<6>, typed_stub::<7>,
+               typed_stub::<8>, typed_stub::<9>] };
+    (11) => { [typed_stub::<0>, typed_stub::<1>, typed_stub::<2>, typed_stub::<3>,
+               typed_stub::<4>, typed_stub::<5>, typed_stub::<6>, typed_stub::<7>,
+               typed_stub::<8>, typed_stub::<9>, typed_stub::<10>] };
+    (12) => { [typed_stub::<0>, typed_stub::<1>, typed_stub::<2>, typed_stub::<3>,
+               typed_stub::<4>, typed_stub::<5>, typed_stub::<6>, typed_stub::<7>,
+               typed_stub::<8>, typed_stub::<9>, typed_stub::<10>, typed_stub::<11>] };
+    (13) => { [typed_stub::<0>, typed_stub::<1>, typed_stub::<2>, typed_stub::<3>,
+               typed_stub::<4>, typed_stub::<5>, typed_stub::<6>, typed_stub::<7>,
+               typed_stub::<8>, typed_stub::<9>, typed_stub::<10>, typed_stub::<11>,
+               typed_stub::<12>] };
+    (16) => { [typed_stub::<0>,  typed_stub::<1>,  typed_stub::<2>,  typed_stub::<3>,
+               typed_stub::<4>,  typed_stub::<5>,  typed_stub::<6>,  typed_stub::<7>,
+               typed_stub::<8>,  typed_stub::<9>,  typed_stub::<10>, typed_stub::<11>,
+               typed_stub::<12>, typed_stub::<13>, typed_stub::<14>, typed_stub::<15>] };
+    (32) => { [typed_stub::<0>,  typed_stub::<1>,  typed_stub::<2>,  typed_stub::<3>,
+               typed_stub::<4>,  typed_stub::<5>,  typed_stub::<6>,  typed_stub::<7>,
+               typed_stub::<8>,  typed_stub::<9>,  typed_stub::<10>, typed_stub::<11>,
+               typed_stub::<12>, typed_stub::<13>, typed_stub::<14>, typed_stub::<15>,
+               typed_stub::<16>, typed_stub::<17>, typed_stub::<18>, typed_stub::<19>,
+               typed_stub::<20>, typed_stub::<21>, typed_stub::<22>, typed_stub::<23>,
+               typed_stub::<24>, typed_stub::<25>, typed_stub::<26>, typed_stub::<27>,
+               typed_stub::<28>, typed_stub::<29>, typed_stub::<30>, typed_stub::<31>] };
+}
 
 // ---------------------------------------------------------------------------
 // Macro to declare a static stub vtable of N function pointers and register
@@ -29,8 +108,8 @@ const STUB_FN: unsafe extern "C" fn() -> usize = stub;
 // ---------------------------------------------------------------------------
 
 macro_rules! stub_vtable {
-    ($name:ident, $count:expr, [ $($iface:expr),+ $(,)? ]) => {
-        static $name: [unsafe extern "C" fn() -> usize; $count] = [STUB_FN; $count];
+    ($name:ident, $count:tt, [ $($iface:expr),+ $(,)? ]) => {
+        static $name: [unsafe extern "C" fn() -> usize; $count] = stub_array!($count);
     };
 }
 
@@ -66,42 +145,28 @@ stub_vtable!(FLASH_MENU_STUB, 3, ["PPB_Flash_Menu;0.2"]);
 // PPB_Graphics3D;1.0 — 8 functions
 stub_vtable!(GRAPHICS3D_STUB, 8, ["PPB_Graphics3D;1.0"]);
 
-// PPB_IMEInputEvent(Dev);0.2 / 0.1 — 7 functions
-stub_vtable!(IME_INPUT_EVENT_STUB, 7, ["PPB_IMEInputEvent(Dev);0.2", "PPB_IMEInputEvent(Dev);0.1"]);
+// PPB_IMEInputEvent(Dev) — moved to ime_input_event.rs
 
-// PPB_NetAddress_Private;1.1 / 1.0 / 0.1 — 11 functions
-stub_vtable!(NET_ADDRESS_STUB, 11, ["PPB_NetAddress_Private;1.1", "PPB_NetAddress_Private;1.0", "PPB_NetAddress_Private;0.1"]);
+// PPB_NetAddress_Private — moved to net_address.rs
 
 // PPB_OpenGLES2;1.0 — moved to opengles2.rs
 
-// PPB_OpenGLES2ChromiumMapSub;1.0 — moved to opengles2.rs
-// Also register the legacy Dev variant names
-stub_vtable!(OPENGLES2_CHROMIUM_DEV_STUB, 4, ["PPB_OpenGLES2ChromiumMapSub(Dev);1.0", "PPB_GLESChromiumTextureMapping(Dev);0.1"]);
+// PPB_OpenGLES2ChromiumMapSub — moved to opengles2.rs (including Dev variant names)
 
-// PPB_TCPSocket_Private;0.5 / 0.4 / 0.3 — 13 functions
-stub_vtable!(TCP_SOCKET_STUB, 13, ["PPB_TCPSocket_Private;0.5", "PPB_TCPSocket_Private;0.4", "PPB_TCPSocket_Private;0.3"]);
+// PPB_TCPSocket_Private — moved to tcp_socket.rs
 
-// PPB_TextInput(Dev);0.2 / 0.1 — 5 functions
-stub_vtable!(TEXT_INPUT_STUB, 5, ["PPB_TextInput(Dev);0.2", "PPB_TextInput(Dev);0.1"]);
+// PPB_TextInput(Dev) — moved to text_input.rs
 
-// PPB_UDPSocket_Private;0.4 / 0.3 — 9 functions
-stub_vtable!(UDP_SOCKET_STUB, 9, ["PPB_UDPSocket_Private;0.4", "PPB_UDPSocket_Private;0.3"]);
+// PPB_UDPSocket_Private — moved to udp_socket.rs
 
 
 
-// PPB_VideoCapture(Dev);0.3 — 9 functions
-stub_vtable!(VIDEO_CAPTURE_STUB, 9, ["PPB_VideoCapture(Dev);0.3"]);
 
-// PPB_PDF;1 — fallback for font file (32 functions, generous)
-stub_vtable!(PDF_STUB, 32, ["PPB_PDF;1"]);
+
+
 
 // Additional interfaces requested post-init
 // PPB_OpenGLES2 extensions and PPB_Printing — moved to opengles2.rs / printing.rs
-stub_vtable!(BROKER_TRUSTED_STUB, 4, ["PPB_BrokerTrusted;0.3"]);
-stub_vtable!(VAR_DEPRECATED_STUB, 16, ["PPB_Var(Deprecated);0.3"]);
-stub_vtable!(AUDIO_OUTPUT_STUB, 9, ["PPB_AudioOutput(Dev);0.1"]);
-stub_vtable!(NETWORK_MONITOR_STUB, 4, ["PPB_NetworkMonitor;1.0"]);
-stub_vtable!(INSTANCE_PRIVATE_STUB, 4, ["PPB_Instance_Private;0.1"]);
 
 // ---------------------------------------------------------------------------
 // Registration — macro to register all versions of each stub vtable
@@ -109,6 +174,14 @@ stub_vtable!(INSTANCE_PRIVATE_STUB, 4, ["PPB_Instance_Private;0.1"]);
 
 macro_rules! register_stub {
     ($registry:expr, $vtable:expr, [ $($iface:expr),+ $(,)? ]) => {
+        // Register the first interface name with the name registry so we get
+        // a human-readable label in tracing (subsequent aliases share the same
+        // vtable array so they'd overwrite with an equally-informative name).
+        register_named_stubs(
+            // Use the first listed name as the canonical label.
+            [$($iface),+][0],
+            &$vtable,
+        );
         $(
             $registry.register_raw($iface, $vtable.as_ptr() as *const c_void);
         )+
@@ -144,47 +217,13 @@ pub fn register(registry: &mut InterfaceRegistry) {
     register_stub!(registry, GRAPHICS3D_STUB, [
         "PPB_Graphics3D;1.0"
     ]);
-    register_stub!(registry, IME_INPUT_EVENT_STUB, [
-        "PPB_IMEInputEvent(Dev);0.2", "PPB_IMEInputEvent(Dev);0.1"
-    ]);
-    register_stub!(registry, NET_ADDRESS_STUB, [
-        "PPB_NetAddress_Private;1.1", "PPB_NetAddress_Private;1.0", "PPB_NetAddress_Private;0.1"
-    ]);
-    register_stub!(registry, OPENGLES2_CHROMIUM_DEV_STUB, [
-        "PPB_OpenGLES2ChromiumMapSub(Dev);1.0",
-        "PPB_GLESChromiumTextureMapping(Dev);0.1"
-    ]);
-    register_stub!(registry, TCP_SOCKET_STUB, [
-        "PPB_TCPSocket_Private;0.5", "PPB_TCPSocket_Private;0.4", "PPB_TCPSocket_Private;0.3"
-    ]);
-    register_stub!(registry, TEXT_INPUT_STUB, [
-        "PPB_TextInput(Dev);0.2", "PPB_TextInput(Dev);0.1"
-    ]);
-    register_stub!(registry, UDP_SOCKET_STUB, [
-        "PPB_UDPSocket_Private;0.4", "PPB_UDPSocket_Private;0.3"
-    ]);
+    // PPB_IMEInputEvent(Dev) — moved to ime_input_event.rs
+    // PPB_NetAddress_Private — moved to net_address.rs
+    // PPB_OpenGLES2ChromiumMapSub Dev variants — moved to opengles2.rs
+    // PPB_TCPSocket_Private — moved to tcp_socket.rs
+    // PPB_TextInput(Dev) — moved to text_input.rs
+    // PPB_UDPSocket_Private — moved to udp_socket.rs
 
-    register_stub!(registry, VIDEO_CAPTURE_STUB, [
-        "PPB_VideoCapture(Dev);0.3"
-    ]);
-    register_stub!(registry, PDF_STUB, [
-        "PPB_PDF;1"
-    ]);
     // PPB_OpenGLES2 extensions and PPB_Printing are now in dedicated modules
-    register_stub!(registry, BROKER_TRUSTED_STUB, [
-        "PPB_BrokerTrusted;0.3"
-    ]);
-    register_stub!(registry, VAR_DEPRECATED_STUB, [
-        "PPB_Var(Deprecated);0.3"
-    ]);
-    register_stub!(registry, AUDIO_OUTPUT_STUB, [
-        "PPB_AudioOutput(Dev);0.1"
-    ]);
-    register_stub!(registry, NETWORK_MONITOR_STUB, [
-        "PPB_NetworkMonitor;1.0"
-    ]);
-    register_stub!(registry, INSTANCE_PRIVATE_STUB, [
-        "PPB_Instance_Private;0.1"
-    ]);
     } // unsafe
 }

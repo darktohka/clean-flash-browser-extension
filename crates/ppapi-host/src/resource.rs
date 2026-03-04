@@ -81,6 +81,7 @@ impl ResourceManager {
             false
         };
         if should_remove {
+            tracing::trace!("Resource {} ref count reached zero, removing", id);
             map.remove(&id);
         }
     }
