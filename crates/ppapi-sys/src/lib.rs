@@ -923,6 +923,62 @@ unsafe impl Send for PPB_Graphics2D_1_1 {}
 unsafe impl Sync for PPB_Graphics2D_1_1 {}
 
 // ===========================================================================
+// PPB_Graphics3D;1.0
+// ===========================================================================
+
+pub const PPB_GRAPHICS_3D_INTERFACE_1_0: &str = "PPB_Graphics3D;1.0\0";
+
+// PP_Graphics3DAttrib values (from pp_graphics_3d.h)
+pub const PP_GRAPHICS3DATTRIB_ALPHA_SIZE: i32 = 0x3021;
+pub const PP_GRAPHICS3DATTRIB_BLUE_SIZE: i32 = 0x3022;
+pub const PP_GRAPHICS3DATTRIB_GREEN_SIZE: i32 = 0x3023;
+pub const PP_GRAPHICS3DATTRIB_RED_SIZE: i32 = 0x3024;
+pub const PP_GRAPHICS3DATTRIB_DEPTH_SIZE: i32 = 0x3025;
+pub const PP_GRAPHICS3DATTRIB_STENCIL_SIZE: i32 = 0x3026;
+pub const PP_GRAPHICS3DATTRIB_SAMPLES: i32 = 0x3031;
+pub const PP_GRAPHICS3DATTRIB_SAMPLE_BUFFERS: i32 = 0x3032;
+pub const PP_GRAPHICS3DATTRIB_NONE: i32 = 0x3038;
+pub const PP_GRAPHICS3DATTRIB_HEIGHT: i32 = 0x3056;
+pub const PP_GRAPHICS3DATTRIB_WIDTH: i32 = 0x3057;
+pub const PP_GRAPHICS3DATTRIB_SWAP_BEHAVIOR: i32 = 0x3093;
+pub const PP_GRAPHICS3DATTRIB_BUFFER_PRESERVED: i32 = 0x3094;
+pub const PP_GRAPHICS3DATTRIB_BUFFER_DESTROYED: i32 = 0x3095;
+pub const PP_GRAPHICS3DATTRIB_GPU_PREFERENCE: i32 = 0x11000;
+pub const PP_GRAPHICS3DATTRIB_GPU_PREFERENCE_LOW_POWER: i32 = 0x11001;
+pub const PP_GRAPHICS3DATTRIB_GPU_PREFERENCE_PERFORMANCE: i32 = 0x11002;
+
+#[repr(C)]
+pub struct PPB_Graphics3D_1_0 {
+    pub GetAttribMaxValue: Option<
+        unsafe extern "C" fn(
+            instance: PP_Resource,
+            attribute: i32,
+            value: *mut i32,
+        ) -> i32,
+    >,
+    pub Create: Option<
+        unsafe extern "C" fn(
+            instance: PP_Instance,
+            share_context: PP_Resource,
+            attrib_list: *const i32,
+        ) -> PP_Resource,
+    >,
+    pub IsGraphics3D: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub GetAttribs: Option<unsafe extern "C" fn(context: PP_Resource, attrib_list: *mut i32) -> i32>,
+    pub SetAttribs:
+        Option<unsafe extern "C" fn(context: PP_Resource, attrib_list: *const i32) -> i32>,
+    pub GetError: Option<unsafe extern "C" fn(context: PP_Resource) -> i32>,
+    pub ResizeBuffers:
+        Option<unsafe extern "C" fn(context: PP_Resource, width: i32, height: i32) -> i32>,
+    pub SwapBuffers: Option<
+        unsafe extern "C" fn(context: PP_Resource, callback: PP_CompletionCallback) -> i32,
+    >,
+}
+
+unsafe impl Send for PPB_Graphics3D_1_0 {}
+unsafe impl Sync for PPB_Graphics3D_1_0 {}
+
+// ===========================================================================
 // PPB_ImageData;1.0
 // ===========================================================================
 
@@ -3151,6 +3207,287 @@ pub struct PPB_UDPSocket_Private_0_3 {
 
 unsafe impl Send for PPB_UDPSocket_Private_0_3 {}
 unsafe impl Sync for PPB_UDPSocket_Private_0_3 {}
+
+// ===========================================================================
+// PPB_FileRef;1.0 / 1.1 / 1.2
+// ===========================================================================
+
+pub const PPB_FILEREF_INTERFACE_1_0: &str = "PPB_FileRef;1.0\0";
+pub const PPB_FILEREF_INTERFACE_1_1: &str = "PPB_FileRef;1.1\0";
+pub const PPB_FILEREF_INTERFACE_1_2: &str = "PPB_FileRef;1.2\0";
+
+pub type PP_FileSystemType = i32;
+
+pub const PP_FILESYSTEMTYPE_INVALID: PP_FileSystemType = 0;
+pub const PP_FILESYSTEMTYPE_EXTERNAL: PP_FileSystemType = 1;
+pub const PP_FILESYSTEMTYPE_LOCALPERSISTENT: PP_FileSystemType = 2;
+pub const PP_FILESYSTEMTYPE_LOCALTEMPORARY: PP_FileSystemType = 3;
+pub const PP_FILESYSTEMTYPE_ISOLATED: PP_FileSystemType = 4;
+
+pub const PP_MAKEDIRECTORYFLAG_NONE: i32 = 0;
+pub const PP_MAKEDIRECTORYFLAG_WITH_ANCESTORS: i32 = 1 << 0;
+pub const PP_MAKEDIRECTORYFLAG_EXCLUSIVE: i32 = 1 << 1;
+
+/// PPB_FileRef;1.2 vtable — 12 functions.
+#[repr(C)]
+pub struct PPB_FileRef_1_2 {
+    pub Create: Option<unsafe extern "C" fn(file_system: PP_Resource, path: *const c_char) -> PP_Resource>,
+    pub IsFileRef: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub GetFileSystemType: Option<unsafe extern "C" fn(file_ref: PP_Resource) -> PP_FileSystemType>,
+    pub GetName: Option<unsafe extern "C" fn(file_ref: PP_Resource) -> PP_Var>,
+    pub GetPath: Option<unsafe extern "C" fn(file_ref: PP_Resource) -> PP_Var>,
+    pub GetParent: Option<unsafe extern "C" fn(file_ref: PP_Resource) -> PP_Resource>,
+    pub MakeDirectory: Option<unsafe extern "C" fn(directory_ref: PP_Resource, make_directory_flags: i32, callback: PP_CompletionCallback) -> i32>,
+    pub Touch: Option<unsafe extern "C" fn(file_ref: PP_Resource, last_access_time: PP_Time, last_modified_time: PP_Time, callback: PP_CompletionCallback) -> i32>,
+    pub Delete: Option<unsafe extern "C" fn(file_ref: PP_Resource, callback: PP_CompletionCallback) -> i32>,
+    pub Rename: Option<unsafe extern "C" fn(file_ref: PP_Resource, new_file_ref: PP_Resource, callback: PP_CompletionCallback) -> i32>,
+    pub Query: Option<unsafe extern "C" fn(file_ref: PP_Resource, info: *mut PP_FileInfo, callback: PP_CompletionCallback) -> i32>,
+    pub ReadDirectoryEntries: Option<unsafe extern "C" fn(file_ref: PP_Resource, output: PP_ArrayOutput, callback: PP_CompletionCallback) -> i32>,
+}
+
+unsafe impl Send for PPB_FileRef_1_2 {}
+unsafe impl Sync for PPB_FileRef_1_2 {}
+
+/// PPB_FileRef;1.1 vtable — 12 functions (MakeDirectory takes PP_Bool).
+#[repr(C)]
+pub struct PPB_FileRef_1_1 {
+    pub Create: Option<unsafe extern "C" fn(file_system: PP_Resource, path: *const c_char) -> PP_Resource>,
+    pub IsFileRef: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub GetFileSystemType: Option<unsafe extern "C" fn(file_ref: PP_Resource) -> PP_FileSystemType>,
+    pub GetName: Option<unsafe extern "C" fn(file_ref: PP_Resource) -> PP_Var>,
+    pub GetPath: Option<unsafe extern "C" fn(file_ref: PP_Resource) -> PP_Var>,
+    pub GetParent: Option<unsafe extern "C" fn(file_ref: PP_Resource) -> PP_Resource>,
+    pub MakeDirectory: Option<unsafe extern "C" fn(directory_ref: PP_Resource, make_ancestors: PP_Bool, callback: PP_CompletionCallback) -> i32>,
+    pub Touch: Option<unsafe extern "C" fn(file_ref: PP_Resource, last_access_time: PP_Time, last_modified_time: PP_Time, callback: PP_CompletionCallback) -> i32>,
+    pub Delete: Option<unsafe extern "C" fn(file_ref: PP_Resource, callback: PP_CompletionCallback) -> i32>,
+    pub Rename: Option<unsafe extern "C" fn(file_ref: PP_Resource, new_file_ref: PP_Resource, callback: PP_CompletionCallback) -> i32>,
+    pub Query: Option<unsafe extern "C" fn(file_ref: PP_Resource, info: *mut PP_FileInfo, callback: PP_CompletionCallback) -> i32>,
+    pub ReadDirectoryEntries: Option<unsafe extern "C" fn(file_ref: PP_Resource, output: PP_ArrayOutput, callback: PP_CompletionCallback) -> i32>,
+}
+
+unsafe impl Send for PPB_FileRef_1_1 {}
+unsafe impl Sync for PPB_FileRef_1_1 {}
+
+/// PPB_FileRef;1.0 vtable — 10 functions (no Query, no ReadDirectoryEntries).
+#[repr(C)]
+pub struct PPB_FileRef_1_0 {
+    pub Create: Option<unsafe extern "C" fn(file_system: PP_Resource, path: *const c_char) -> PP_Resource>,
+    pub IsFileRef: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub GetFileSystemType: Option<unsafe extern "C" fn(file_ref: PP_Resource) -> PP_FileSystemType>,
+    pub GetName: Option<unsafe extern "C" fn(file_ref: PP_Resource) -> PP_Var>,
+    pub GetPath: Option<unsafe extern "C" fn(file_ref: PP_Resource) -> PP_Var>,
+    pub GetParent: Option<unsafe extern "C" fn(file_ref: PP_Resource) -> PP_Resource>,
+    pub MakeDirectory: Option<unsafe extern "C" fn(directory_ref: PP_Resource, make_ancestors: PP_Bool, callback: PP_CompletionCallback) -> i32>,
+    pub Touch: Option<unsafe extern "C" fn(file_ref: PP_Resource, last_access_time: PP_Time, last_modified_time: PP_Time, callback: PP_CompletionCallback) -> i32>,
+    pub Delete: Option<unsafe extern "C" fn(file_ref: PP_Resource, callback: PP_CompletionCallback) -> i32>,
+    pub Rename: Option<unsafe extern "C" fn(file_ref: PP_Resource, new_file_ref: PP_Resource, callback: PP_CompletionCallback) -> i32>,
+}
+
+unsafe impl Send for PPB_FileRef_1_0 {}
+unsafe impl Sync for PPB_FileRef_1_0 {}
+
+// ===========================================================================
+// PPB_FileChooser(Dev);0.5 / 0.6
+// ===========================================================================
+
+pub const PPB_FILECHOOSER_DEV_INTERFACE_0_5: &str = "PPB_FileChooser(Dev);0.5\0";
+pub const PPB_FILECHOOSER_DEV_INTERFACE_0_6: &str = "PPB_FileChooser(Dev);0.6\0";
+
+pub type PP_FileChooserMode_Dev = i32;
+pub const PP_FILECHOOSERMODE_OPEN: PP_FileChooserMode_Dev = 0;
+pub const PP_FILECHOOSERMODE_OPENMULTIPLE: PP_FileChooserMode_Dev = 1;
+
+/// PPB_FileChooser(Dev);0.6 vtable — 3 functions.
+#[repr(C)]
+pub struct PPB_FileChooser_Dev_0_6 {
+    pub Create: Option<unsafe extern "C" fn(instance: PP_Instance, mode: PP_FileChooserMode_Dev, accept_types: PP_Var) -> PP_Resource>,
+    pub IsFileChooser: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub Show: Option<unsafe extern "C" fn(chooser: PP_Resource, output: PP_ArrayOutput, callback: PP_CompletionCallback) -> i32>,
+}
+
+unsafe impl Send for PPB_FileChooser_Dev_0_6 {}
+unsafe impl Sync for PPB_FileChooser_Dev_0_6 {}
+
+/// PPB_FileChooser(Dev);0.5 vtable — 4 functions (old API).
+#[repr(C)]
+pub struct PPB_FileChooser_Dev_0_5 {
+    pub Create: Option<unsafe extern "C" fn(instance: PP_Instance, mode: PP_FileChooserMode_Dev, accept_types: PP_Var) -> PP_Resource>,
+    pub IsFileChooser: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub Show: Option<unsafe extern "C" fn(chooser: PP_Resource, callback: PP_CompletionCallback) -> i32>,
+    pub GetNextChosenFile: Option<unsafe extern "C" fn(chooser: PP_Resource) -> PP_Resource>,
+}
+
+unsafe impl Send for PPB_FileChooser_Dev_0_5 {}
+unsafe impl Sync for PPB_FileChooser_Dev_0_5 {}
+
+// ===========================================================================
+// PPB_FileChooserTrusted;0.5 / 0.6
+// ===========================================================================
+
+pub const PPB_FILECHOOSER_TRUSTED_INTERFACE_0_5: &str = "PPB_FileChooserTrusted;0.5\0";
+pub const PPB_FILECHOOSER_TRUSTED_INTERFACE_0_6: &str = "PPB_FileChooserTrusted;0.6\0";
+
+/// PPB_FileChooserTrusted;0.6 vtable — 1 function.
+#[repr(C)]
+pub struct PPB_FileChooserTrusted_0_6 {
+    pub ShowWithoutUserGesture: Option<
+        unsafe extern "C" fn(
+            chooser: PP_Resource,
+            save_as: PP_Bool,
+            suggested_file_name: PP_Var,
+            output: PP_ArrayOutput,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+}
+
+unsafe impl Send for PPB_FileChooserTrusted_0_6 {}
+unsafe impl Sync for PPB_FileChooserTrusted_0_6 {}
+
+/// PPB_FileChooserTrusted;0.5 vtable — 1 function (no PP_ArrayOutput).
+#[repr(C)]
+pub struct PPB_FileChooserTrusted_0_5 {
+    pub ShowWithoutUserGesture: Option<
+        unsafe extern "C" fn(
+            chooser: PP_Resource,
+            save_as: PP_Bool,
+            suggested_file_name: PP_Var,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+}
+
+unsafe impl Send for PPB_FileChooserTrusted_0_5 {}
+unsafe impl Sync for PPB_FileChooserTrusted_0_5 {}
+
+// ===========================================================================
+// PPB_Flash_File_FileRef;2
+// ===========================================================================
+
+pub const PPB_FLASH_FILE_FILEREF_INTERFACE_2: &str = "PPB_Flash_File_FileRef;2\0";
+
+pub type PP_FileHandle = i32;
+
+pub const PP_FILEOPENFLAG_READ: i32 = 1 << 0;
+pub const PP_FILEOPENFLAG_WRITE: i32 = 1 << 1;
+pub const PP_FILEOPENFLAG_CREATE: i32 = 1 << 2;
+pub const PP_FILEOPENFLAG_TRUNCATE: i32 = 1 << 3;
+pub const PP_FILEOPENFLAG_EXCLUSIVE: i32 = 1 << 4;
+pub const PP_FILEOPENFLAG_APPEND: i32 = 1 << 5;
+
+/// PPB_Flash_File_FileRef vtable — 2 functions.
+#[repr(C)]
+pub struct PPB_Flash_File_FileRef {
+    pub OpenFile: Option<unsafe extern "C" fn(file_ref_id: PP_Resource, mode: i32, file: *mut PP_FileHandle) -> i32>,
+    pub QueryFile: Option<unsafe extern "C" fn(file_ref_id: PP_Resource, info: *mut PP_FileInfo) -> i32>,
+}
+
+unsafe impl Send for PPB_Flash_File_FileRef {}
+unsafe impl Sync for PPB_Flash_File_FileRef {}
+
+// ===========================================================================
+// PPB_Flash_FontFile;0.1 / 0.2
+// ===========================================================================
+
+pub const PPB_FLASH_FONTFILE_INTERFACE_0_1: &str = "PPB_Flash_FontFile;0.1\0";
+pub const PPB_FLASH_FONTFILE_INTERFACE_0_2: &str = "PPB_Flash_FontFile;0.2\0";
+
+/// PPB_Flash_FontFile;0.2 vtable — 4 functions.
+#[repr(C)]
+pub struct PPB_Flash_FontFile_0_2 {
+    pub Create: Option<
+        unsafe extern "C" fn(
+            instance: PP_Instance,
+            description: *const PP_BrowserFont_Trusted_Description,
+            charset: PP_PrivateFontCharset,
+        ) -> PP_Resource,
+    >,
+    pub IsFlashFontFile: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub GetFontTable: Option<
+        unsafe extern "C" fn(
+            font_file: PP_Resource,
+            table: u32,
+            output: *mut c_void,
+            output_length: *mut u32,
+        ) -> PP_Bool,
+    >,
+    pub IsSupportedForWindows: Option<unsafe extern "C" fn() -> PP_Bool>,
+}
+
+unsafe impl Send for PPB_Flash_FontFile_0_2 {}
+unsafe impl Sync for PPB_Flash_FontFile_0_2 {}
+
+/// PPB_Flash_FontFile;0.1 vtable — 3 functions (no IsSupportedForWindows).
+#[repr(C)]
+pub struct PPB_Flash_FontFile_0_1 {
+    pub Create: Option<
+        unsafe extern "C" fn(
+            instance: PP_Instance,
+            description: *const PP_BrowserFont_Trusted_Description,
+            charset: PP_PrivateFontCharset,
+        ) -> PP_Resource,
+    >,
+    pub IsFlashFontFile: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub GetFontTable: Option<
+        unsafe extern "C" fn(
+            font_file: PP_Resource,
+            table: u32,
+            output: *mut c_void,
+            output_length: *mut u32,
+        ) -> PP_Bool,
+    >,
+}
+
+unsafe impl Send for PPB_Flash_FontFile_0_1 {}
+unsafe impl Sync for PPB_Flash_FontFile_0_1 {}
+
+// ===========================================================================
+// PPB_Flash_Menu;0.2
+// ===========================================================================
+
+pub const PPB_FLASH_MENU_INTERFACE_0_2: &str = "PPB_Flash_Menu;0.2\0";
+
+pub type PP_Flash_MenuItem_Type = i32;
+pub const PP_FLASH_MENUITEM_TYPE_NORMAL: PP_Flash_MenuItem_Type = 0;
+pub const PP_FLASH_MENUITEM_TYPE_CHECKBOX: PP_Flash_MenuItem_Type = 1;
+pub const PP_FLASH_MENUITEM_TYPE_SEPARATOR: PP_Flash_MenuItem_Type = 2;
+pub const PP_FLASH_MENUITEM_TYPE_SUBMENU: PP_Flash_MenuItem_Type = 3;
+
+/// Individual menu item in a Flash context menu.
+#[repr(C)]
+pub struct PP_Flash_MenuItem {
+    pub type_: PP_Flash_MenuItem_Type,
+    pub name: *mut c_char,
+    pub id: i32,
+    pub enabled: PP_Bool,
+    pub checked: PP_Bool,
+    pub submenu: *mut PP_Flash_Menu,
+}
+
+/// Flash context menu data passed to PPB_Flash_Menu::Create.
+#[repr(C)]
+pub struct PP_Flash_Menu {
+    pub count: u32,
+    pub items: *mut PP_Flash_MenuItem,
+}
+
+/// PPB_Flash_Menu;0.2 vtable — 3 functions.
+#[repr(C)]
+pub struct PPB_Flash_Menu_0_2 {
+    pub Create: Option<unsafe extern "C" fn(instance_id: PP_Instance, menu_data: *const PP_Flash_Menu) -> PP_Resource>,
+    pub IsFlashMenu: Option<unsafe extern "C" fn(resource_id: PP_Resource) -> PP_Bool>,
+    pub Show: Option<
+        unsafe extern "C" fn(
+            menu_id: PP_Resource,
+            location: *const PP_Point,
+            selected_id: *mut i32,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+}
+
+unsafe impl Send for PPB_Flash_Menu_0_2 {}
+unsafe impl Sync for PPB_Flash_Menu_0_2 {}
 
 // ===========================================================================
 // Compile-time size assertions (match C static assertions)

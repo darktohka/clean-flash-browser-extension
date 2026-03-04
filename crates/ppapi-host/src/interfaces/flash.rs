@@ -5,7 +5,7 @@
 
 use crate::interface_registry::InterfaceRegistry;
 use ppapi_sys::*;
-use std::ffi::{c_char, c_void};
+use std::ffi::{CStr, c_char, c_void};
 
 use super::super::HOST;
 
@@ -68,6 +68,8 @@ pub unsafe fn register(registry: &mut InterfaceRegistry) {
 // ---------------------------------------------------------------------------
 
 unsafe extern "C" fn set_instance_always_on_top(_instance: PP_Instance, _on_top: PP_Bool) {
+    tracing::debug!("PPB_Flash::SetInstanceAlwaysOnTop(instance={}, on_top={})",
+        _instance, _on_top);
     // No-op — same as freshplayerplugin.
 }
 
@@ -93,6 +95,9 @@ unsafe extern "C" fn get_proxy_for_url(
     _instance: PP_Instance,
     _url: *const c_char,
 ) -> PP_Var {
+    let url_debug = if _url.is_null() { std::borrow::Cow::Borrowed("<null>") } else { CStr::from_ptr(_url).to_string_lossy() };
+    tracing::debug!("PPB_Flash::GetProxyForURL(instance={}, url={:?})",
+        _instance, url_debug);
     // Return DIRECT (no proxy) — same as a standalone player.
     let Some(host) = HOST.get() else {
         return PP_Var::undefined();
@@ -105,6 +110,9 @@ unsafe extern "C" fn navigate(
     _target: *const c_char,
     _from_user_action: PP_Bool,
 ) -> i32 {
+    let target_debug = if _target.is_null() { std::borrow::Cow::Borrowed("<null>") } else { CStr::from_ptr(_target).to_string_lossy() };
+    tracing::debug!("PPB_Flash::Navigate(request_info={}, target={:?}, from_user_action={})",
+        _request_info, target_debug, _from_user_action);
     // No-op in standalone projector — nowhere to navigate.
     PP_OK
 }
@@ -123,6 +131,7 @@ unsafe extern "C" fn get_local_time_zone_offset(
     _instance: PP_Instance,
     t: f64,
 ) -> f64 {
+    tracing::trace!("PPB_Flash::GetLocalTimeZoneOffset(instance={}, t={})", _instance, t);
     // Return the local timezone offset in seconds for the given UTC time.
     // Use libc localtime_r for the conversion.
     let time_t = t as i64;
@@ -132,6 +141,8 @@ unsafe extern "C" fn get_local_time_zone_offset(
 }
 
 unsafe extern "C" fn get_command_line_args(_module: PP_Module) -> PP_Var {
+    tracing::debug!("PPB_Flash::GetCommandLineArgs(module={})", _module);
+
     // Return empty string — no special command line args.
     let Some(host) = HOST.get() else {
         return PP_Var::undefined();
@@ -140,6 +151,7 @@ unsafe extern "C" fn get_command_line_args(_module: PP_Module) -> PP_Var {
 }
 
 unsafe extern "C" fn preload_font_win(_logfontw: *const c_void) {
+    tracing::debug!("PPB_Flash::PreloadFontWin called (stub)");
     // Windows-only — no-op on Linux.
 }
 
@@ -147,19 +159,25 @@ unsafe extern "C" fn is_rect_topmost(
     _instance: PP_Instance,
     _rect: *const PP_Rect,
 ) -> PP_Bool {
+    let rect_debug = if _rect.is_null() { "<null>" } else { "<rect>" };
+    tracing::debug!("PPB_Flash::IsRectTopmost(instance={}, rect={})",
+        _instance, rect_debug);
     // In our standalone player, the plugin is always topmost.
     PP_TRUE
 }
 
 unsafe extern "C" fn invoke_printing(_instance: PP_Instance) {
+    tracing::debug!("PPB_Flash::InvokePrinting(instance={})", _instance);
     // No printing support.
 }
 
 unsafe extern "C" fn update_activity(_instance: PP_Instance) {
+    tracing::debug!("PPB_Flash::UpdateActivity(instance={})", _instance);
     // Screensaver inhibition — no-op for now.
 }
 
 unsafe extern "C" fn get_device_id_12_6(_instance: PP_Instance) -> PP_Var {
+    tracing::debug!("PPB_Flash::GetDeviceID(instance={})", _instance);
     // Deprecated in 12.6, replaced by PPB_Flash_DRM::GetDeviceID.
     let Some(host) = HOST.get() else {
         return PP_Var::undefined();
@@ -173,14 +191,14 @@ unsafe extern "C" fn get_setting_int(
 ) -> i32 {
     tracing::debug!("PPB_Flash::GetSettingInt(setting={})", setting);
     match setting {
-        PP_FLASHSETTING_3DENABLED => 0,
+        PP_FLASHSETTING_3DENABLED => 1,
         PP_FLASHSETTING_INCOGNITO => 1,
-        PP_FLASHSETTING_STAGE3DENABLED => 0,
+        PP_FLASHSETTING_STAGE3DENABLED => 1,
         PP_FLASHSETTING_NUMCORES => {
             num_cpus()
         }
         PP_FLASHSETTING_LSORESTRICTIONS => PP_FLASHLSORESTRICTIONS_NONE,
-        PP_FLASHSETTING_STAGE3DBASELINEENABLED => 0,
+        PP_FLASHSETTING_STAGE3DBASELINEENABLED => 1,
         _ => 0,
     }
 }
@@ -229,6 +247,8 @@ unsafe extern "C" fn enumerate_video_capture_devices(
     _video_capture: PP_Resource,
     _devices: *mut c_void,
 ) -> i32 {
+    tracing::debug!("PPB_Flash::EnumerateVideoCaptureDevices(instance={}, video_capture={}, devices={:?})",
+        _instance, _video_capture, _devices);
     // No video capture devices available.
     PP_ERROR_NOTSUPPORTED
 }

@@ -2629,6 +2629,7 @@ dependencies = [
  "libloading",
  "once_cell",
  "parking_lot",
+ "player-ui-traits",
  "ppapi-sys",
  "tracing",
 ]

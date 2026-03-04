@@ -86,6 +86,8 @@ pub struct HostState {
     pub main_message_loop: Mutex<Option<message_loop::MessageLoop>>,
     /// Callbacks to the player/UI layer.
     pub host_callbacks: Mutex<Option<Box<dyn HostCallbacks>>>,
+    /// File chooser provider for native file dialogs.
+    pub file_chooser_provider: Mutex<Option<Box<dyn player_ui_traits::FileChooserProvider>>>,
 }
 
 impl HostState {
@@ -110,6 +112,7 @@ impl HostState {
                 main_loop_poster: Mutex::new(None),
                 main_message_loop: Mutex::new(None),
                 host_callbacks: Mutex::new(None),
+                file_chooser_provider: Mutex::new(None),
             }
         })
     }
@@ -117,6 +120,11 @@ impl HostState {
     /// Set the host callbacks (from the player/UI layer).
     pub fn set_callbacks(&self, callbacks: Box<dyn HostCallbacks>) {
         *self.host_callbacks.lock() = Some(callbacks);
+    }
+
+    /// Set the file chooser provider for native file dialogs.
+    pub fn set_file_chooser_provider(&self, provider: Box<dyn player_ui_traits::FileChooserProvider>) {
+        *self.file_chooser_provider.lock() = Some(provider);
     }
 
     /// The `PPB_GetInterface` function that we pass to the plugin's

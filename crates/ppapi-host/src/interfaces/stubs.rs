@@ -124,26 +124,14 @@ macro_rules! stub_vtable {
 // PPB_CharSet(Dev) — moved to char_set.rs
 // PPB_CursorControl(Dev) — moved to cursor_control.rs
 
-// PPB_FileChooser(Dev);0.6 — 3 functions
-stub_vtable!(FILE_CHOOSER_STUB, 3, ["PPB_FileChooser(Dev);0.6", "PPB_FileChooser(Dev);0.5"]);
+// PPB_FileChooser(Dev) — moved to file_chooser.rs
+// PPB_FileChooserTrusted — moved to file_chooser.rs
+// PPB_FileRef — moved to file_ref.rs
+// PPB_Flash_File_FileRef — moved to flash_file_fileref.rs
+// PPB_Flash_FontFile — moved to flash_font_file.rs
+// PPB_Flash_Menu — moved to flash_menu.rs
 
-// PPB_FileChooserTrusted;0.6 — 1 function
-stub_vtable!(FILE_CHOOSER_TRUSTED_STUB, 1, ["PPB_FileChooserTrusted;0.6", "PPB_FileChooserTrusted;0.5"]);
-
-// PPB_FileRef;1.2 / 1.1 / 1.0 — 12 functions
-stub_vtable!(FILE_REF_STUB, 12, ["PPB_FileRef;1.2", "PPB_FileRef;1.1", "PPB_FileRef;1.0"]);
-
-// PPB_Flash_File_FileRef;2 — 2 functions
-stub_vtable!(FLASH_FILE_FILEREF_STUB, 2, ["PPB_Flash_File_FileRef;2"]);
-
-// PPB_Flash_FontFile;0.2 / 0.1 — 4 functions
-stub_vtable!(FLASH_FONT_FILE_STUB, 4, ["PPB_Flash_FontFile;0.2", "PPB_Flash_FontFile;0.1"]);
-
-// PPB_Flash_Menu;0.2 — 3 functions
-stub_vtable!(FLASH_MENU_STUB, 3, ["PPB_Flash_Menu;0.2"]);
-
-// PPB_Graphics3D;1.0 — 8 functions
-stub_vtable!(GRAPHICS3D_STUB, 8, ["PPB_Graphics3D;1.0"]);
+// PPB_Graphics3D;1.0 — moved to graphics3d.rs
 
 // PPB_IMEInputEvent(Dev) — moved to ime_input_event.rs
 
@@ -196,27 +184,13 @@ pub fn register(registry: &mut InterfaceRegistry) {
     // PPB_Buffer(Dev) — moved to buffer.rs
     // PPB_CharSet(Dev) — moved to char_set.rs
     // PPB_CursorControl(Dev) — moved to cursor_control.rs
-    register_stub!(registry, FILE_CHOOSER_STUB, [
-        "PPB_FileChooser(Dev);0.6", "PPB_FileChooser(Dev);0.5"
-    ]);
-    register_stub!(registry, FILE_CHOOSER_TRUSTED_STUB, [
-        "PPB_FileChooserTrusted;0.6", "PPB_FileChooserTrusted;0.5"
-    ]);
-    register_stub!(registry, FILE_REF_STUB, [
-        "PPB_FileRef;1.2", "PPB_FileRef;1.1", "PPB_FileRef;1.0"
-    ]);
-    register_stub!(registry, FLASH_FILE_FILEREF_STUB, [
-        "PPB_Flash_File_FileRef;2"
-    ]);
-    register_stub!(registry, FLASH_FONT_FILE_STUB, [
-        "PPB_Flash_FontFile;0.2", "PPB_Flash_FontFile;0.1"
-    ]);
-    register_stub!(registry, FLASH_MENU_STUB, [
-        "PPB_Flash_Menu;0.2"
-    ]);
-    register_stub!(registry, GRAPHICS3D_STUB, [
-        "PPB_Graphics3D;1.0"
-    ]);
+    // PPB_FileChooser(Dev) — moved to file_chooser.rs
+    // PPB_FileChooserTrusted — moved to file_chooser.rs
+    // PPB_FileRef — moved to file_ref.rs
+    // PPB_Flash_File_FileRef — moved to flash_file_fileref.rs
+    // PPB_Flash_FontFile — moved to flash_font_file.rs
+    // PPB_Flash_Menu — moved to flash_menu.rs
+    // PPB_Graphics3D;1.0 — moved to graphics3d.rs
     // PPB_IMEInputEvent(Dev) — moved to ime_input_event.rs
     // PPB_NetAddress_Private — moved to net_address.rs
     // PPB_OpenGLES2ChromiumMapSub Dev variants — moved to opengles2.rs

@@ -126,3 +126,40 @@ pub trait DialogProvider: Send + Sync {
     /// `None` if cancelled. Blocks until a response is given.
     fn prompt(&self, message: &str, default: &str) -> Option<String>;
 }
+
+// ===========================================================================
+// File chooser provider — abstracts native file picker dialogs
+// ===========================================================================
+
+/// Mode for file chooser dialogs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileChooserMode {
+    /// Pick a single file to open.
+    Open,
+    /// Pick multiple files to open.
+    OpenMultiple,
+    /// Pick a location to save a file.
+    Save,
+}
+
+/// Provides native file-picker dialogs that the PPAPI host invokes when
+/// Flash triggers PPB_FileChooser or PPB_FileChooserTrusted.
+///
+/// Implementations should be thread-safe; methods may be called from the
+/// PPAPI plugin thread and should block until the user responds.
+pub trait FileChooserProvider: Send + Sync {
+    /// Show a file open/save dialog.
+    ///
+    /// - `mode`: whether to open (single/multi) or save.
+    /// - `accept_types`: comma-separated MIME types or extensions (may be empty).
+    /// - `suggested_name`: for save dialogs, the suggested filename.
+    ///
+    /// Returns a list of chosen file paths, or an empty vec if cancelled.
+    fn show_file_chooser(
+        &self,
+        mode: FileChooserMode,
+        accept_types: &str,
+        suggested_name: &str,
+    ) -> Vec<String>;
+}
+

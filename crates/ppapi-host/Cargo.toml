@@ -7,6 +7,7 @@ description = "Core PPAPI host implementation — loads and hosts PPAPI plugins"
 
 [dependencies]
 ppapi-sys = { workspace = true }
+player-ui-traits = { path = "../player-ui-traits" }
 tracing = { workspace = true }
 libloading = "0.8"
 crossbeam-channel = "0.5"

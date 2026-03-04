@@ -63,6 +63,7 @@ unsafe extern "C" fn var_to_utf8(var: PP_Var, len: *mut u32) -> *const c_char {
         if !len.is_null() {
             unsafe { *len = 0 };
         }
+        tracing::trace!("PPB_Var::VarToUtf8: no host, returning empty string");
         return c"".as_ptr();
     };
 
@@ -71,12 +72,23 @@ unsafe extern "C" fn var_to_utf8(var: PP_Var, len: *mut u32) -> *const c_char {
             if !len.is_null() {
                 unsafe { *len = l };
             }
+            tracing::trace!(
+                "PPB_Var::VarToUtf8: returning string {} of length {}",
+                unsafe {
+                    std::str::from_utf8(std::slice::from_raw_parts(ptr as *const u8, l as usize))
+                        .unwrap_or("<invalid utf-8>")
+                },
+                l
+            );
             ptr
         }
         None => {
             if !len.is_null() {
                 unsafe { *len = 0 };
             }
+            tracing::trace!(
+                "PPB_Var::VarToUtf8: var_to_utf8 returned None, returning empty string"
+            );
             c"".as_ptr()
         }
     }

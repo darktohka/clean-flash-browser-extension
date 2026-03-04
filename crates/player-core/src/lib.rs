@@ -6,7 +6,7 @@
 use parking_lot::Mutex;
 use ppapi_host::{HostCallbacks, HostState, PluginLoader};
 use ppapi_sys::*;
-use player_ui_traits::{DialogProvider, FrameData, PlayerState};
+use player_ui_traits::{DialogProvider, FileChooserProvider, FrameData, PlayerState};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -27,6 +27,8 @@ pub struct FlashPlayer {
     plugin_path: Option<String>,
     /// Dialog provider for alert/confirm/prompt (from the UI layer).
     dialog_provider: Option<Arc<dyn DialogProvider>>,
+    /// File chooser provider for native file dialogs (from the UI layer).
+    file_chooser_provider: Option<Arc<dyn FileChooserProvider>>,
 }
 
 impl FlashPlayer {
@@ -39,6 +41,7 @@ impl FlashPlayer {
             latest_frame: Arc::new(Mutex::new(None)),
             plugin_path: None,
             dialog_provider: None,
+            file_chooser_provider: None,
         }
     }
 
@@ -50,6 +53,11 @@ impl FlashPlayer {
     /// Set the dialog provider (from the UI layer) for alert/confirm/prompt.
     pub fn set_dialog_provider(&mut self, provider: Arc<dyn DialogProvider>) {
         self.dialog_provider = Some(provider);
+    }
+
+    /// Set the file chooser provider (from the UI layer) for native file dialogs.
+    pub fn set_file_chooser_provider(&mut self, provider: Arc<dyn FileChooserProvider>) {
+        self.file_chooser_provider = Some(provider);
     }
 
     /// Get a handle to the latest frame (for the UI to read).
@@ -78,6 +86,12 @@ impl FlashPlayer {
         // Set up host callbacks to receive frame data.
         let frame_handle = self.latest_frame.clone();
         let dialog = self.dialog_provider.clone();
+
+        // Set the file chooser provider on the host if available.
+        if let Some(ref fcp) = self.file_chooser_provider {
+            host.set_file_chooser_provider(Box::new(ArcFileChooserProvider(fcp.clone())));
+        }
+
         host.set_callbacks(Box::new(PlayerHostCallbacks {
             latest_frame: frame_handle,
             dialog_provider: dialog,
@@ -179,6 +193,9 @@ impl FlashPlayer {
         let type_key = std::ffi::CString::new("type").unwrap();
         let type_val = std::ffi::CString::new("application/x-shockwave-flash").unwrap();
 
+        println!("DidCreate args:");
+        println!("  {} = {}", src_key.to_str().unwrap(), src_val.to_str().unwrap());
+
         let argn = [src_key.as_ptr(), type_key.as_ptr()];
         let argv = [src_val.as_ptr(), type_val.as_ptr()];
         let argc = argn.len() as u32;
@@ -196,6 +213,7 @@ impl FlashPlayer {
         }
 
         self.instance_id = Some(instance_id);
+        self.notify_view_change(800, 600);
 
         // ---- Step 3: PPP_Instance_Private → GetInstanceObject ----------
         // freshplayerplugin queries this immediately after DidCreate and
@@ -231,6 +249,7 @@ impl FlashPlayer {
             let res = unsafe {
                 handle_doc_load(instance_id, loader_res)
             };
+            //let res = PP_FALSE;
 
             tracing::info!("open_swf: HandleDocumentLoad returned: {} ({})",
                 res, if res == PP_TRUE { "PP_TRUE / handled" } else { "PP_FALSE / not handled" });
@@ -245,8 +264,8 @@ impl FlashPlayer {
 
         tracing::info!("Instance {} created for {}", instance_id, swf_path);
         *self.state.lock() = PlayerState::Running {
-            width: 0,
-            height: 0,
+            width: 800,
+            height: 600,
         };
 
         Ok(())
@@ -254,9 +273,12 @@ impl FlashPlayer {
 
     /// Notify the plugin of a view change (resize).
     pub fn notify_view_change(&self, width: i32, height: i32) {
+        tracing::debug!("notify_view_change: width={}, height={}", width, height);
         let Some(instance_id) = self.instance_id else { return };
         let Some(host) = ppapi_host::HOST.get() else { return };
         let Some(plugin) = &self.plugin else { return };
+
+        tracing::trace!("notify_view_change: posting view change to main thread for instance {}", instance_id);
 
         // Create a View resource.
         use ppapi_host::interfaces::view::ViewResource;
@@ -277,8 +299,9 @@ impl FlashPlayer {
         if let Some(ppp) = ppp_instance {
             if let Some(did_change_view) = ppp.DidChangeView {
                 unsafe {
-                    did_change_view(instance_id, view_id);
-                }
+                    did_change_view(instance_id, view_id)
+                };
+                tracing::debug!("notify_view_change: DidChangeView returned");
             }
         }
 
@@ -401,6 +424,20 @@ struct PlayerHostCallbacks {
     dialog_provider: Option<Arc<dyn DialogProvider>>,
 }
 
+/// Wrapper to make `Arc<dyn FileChooserProvider>` implement the trait as a `Box`.
+struct ArcFileChooserProvider(Arc<dyn FileChooserProvider>);
+
+impl FileChooserProvider for ArcFileChooserProvider {
+    fn show_file_chooser(
+        &self,
+        mode: player_ui_traits::FileChooserMode,
+        accept_types: &str,
+        suggested_name: &str,
+    ) -> Vec<String> {
+        self.0.show_file_chooser(mode, accept_types, suggested_name)
+    }
+}
+
 impl HostCallbacks for PlayerHostCallbacks {
     fn on_flush(&self, _graphics_2d: PP_Resource, pixels: &[u8], width: i32, height: i32) {
         let frame = FrameData {
@@ -486,6 +523,15 @@ fn create_document_url_loader(
 
     tracing::debug!("Creating document URLLoader for '{}'", url);
 
+    // Load the SWF data upfront so we can populate both the request info body
+    // and the loader response body from the same fetch.
+    let swf_data = if let Some(cb) = host.host_callbacks.lock().as_ref() {
+        cb.on_url_load(url)
+    } else {
+        Vec::new()
+    };
+    let body_len = swf_data.len();
+
     // 1. Create the URLRequestInfo resource (mimics ppb_url_request_info_create +
     //    set_property(URL) + set_property(METHOD)).
     let request_info = URLRequestInfoResource {
@@ -496,7 +542,7 @@ fn create_document_url_loader(
         follow_redirects: true,
         record_download_progress: false,
         record_upload_progress: false,
-        body: Vec::new(),
+        body: swf_data.clone(),
     };
     let request_info_id = host.resources.insert(instance_id, Box::new(request_info));
 
@@ -512,15 +558,10 @@ fn create_document_url_loader(
     };
     let loader_id = host.resources.insert(instance_id, Box::new(loader));
 
-    // 3. Call ppb_url_loader_open(loader, request_info, do_nothing_callback)
-    //    This goes through the same code path as the PPB API: reads the URL
-    //    from the request info, calls on_url_load() to fetch the data, fills
-    //    the loader's response_body, and marks open_complete/finished_loading.
-    //    We use a null callback (like freshplayerplugin's do_nothing) — the
-    //    open completes synchronously in our implementation.
-    if let Some(cb) = host.host_callbacks.lock().as_ref() {
-        let body = cb.on_url_load(url);
-        let body_len = body.len();
+    // 3. Fill the loader with the already-fetched data (mirrors
+    //    ppb_url_loader_open with a null/do_nothing callback — the open
+    //    completes synchronously in our implementation).
+    {
 
         //println!("Body: {:?}", body);
 
@@ -543,7 +584,7 @@ fn create_document_url_loader(
 
         host.resources.with_downcast_mut::<URLLoaderResource, _>(loader_id, |l| {
             l.url = Some(url.to_string());
-            l.response_body = body;
+            l.response_body = swf_data;
             l.read_offset = 0;
             l.open_complete = true;
             l.instance = instance_id;

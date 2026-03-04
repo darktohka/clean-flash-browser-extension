@@ -14,13 +14,19 @@ pub mod char_set;
 pub mod core;
 pub mod crypto;
 pub mod cursor_control;
+pub mod file_chooser;
+pub mod file_ref;
 pub mod flash;
 pub mod flash_clipboard;
 pub mod flash_drm;
 pub mod flash_file;
+pub mod flash_file_fileref;
+pub mod flash_font_file;
 pub mod flash_fullscreen;
+pub mod flash_menu;
 pub mod flash_message_loop;
 pub mod graphics2d;
+pub mod graphics3d;
 pub mod image_data;
 pub mod ime_input_event;
 pub mod input_event;
@@ -70,6 +76,7 @@ pub unsafe fn register_all(registry: &mut InterfaceRegistry) {
         self::view::register(registry);
         self::message_loop::register(registry);
         self::graphics2d::register(registry);
+        self::graphics3d::register(registry);
         self::image_data::register(registry);
         self::input_event::register(registry);
         self::url_loader::register(registry);
@@ -82,6 +89,9 @@ pub unsafe fn register_all(registry: &mut InterfaceRegistry) {
         self::flash_fullscreen::register(registry);
         self::flash_clipboard::register(registry);
         self::flash_file::register(registry);
+        self::flash_file_fileref::register(registry);
+        self::flash_font_file::register(registry);
+        self::flash_menu::register(registry);
         self::flash_message_loop::register(registry);
         self::opengles2::register(registry);
         self::printing::register(registry);
@@ -93,6 +103,8 @@ pub unsafe fn register_all(registry: &mut InterfaceRegistry) {
         self::var_deprecated::register(registry);
         self::pdf::register(registry);
         self::text_input::register(registry);
+        self::file_ref::register(registry);
+        self::file_chooser::register(registry);
         self::ime_input_event::register(registry);
         self::video_capture::register(registry);
     }

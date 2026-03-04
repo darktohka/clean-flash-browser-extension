@@ -257,8 +257,13 @@ unsafe extern "C" fn get_dir_contents(
     };
 
     let count = entries.len() as i32;
-    let layout = std::alloc::Layout::array::<PP_DirEntry_Dev>(entries.len()).unwrap();
+    // Allocate space for entries, ensuring at least 1 slot for valid pointer even if empty
+    let alloc_size = if entries.is_empty() { 1 } else { entries.len() };
+    let layout = std::alloc::Layout::array::<PP_DirEntry_Dev>(alloc_size).unwrap();
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) as *mut PP_DirEntry_Dev };
+    if ptr.is_null() {
+        return PP_ERROR_FAILED;
+    }
 
     for (i, entry) in entries.iter().enumerate() {
         let name = entry.file_name();
@@ -272,6 +277,8 @@ unsafe extern "C" fn get_dir_contents(
             };
         }
     }
+
+    tracing::trace!("PPB_Flash_File_ModuleLocal::GetDirContents: found {} entries", count);
 
     unsafe {
         *contents = PP_DirContents_Dev {
@@ -301,8 +308,10 @@ unsafe extern "C" fn free_dir_contents(
             let _ = unsafe { CString::from_raw(entry.name as *mut c_char) };
         }
     }
-    if !c.entries.is_null() && c.count > 0 {
-        let layout = std::alloc::Layout::array::<PP_DirEntry_Dev>(c.count as usize).unwrap();
+    // Deallocate the entries array (always has room for at least 1)
+    if !c.entries.is_null() {
+        let alloc_size = if c.count == 0 { 1 } else { c.count as usize };
+        let layout = std::alloc::Layout::array::<PP_DirEntry_Dev>(alloc_size).unwrap();
         unsafe { std::alloc::dealloc(c.entries as *mut u8, layout) };
     }
 }

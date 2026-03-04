@@ -60,6 +60,10 @@ impl FlashPlayerApp {
         ));
         player.set_dialog_provider(dialog_provider);
 
+        // Set up the file chooser provider (using rfd).
+        let file_chooser_provider = Arc::new(dialogs::RfdFileChooserProvider::new());
+        player.set_file_chooser_provider(file_chooser_provider);
+
         Self {
             player,
             frame_handle,
