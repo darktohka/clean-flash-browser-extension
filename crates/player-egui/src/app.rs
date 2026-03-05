@@ -7,11 +7,12 @@
 
 use eframe::egui;
 use parking_lot::Mutex;
-use player_core::FlashPlayer;
-use player_ui_traits::{FrameData, PlayerState};
+use player_core::{FlashPlayer, SharedFrameBuffer};
+use player_ui_traits::PlayerState;
 use ppapi_sys::*;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::dialogs;
 
@@ -19,8 +20,8 @@ use crate::dialogs;
 pub struct FlashPlayerApp {
     /// The player core (owns the PPAPI host and plugin).
     player: FlashPlayer,
-    /// Shared handle to the latest frame for rendering.
-    frame_handle: Arc<Mutex<Option<FrameData>>>,
+    /// Shared frame buffer for incremental texture updates.
+    frame_handle: Arc<Mutex<Option<SharedFrameBuffer>>>,
     /// Shared handle to the player state.
     state_handle: Arc<Mutex<PlayerState>>,
     /// The egui texture handle for the current frame.
@@ -57,7 +58,15 @@ impl FlashPlayerApp {
         let state_handle = player.state();
         let cursor_type = player.cursor_type();
 
+        // Tell the player core to wake egui whenever a new frame arrives.
+        let repaint_ctx = _cc.egui_ctx.clone();
+        player.set_repaint_callback(move || repaint_ctx.request_repaint());
+
         // Default plugin path — can be overridden.
+        #[cfg(windows)]
+        let plugin_path =
+            std::env::var("FLASH_PLUGIN_PATH").unwrap_or_else(|_| String::from("pepflashplayer.dll"));
+        #[cfg(not(windows))]
         let plugin_path =
             std::env::var("FLASH_PLUGIN_PATH").unwrap_or_else(|_| String::from("libpepflashplayer.so"));
 
@@ -97,15 +106,15 @@ impl FlashPlayerApp {
 
     /// Draw the menu bar.
     fn draw_menu_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        egui::menu::bar(ui, |ui| {
+        egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("📂 File", |ui| {
                 if ui.button("Open...").clicked() {
-                    ui.close_menu();
+                    ui.close();
                     self.handle_open_file();
                 }
 
                 if ui.button("Open URL...").clicked() {
-                    ui.close_menu();
+                    ui.close();
                     self.url_dialog_open = true;
                     self.url_input.clear();
                 }
@@ -113,7 +122,7 @@ impl FlashPlayerApp {
                 ui.separator();
 
                 if ui.button("Close").clicked() {
-                    ui.close_menu();
+                    ui.close();
                     self.handle_close();
                 }
 
@@ -231,33 +240,86 @@ impl FlashPlayerApp {
         self.url_dialog_open = open;
     }
 
-    /// Update the frame texture from the latest frame data.
+    /// Update the frame texture from the shared frame buffer.
+    ///
+    /// On the first frame (or after a size change) the full texture is
+    /// allocated.  Subsequent updates use partial GPU uploads covering
+    /// only the dirty region reported by the PPAPI host.
     fn update_frame_texture(&mut self, ctx: &egui::Context) {
-        // Take the frame data out of the mutex instead of cloning it,
-        // avoiding a full pixel-buffer copy.
-        let frame_opt = self.frame_handle.lock().take();
-        if let Some(mut frame) = frame_opt {
-            let size = (frame.width, frame.height);
-            if size != self.last_frame_size || self.frame_texture.is_none() {
-                self.last_frame_size = size;
-            }
+        // Scope the lock: extract dirty info and convert pixels, then release.
+        let update = {
+            let mut guard = self.frame_handle.lock();
+            let Some(ref mut buf) = *guard else { return };
+            let Some((dirty_x, dirty_y, dirty_w, dirty_h)) = buf.pending_dirty.take() else {
+                return;
+            };
 
-            // Convert BGRA_PREMUL → RGBA in-place using chunk-level swaps
-            // for better auto-vectorization.
-            for chunk in frame.pixels.chunks_exact_mut(4) {
-                chunk.swap(0, 2); // swap B and R
-            }
+            let frame_w = buf.width;
+            let frame_h = buf.height;
+            let need_full =
+                self.last_frame_size != (frame_w, frame_h) || self.frame_texture.is_none();
 
-            let image = egui::ColorImage::from_rgba_unmultiplied(
-                [frame.width as usize, frame.height as usize],
-                &frame.pixels,
-            );
+            let converted = if need_full {
+                // Convert the entire buffer BGRA_PREMUL → Color32.
+                buf.pixels
+                    .chunks_exact(4)
+                    .map(|bgra| {
+                        egui::Color32::from_rgba_premultiplied(
+                            bgra[2], bgra[1], bgra[0], bgra[3],
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                // Convert only the dirty sub-region.
+                let stride = buf.stride as usize;
+                let mut sub = Vec::with_capacity((dirty_w * dirty_h) as usize);
+                for row in 0..dirty_h {
+                    let y = (dirty_y + row) as usize;
+                    let off = y * stride + dirty_x as usize * 4;
+                    let end = off + dirty_w as usize * 4;
+                    for bgra in buf.pixels[off..end].chunks_exact(4) {
+                        sub.push(egui::Color32::from_rgba_premultiplied(
+                            bgra[2], bgra[1], bgra[0], bgra[3],
+                        ));
+                    }
+                }
+                sub
+            };
 
+            (need_full, converted, frame_w, frame_h, dirty_x, dirty_y, dirty_w, dirty_h)
+        }; // guard (and shared-frame lock) released here
+
+        let (need_full, pixels, frame_w, frame_h, dirty_x, dirty_y, dirty_w, dirty_h) = update;
+
+        if need_full {
+            // Size changed or first frame — (re)create the full texture.
+            self.last_frame_size = (frame_w, frame_h);
+            let image = egui::ColorImage {
+                size: [frame_w as usize, frame_h as usize],
+                pixels,
+                source_size: egui::Vec2::new(frame_w as f32, frame_h as f32),
+            };
             self.frame_texture = Some(ctx.load_texture(
                 "flash_frame",
                 image,
                 egui::TextureOptions::NEAREST,
             ));
+        } else {
+            // Partial update — upload only the dirty sub-region.
+            let sub_image = egui::ColorImage {
+                size: [dirty_w as usize, dirty_h as usize],
+                pixels,
+                source_size: egui::Vec2::new(dirty_w as f32, dirty_h as f32),
+            };
+            let tex_id = self.frame_texture.as_ref().unwrap().id();
+            ctx.tex_manager().write().set(
+                tex_id,
+                egui::epaint::ImageDelta::partial(
+                    [dirty_x as usize, dirty_y as usize],
+                    sub_image,
+                    egui::TextureOptions::NEAREST,
+                ),
+            );
         }
     }
 
@@ -754,10 +816,15 @@ impl eframe::App for FlashPlayerApp {
             self.draw_content(ui);
         });
 
-        // Request continuous repainting when running (for animation).
-        // Use ZERO duration to repaint every vsync without artificial throttling.
+        // Schedule the next repaint:
+        // • When running, poll the PPAPI main-thread message loop every
+        //   ~4 ms so that CallOnMainThread timers fire promptly.
+        //   New frames from Flash trigger an *immediate* repaint via the
+        //   repaint callback wired in `new()`, so we only need this for
+        //   timer dispatch — not for frame presentation.
+        // • When idle, egui sleeps until user input.
         if self.player.is_running() {
-            ctx.request_repaint_after(std::time::Duration::ZERO);
+            ctx.request_repaint_after(Duration::from_millis(16));
         }
     }
 

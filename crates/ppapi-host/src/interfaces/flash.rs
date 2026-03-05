@@ -133,11 +133,63 @@ unsafe extern "C" fn get_local_time_zone_offset(
 ) -> f64 {
     tracing::trace!("PPB_Flash::GetLocalTimeZoneOffset(instance={}, t={})", _instance, t);
     // Return the local timezone offset in seconds for the given UTC time.
-    // Use libc localtime_r for the conversion.
+    get_utc_offset_secs(t)
+}
+
+/// Platform-specific UTC offset calculation.
+#[cfg(unix)]
+fn get_utc_offset_secs(t: f64) -> f64 {
     let time_t = t as i64;
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     unsafe { libc::localtime_r(&time_t as *const i64, &mut tm) };
     tm.tm_gmtoff as f64
+}
+
+#[cfg(windows)]
+fn get_utc_offset_secs(_t: f64) -> f64 {
+    // Use Win32 GetTimeZoneInformation to obtain the current bias.
+    #[repr(C)]
+    struct SystemTime {
+        w_year: u16,
+        w_month: u16,
+        w_day_of_week: u16,
+        w_day: u16,
+        w_hour: u16,
+        w_minute: u16,
+        w_second: u16,
+        w_milliseconds: u16,
+    }
+    #[repr(C)]
+    struct TimeZoneInformation {
+        bias: i32,
+        standard_name: [u16; 32],
+        standard_date: SystemTime,
+        standard_bias: i32,
+        daylight_name: [u16; 32],
+        daylight_date: SystemTime,
+        daylight_bias: i32,
+    }
+    extern "system" {
+        fn GetTimeZoneInformation(lpTimeZoneInformation: *mut TimeZoneInformation) -> u32;
+    }
+    const TIME_ZONE_ID_DAYLIGHT: u32 = 2;
+    unsafe {
+        let mut tzi: TimeZoneInformation = std::mem::zeroed();
+        let result = GetTimeZoneInformation(&mut tzi);
+        // Bias is in minutes, west-positive.  We return seconds, east-positive.
+        let total_bias = tzi.bias
+            + if result == TIME_ZONE_ID_DAYLIGHT {
+                tzi.daylight_bias
+            } else {
+                tzi.standard_bias
+            };
+        (-total_bias as f64) * 60.0
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn get_utc_offset_secs(_t: f64) -> f64 {
+    0.0
 }
 
 unsafe extern "C" fn get_command_line_args(_module: PP_Module) -> PP_Var {
@@ -268,5 +320,7 @@ unsafe extern "C" fn enumerate_video_capture_devices(
 // ---------------------------------------------------------------------------
 
 fn num_cpus() -> i32 {
-    unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) as i32 }
+    std::thread::available_parallelism()
+        .map(|n| n.get() as i32)
+        .unwrap_or(1)
 }

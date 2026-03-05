@@ -51,7 +51,7 @@ impl Resource for FileRefResource {
 impl Drop for FileRefResource {
     fn drop(&mut self) {
         if let (FileRefType::Fd, Some(fd)) = (self.file_type, self.fd) {
-            unsafe { libc::close(fd) };
+            crate::filesystem::get_filesystem().close_handle(fd);
         }
     }
 }

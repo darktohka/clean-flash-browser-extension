@@ -4,12 +4,31 @@
 //! (player-ui-traits) to form the complete Flash player logic.
 
 use parking_lot::Mutex;
-use player_ui_traits::{DialogProvider, FileChooserProvider, FrameData, PlayerState};
+use player_ui_traits::{DialogProvider, FileChooserProvider, PlayerState};
 use ppapi_host::{HostCallbacks, HostState, PluginLoader};
 use ppapi_sys::*;
 use std::path::Path;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
+
+/// Shared frame buffer for incremental texture updates.
+///
+/// Maintains a mirror of the Graphics2D pixel buffer (BGRA_PREMUL) and
+/// tracks dirty regions.  The UI reads pending dirty rects and converts
+/// only the affected pixels for partial GPU texture uploads.
+pub struct SharedFrameBuffer {
+    /// Frame width in pixels.
+    pub width: u32,
+    /// Frame height in pixels.
+    pub height: u32,
+    /// Row stride in bytes (width × 4).
+    pub stride: u32,
+    /// Full BGRA_PREMUL pixel buffer, updated incrementally on each flush.
+    pub pixels: Vec<u8>,
+    /// Pending dirty rect `(x, y, w, h)` for the UI to consume.
+    /// `None` means no new data since the UI last read.
+    pub pending_dirty: Option<(u32, u32, u32, u32)>,
+}
 
 /// The main Flash Player controller.
 ///
@@ -22,8 +41,8 @@ pub struct FlashPlayer {
     instance_id: Option<PP_Instance>,
     /// Current player state.
     state: Arc<Mutex<PlayerState>>,
-    /// Latest frame data from the plugin, shared with the UI thread.
-    latest_frame: Arc<Mutex<Option<FrameData>>>,
+    /// Shared frame buffer for incremental updates, shared with the UI thread.
+    latest_frame: Arc<Mutex<Option<SharedFrameBuffer>>>,
     /// Current cursor type requested by the plugin (PP_CursorType_Dev).
     cursor_type: Arc<AtomicI32>,
     /// Path to the PepperFlash plugin .so file.
@@ -32,6 +51,8 @@ pub struct FlashPlayer {
     dialog_provider: Option<Arc<dyn DialogProvider>>,
     /// File chooser provider for native file dialogs (from the UI layer).
     file_chooser_provider: Option<Arc<dyn FileChooserProvider>>,
+    /// Callback invoked (from any thread) when a new frame is flushed.
+    repaint_callback: Arc<Mutex<Option<Box<dyn Fn() + Send + Sync>>>>,
 }
 
 impl FlashPlayer {
@@ -46,7 +67,16 @@ impl FlashPlayer {
             plugin_path: None,
             dialog_provider: None,
             file_chooser_provider: None,
+            repaint_callback: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Set a callback that is invoked whenever a new frame is flushed.
+    ///
+    /// The callback may be called from any thread.  Typically the UI
+    /// layer passes a closure that calls `egui::Context::request_repaint`.
+    pub fn set_repaint_callback(&mut self, cb: impl Fn() + Send + Sync + 'static) {
+        *self.repaint_callback.lock() = Some(Box::new(cb));
     }
 
     /// Set the path to the PepperFlash plugin .so.
@@ -64,8 +94,8 @@ impl FlashPlayer {
         self.file_chooser_provider = Some(provider);
     }
 
-    /// Get a handle to the latest frame (for the UI to read).
-    pub fn latest_frame(&self) -> Arc<Mutex<Option<FrameData>>> {
+    /// Get a handle to the shared frame buffer (for the UI to read).
+    pub fn latest_frame(&self) -> Arc<Mutex<Option<SharedFrameBuffer>>> {
         self.latest_frame.clone()
     }
 
@@ -119,9 +149,10 @@ impl FlashPlayer {
         }
 
         host.set_callbacks(Box::new(PlayerHostCallbacks {
-            latest_frame: frame_handle,
+            shared_frame: frame_handle,
             cursor_type: self.cursor_type.clone(),
             dialog_provider: dialog,
+            repaint_callback: self.repaint_callback.clone(),
         }));
 
         // If a plugin path is set, load it.
@@ -454,14 +485,40 @@ impl FlashPlayer {
                     if let Some(ppp) = ppp_instance {
                         if let Some(did_destroy) = ppp.DidDestroy {
                             unsafe {
-                                did_destroy(instance_id);
-                            }
+                                did_destroy(instance_id)
+                            };
+                            tracing::info!(
+                                "close: PPP_Instance::DidDestroy for instance {}",
+                                instance_id
+                            );
                         }
                     }
                 }
 
                 host.resources.remove_instance_resources(instance_id);
                 host.instances.destroy_instance(instance_id);
+
+                // Reset the main message loop channel, invalidating all
+                // existing MessageLoopPoster handles held by background
+                // threads (URLLoader I/O, etc.).  This ensures:
+                // 1. Stale callbacks already in the queue are dropped.
+                // 2. Any future post_work from background threads will
+                //    fail harmlessly (channel disconnected).
+                // 3. A fresh channel is ready for the next instance.
+                let ml_id = host.main_message_loop_resource.load(
+                    std::sync::atomic::Ordering::SeqCst,
+                );
+                if ml_id != 0 {
+                    let new_poster = host.resources.with_downcast_mut::<
+                        ppapi_host::interfaces::message_loop::MessageLoopResource,
+                        _,
+                    >(ml_id, |ml| {
+                        ml.loop_handle.reset_channel()
+                    });
+                    if let Some(poster) = new_poster {
+                        *host.main_loop_poster.lock() = Some(poster);
+                    }
+                }
             }
         }
 
@@ -651,9 +708,10 @@ impl Drop for FlashPlayer {
 // ===========================================================================
 
 struct PlayerHostCallbacks {
-    latest_frame: Arc<Mutex<Option<FrameData>>>,
+    shared_frame: Arc<Mutex<Option<SharedFrameBuffer>>>,
     cursor_type: Arc<AtomicI32>,
     dialog_provider: Option<Arc<dyn DialogProvider>>,
+    repaint_callback: Arc<Mutex<Option<Box<dyn Fn() + Send + Sync>>>>,
 }
 
 /// Wrapper to make `Arc<dyn FileChooserProvider>` implement the trait as a `Box`.
@@ -671,13 +729,64 @@ impl FileChooserProvider for ArcFileChooserProvider {
 }
 
 impl HostCallbacks for PlayerHostCallbacks {
-    fn on_flush(&self, _graphics_2d: PP_Resource, pixels: &[u8], width: i32, height: i32) {
-        let frame = FrameData {
-            pixels: pixels.to_vec(),
-            width: width as u32,
-            height: height as u32,
-        };
-        *self.latest_frame.lock() = Some(frame);
+    fn on_flush(&self, _graphics_2d: PP_Resource, pixels: &[u8],
+                width: i32, height: i32, stride: i32,
+                dirty_x: i32, dirty_y: i32, dirty_w: i32, dirty_h: i32) {
+        let w = width as u32;
+        let h = height as u32;
+        let s = stride as u32;
+        let dx = dirty_x as u32;
+        let dy = dirty_y as u32;
+        let dw = dirty_w as u32;
+        let dh = dirty_h as u32;
+
+        let mut guard = self.shared_frame.lock();
+        let buf = guard.get_or_insert_with(|| SharedFrameBuffer {
+            width: 0,
+            height: 0,
+            stride: 0,
+            pixels: Vec::new(),
+            pending_dirty: None,
+        });
+
+        // Handle size change: reallocate and copy the full frame.
+        if buf.width != w || buf.height != h {
+            buf.width = w;
+            buf.height = h;
+            buf.stride = s;
+            let total = (s * h) as usize;
+            buf.pixels.resize(total, 0);
+            let copy_len = total.min(pixels.len());
+            buf.pixels[..copy_len].copy_from_slice(&pixels[..copy_len]);
+            buf.pending_dirty = Some((0, 0, w, h));
+        } else {
+            // Copy only the dirty region from the source buffer.
+            for row in 0..dh {
+                let y = dy + row;
+                let off = (y * s + dx * 4) as usize;
+                let len = (dw * 4) as usize;
+                if off + len <= buf.pixels.len() && off + len <= pixels.len() {
+                    buf.pixels[off..off + len].copy_from_slice(&pixels[off..off + len]);
+                }
+            }
+            // Accumulate dirty rect with any pending updates.
+            buf.pending_dirty = Some(match buf.pending_dirty {
+                Some((ex, ey, ew, eh)) => {
+                    let x1 = ex.min(dx);
+                    let y1 = ey.min(dy);
+                    let x2 = (ex + ew).max(dx + dw);
+                    let y2 = (ey + eh).max(dy + dh);
+                    (x1, y1, x2 - x1, y2 - y1)
+                }
+                None => (dx, dy, dw, dh),
+            });
+        }
+        drop(guard);
+
+        // Wake the UI thread so it picks up the new frame promptly.
+        if let Some(ref cb) = *self.repaint_callback.lock() {
+            cb();
+        }
     }
 
     fn on_url_open(

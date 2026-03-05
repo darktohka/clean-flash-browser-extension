@@ -411,7 +411,8 @@ unsafe extern "C" fn swap_buffers(context: PP_Resource, callback: PP_CompletionC
     // matching the pattern used by Graphics2D::Flush.
     if !callback.is_null() {
         if let Some(poster) = &*host.main_loop_poster.lock() {
-            poster.post_work(callback, 0, PP_OK);
+            // Use a ~16 ms delay to emulate vsync-like throttling.
+            poster.post_work(callback, 16, PP_OK);
             return PP_OK_COMPLETIONPENDING;
         }
     }

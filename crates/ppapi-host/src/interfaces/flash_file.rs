@@ -2,7 +2,11 @@
 //!
 //! Flash uses this to store Local Shared Objects (LSOs/cookies) and settings.
 //! We map everything under a data directory.
+//!
+//! File I/O is delegated to the active [`FlashFileSystem`] provider
+//! (see [`crate::filesystem`]).
 
+use crate::filesystem;
 use crate::interface_registry::InterfaceRegistry;
 use ppapi_sys::*;
 use std::ffi::{c_char, CStr, CString};
@@ -29,9 +33,20 @@ pub unsafe fn register(registry: &mut InterfaceRegistry) {
 
 /// Get the Flash data directory.
 fn data_dir() -> PathBuf {
-    let base = std::env::var("XDG_DATA_HOME")
-        .or_else(|_| std::env::var("HOME").map(|h| format!("{}/.local/share", h)))
-        .unwrap_or_else(|_| "/tmp".to_string());
+    #[cfg(unix)]
+    let base = {
+        std::env::var("XDG_DATA_HOME")
+            .or_else(|_| std::env::var("HOME").map(|h| format!("{}/.local/share", h)))
+            .unwrap_or_else(|_| "/tmp".to_string())
+    };
+    #[cfg(windows)]
+    let base = {
+        std::env::var("APPDATA")
+            .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned())
+    };
+    #[cfg(not(any(unix, windows)))]
+    let base = std::env::temp_dir().to_string_lossy().into_owned();
+
     let dir = PathBuf::from(base).join("flash-player").join("PepperFlash");
     let _ = std::fs::create_dir_all(&dir);
     dir
@@ -93,50 +108,14 @@ unsafe extern "C" fn open_file(
         return PP_ERROR_NOACCESS;
     };
 
-    // Map PP_FileOpenFlags to libc flags
-    // PP_FILEOPENFLAG_READ = 1, WRITE = 2, CREATE = 4, TRUNCATE = 8, EXCLUSIVE = 16, APPEND = 32
-    let mut flags = 0i32;
-    
-    // Handle access mode (mutually exclusive)
-    if (mode & 1) != 0 && (mode & 2) != 0 {
-        // Both READ and WRITE
-        flags |= libc::O_RDWR;
-    } else if (mode & 2) != 0 {
-        // WRITE only
-        flags |= libc::O_WRONLY;
-    } else if (mode & 1) != 0 {
-        // READ only
-        flags |= libc::O_RDONLY;
-    }
-    
-    // Handle other flags
-    if (mode & 4) != 0 { flags |= libc::O_CREAT; }      // CREATE
-    if (mode & 8) != 0 { flags |= libc::O_TRUNC; }      // TRUNCATE
-    if (mode & 16) != 0 { flags |= libc::O_EXCL; }      // EXCLUSIVE
-    if (mode & 32) != 0 { flags |= libc::O_APPEND; }    // APPEND
-    
-    // Only ensure parent dir exists if we're creating the file
-    if (mode & 4) != 0 {
-        if let Some(parent) = abs_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+    let fs = filesystem::get_filesystem();
+    match fs.open_file(&abs_path.to_string_lossy(), mode) {
+        Ok(handle) => {
+            unsafe { *file = handle };
+            PP_OK
         }
+        Err(e) => e,
     }
-
-    let c_path = match CString::new(abs_path.to_string_lossy().as_bytes()) {
-        Ok(c) => c,
-        Err(_) => return PP_ERROR_FAILED,
-    };
-
-    let fd = unsafe { libc::open(c_path.as_ptr(), flags, 0o666) };
-    if fd < 0 {
-        match unsafe { *libc::__errno_location() } {
-            libc::ENOENT => return PP_ERROR_FILENOTFOUND,
-            libc::EACCES => return PP_ERROR_NOACCESS,
-            _ => return PP_ERROR_FAILED,
-        }
-    }
-    unsafe { *file = fd };
-    PP_OK
 }
 
 unsafe extern "C" fn rename_file(
@@ -393,16 +372,12 @@ unsafe extern "C" fn create_temporary_file(
         return PP_ERROR_BADARGUMENT;
     }
     let dir = data_dir();
-    let template = format!("{}/tmpXXXXXX", dir.to_string_lossy());
-    let c_template = match CString::new(template.as_bytes()) {
-        Ok(c) => c,
-        Err(_) => return PP_ERROR_FAILED,
-    };
-    let mut buf = c_template.into_bytes_with_nul();
-    let fd = unsafe { libc::mkstemp(buf.as_mut_ptr() as *mut c_char) };
-    if fd < 0 {
-        return PP_ERROR_FAILED;
+    let fs = filesystem::get_filesystem();
+    match fs.create_temp_file(&dir.to_string_lossy()) {
+        Ok(handle) => {
+            unsafe { *file = handle };
+            PP_OK
+        }
+        Err(e) => e,
     }
-    unsafe { *file = fd };
-    PP_OK
 }

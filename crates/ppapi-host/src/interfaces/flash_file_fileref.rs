@@ -2,13 +2,16 @@
 //!
 //! Flash uses this interface to open/query files referred to by PPB_FileRef
 //! resources (typically files chosen via the file chooser dialog).
-//! The two functions are OpenFile (returns a file descriptor) and QueryFile
+//! The two functions are OpenFile (returns a file handle) and QueryFile
 //! (fills a PP_FileInfo struct).
+//!
+//! File I/O is delegated to the active [`FlashFileSystem`] provider
+//! (see [`crate::filesystem`]).
 
+use crate::filesystem;
 use crate::interface_registry::InterfaceRegistry;
 use super::file_ref::FileRefResource;
 use ppapi_sys::*;
-use std::ffi::CString;
 
 use super::super::HOST;
 
@@ -31,34 +34,12 @@ pub unsafe fn register(registry: &mut InterfaceRegistry) {
 // Implementation
 // ---------------------------------------------------------------------------
 
-/// Map PPAPI file open flags to libc open() flags.
-fn pp_mode_to_open_flags(mode: i32) -> i32 {
-    let mut flags = 0i32;
-
-    let read = mode & PP_FILEOPENFLAG_READ != 0;
-    let write = mode & PP_FILEOPENFLAG_WRITE != 0;
-
-    if read && write {
-        flags |= libc::O_RDWR;
-    } else if write {
-        flags |= libc::O_WRONLY;
-    } else {
-        flags |= libc::O_RDONLY;
-    }
-
-    if mode & PP_FILEOPENFLAG_CREATE != 0 {
-        flags |= libc::O_CREAT;
-    }
-    if mode & PP_FILEOPENFLAG_TRUNCATE != 0 {
-        flags |= libc::O_TRUNC;
-    }
-    if mode & PP_FILEOPENFLAG_EXCLUSIVE != 0 {
-        flags |= libc::O_EXCL;
-    }
-    if mode & PP_FILEOPENFLAG_APPEND != 0 {
-        flags |= libc::O_APPEND;
-    }
-    flags
+/// Map PPAPI file open flags to the mode integer expected by the filesystem
+/// provider.  (The provider accepts PP_FILEOPENFLAG_* bits directly.)
+fn pp_mode_to_provider_flags(mode: i32) -> i32 {
+    // The filesystem provider already understands PP_FILEOPENFLAG_* bits,
+    // so pass them through unchanged.
+    mode
 }
 
 unsafe extern "C" fn open_file(
@@ -86,24 +67,15 @@ unsafe extern "C" fn open_file(
         return PP_ERROR_BADRESOURCE;
     };
 
-    let flags = pp_mode_to_open_flags(mode);
-    let c_path = match CString::new(path.as_bytes()) {
-        Ok(c) => c,
-        Err(_) => return PP_ERROR_FAILED,
-    };
-
-    let fd = unsafe { libc::open(c_path.as_ptr(), flags, 0o644) };
-    if fd < 0 {
-        let err = unsafe { *libc::__errno_location() };
-        return match err {
-            libc::ENOENT => PP_ERROR_FILENOTFOUND,
-            libc::EACCES => PP_ERROR_NOACCESS,
-            _ => PP_ERROR_FAILED,
-        };
+    let _flags = pp_mode_to_provider_flags(mode);
+    let fs = filesystem::get_filesystem();
+    match fs.open_file(&path, mode) {
+        Ok(handle) => {
+            unsafe { *file = handle };
+            PP_OK
+        }
+        Err(e) => e,
     }
-
-    unsafe { *file = fd };
-    PP_OK
 }
 
 unsafe extern "C" fn query_file(
@@ -131,32 +103,26 @@ unsafe extern "C" fn query_file(
         return PP_ERROR_BADRESOURCE;
     };
 
-    let mut sb: libc::stat = unsafe { std::mem::zeroed() };
-    let ret = if file_type == super::file_ref::FileRefType::Name {
+    let fs = filesystem::get_filesystem();
+
+    let fi = if file_type == super::file_ref::FileRefType::Name {
         let path_str = path.as_deref().unwrap_or("");
-        let c_path = match CString::new(path_str.as_bytes()) {
-            Ok(c) => c,
-            Err(_) => return PP_ERROR_FAILED,
-        };
-        unsafe { libc::stat(c_path.as_ptr(), &mut sb) }
+        match fs.query_file(path_str) {
+            Ok(fi) => fi,
+            Err(e) => return e,
+        }
     } else if let Some(fd_val) = fd {
-        unsafe { libc::fstat(fd_val, &mut sb) }
+        match fs.fstat_handle(fd_val) {
+            Ok(fi) => fi,
+            Err(e) => return e,
+        }
     } else {
         return PP_ERROR_FAILED;
     };
 
-    if ret == -1 {
-        let err = unsafe { *libc::__errno_location() };
-        return match err {
-            libc::ENOENT => PP_ERROR_FILENOTFOUND,
-            libc::EACCES => PP_ERROR_NOACCESS,
-            _ => PP_ERROR_FAILED,
-        };
-    }
-
-    let pp_type = if (sb.st_mode & libc::S_IFMT) == libc::S_IFREG {
+    let pp_type = if fi.is_file {
         PP_FILETYPE_REGULAR
-    } else if (sb.st_mode & libc::S_IFMT) == libc::S_IFDIR {
+    } else if fi.is_dir {
         PP_FILETYPE_DIRECTORY
     } else {
         PP_FILETYPE_OTHER
@@ -164,12 +130,12 @@ unsafe extern "C" fn query_file(
 
     unsafe {
         *info = PP_FileInfo {
-            size: sb.st_size,
+            size: fi.size,
             type_: pp_type,
             system_type: PP_FILESYSTEMTYPE_EXTERNAL,
-            creation_time: sb.st_ctime as f64,
-            last_access_time: sb.st_atime as f64,
-            last_modified_time: sb.st_mtime as f64,
+            creation_time: fi.creation_time,
+            last_access_time: fi.last_access_time,
+            last_modified_time: fi.last_modified_time,
         };
     }
     PP_OK

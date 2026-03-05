@@ -12,7 +12,7 @@ ppapi-host = { workspace = true }
 ppapi-sys = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-eframe = "0.31"
-egui = "0.31"
-rfd = "0.15"
+eframe = "0.33"
+egui = "0.33"
+rfd = "0.17"
 parking_lot = "0.12"

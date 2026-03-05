@@ -15,6 +15,8 @@ pub struct Graphics2DResource {
     /// Pixel buffer: BGRA_PREMUL, row-major, `stride` bytes per row.
     pub pixels: Vec<u8>,
     pub stride: i32,
+    /// Accumulated dirty rect `(x, y, w, h)` since last flush.
+    pub dirty_rect: Option<(i32, i32, i32, i32)>,
 }
 
 impl Resource for Graphics2DResource {
@@ -41,6 +43,7 @@ impl Graphics2DResource {
             scale: 1.0,
             pixels: vec![0u8; len],
             stride,
+            dirty_rect: None,
         }
     }
 }
@@ -140,6 +143,7 @@ unsafe extern "C" fn paint_image_data(
     top_left: *const PP_Point,
     src_rect: *const PP_Rect,
 ) {
+    //return;
     tracing::debug!(
         "PPB_Graphics2D::PaintImageData(graphics_2d={}, image_data={}, top_left={:?}, src_rect={:?})",
         graphics_2d,
@@ -214,6 +218,25 @@ unsafe extern "C" fn paint_image_data(
                             .copy_from_slice(&img_pixels[src_row_off..src_row_off + byte_count]);
                     }
                 }
+
+                // Accumulate dirty rect (clipped to destination bounds).
+                let clip_x = (tl.x + src.point.x).max(0);
+                let clip_y = (tl.y + src.point.y).max(0);
+                let clip_r = (tl.x + src.point.x + src.size.width).min(g.size.width);
+                let clip_b = (tl.y + src.point.y + src.size.height).min(g.size.height);
+                if clip_x < clip_r && clip_y < clip_b {
+                    let new_dirty = (clip_x, clip_y, clip_r - clip_x, clip_b - clip_y);
+                    g.dirty_rect = Some(match g.dirty_rect {
+                        Some((ex, ey, ew, eh)) => {
+                            let x1 = ex.min(new_dirty.0);
+                            let y1 = ey.min(new_dirty.1);
+                            let x2 = (ex + ew).max(new_dirty.0 + new_dirty.2);
+                            let y2 = (ey + eh).max(new_dirty.1 + new_dirty.3);
+                            (x1, y1, x2 - x1, y2 - y1)
+                        }
+                        None => new_dirty,
+                    });
+                }
             },
         );
 }
@@ -227,6 +250,7 @@ unsafe extern "C" fn scroll(
 }
 
 unsafe extern "C" fn replace_contents(graphics_2d: PP_Resource, image_data: PP_Resource) {
+    //return;
     let Some(host) = HOST.get() else {
         return;
     };
@@ -240,6 +264,7 @@ unsafe extern "C" fn replace_contents(graphics_2d: PP_Resource, image_data: PP_R
             |img, g| {
                 if img.pixels.len() == g.pixels.len() {
                     g.pixels.copy_from_slice(&img.pixels);
+                    g.dirty_rect = Some((0, 0, g.size.width, g.size.height));
                 }
             },
         );
@@ -255,6 +280,14 @@ unsafe extern "C" fn flush(graphics_2d: PP_Resource, callback: PP_CompletionCall
         return PP_ERROR_FAILED;
     };
 
+    //if !callback.is_null() {
+    //    if let Some(poster) = &*host.main_loop_poster.lock() {
+    //        poster.post_work(callback, 0, PP_OK);
+    //        return PP_OK_COMPLETIONPENDING;
+    //    }
+    //}
+//
+    //return crate::callback::complete_immediately(callback, PP_OK);
     // Find which instance owns this graphics resource.
     let instance_id = match host.resources.get_instance(graphics_2d) {
         Some(id) => id,
@@ -287,15 +320,21 @@ unsafe extern "C" fn flush(graphics_2d: PP_Resource, callback: PP_CompletionCall
         inst.graphics_in_progress = true;
     });
 
-    // Read the current pixel data and notify the host callbacks.
-    // Call on_flush inside the resource closure to avoid cloning
-    // the entire pixel buffer — on_flush only stores data in an
-    // Arc<Mutex> so there is no resource-manager re-entry risk.
+    // Read the dirty rect and pixel data, then notify host callbacks.
+    // Use with_downcast_mut to atomically read+clear the dirty rect.
     let callbacks_guard = host.host_callbacks.lock();
     host.resources
-        .with_downcast::<Graphics2DResource, _>(graphics_2d, |g| {
-            if let Some(cb) = callbacks_guard.as_ref() {
-                cb.on_flush(graphics_2d, &g.pixels, g.size.width, g.size.height);
+        .with_downcast_mut::<Graphics2DResource, _>(graphics_2d, |g| {
+            if let Some((dx, dy, dw, dh)) = g.dirty_rect.take() {
+                if dw > 0 && dh > 0 {
+                    if let Some(cb) = callbacks_guard.as_ref() {
+                        cb.on_flush(
+                            graphics_2d, &g.pixels,
+                            g.size.width, g.size.height, g.stride,
+                            dx, dy, dw, dh,
+                        );
+                    }
+                }
             }
         });
     drop(callbacks_guard);
@@ -309,7 +348,10 @@ unsafe extern "C" fn flush(graphics_2d: PP_Resource, callback: PP_CompletionCall
 
     if !callback.is_null() {
         if let Some(poster) = &*host.main_loop_poster.lock() {
-            poster.post_work(callback, 0, PP_OK);
+            // Use a ~16 ms delay to emulate vsync-like throttling.
+            // Without this, the plugin renders as fast as possible,
+            // creating a tight render loop that pegs the CPU.
+            poster.post_work(callback, 16, PP_OK);
             return PP_OK_COMPLETIONPENDING;
         }
     }
@@ -336,7 +378,7 @@ unsafe extern "C" fn set_scale(resource: PP_Resource, scale: f32) -> PP_Bool {
 }
 
 unsafe extern "C" fn get_scale(resource: PP_Resource) -> f32 {
-    tracing::debug!("PPB_Graphics2D::GetScale(resource={})", resource);
+    tracing::info!("PPB_Graphics2D::GetScale(resource={})", resource);
     HOST.get()
         .and_then(|h| {
             h.resources

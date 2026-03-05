@@ -1,14 +1,67 @@
 //! PPB_NetAddress_Private;1.1 / 1.0 / 0.1 implementation.
 //!
 //! Provides operations on opaque `PP_NetAddress_Private` structures.
-//! Internally the `data` field stores a `sockaddr_in` (IPv4) or
-//! `sockaddr_in6` (IPv6) in network byte order.
+//! Internally the `data` field stores a `SockAddrIn` (IPv4) or
+//! `SockAddrIn6` (IPv6) in network byte order.
+//!
+//! We define our own portable socket structs so we don't depend on
+//! platform-specific `libc` types that aren't available everywhere.
 
 use crate::interface_registry::InterfaceRegistry;
 use ppapi_sys::*;
 use std::ffi::c_void;
 use std::mem;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
+
+// ---------------------------------------------------------------------------
+// Portable socket address definitions
+// ---------------------------------------------------------------------------
+
+/// Address family constants.  These values are identical on Windows and Unix
+/// for IPv4 (2).  IPv6 differs (10 on Linux, 23 on Windows) so we use a
+/// compile-time constant.
+const AF_INET: i32 = 2;
+const AF_UNSPEC: i32 = 0;
+
+#[cfg(unix)]
+const AF_INET6: i32 = 10;
+#[cfg(windows)]
+const AF_INET6: i32 = 23;
+#[cfg(not(any(unix, windows)))]
+const AF_INET6: i32 = 10; // Fallback to Linux value.
+
+/// Portable `sockaddr_in`.  Layout is identical on all mainstream platforms.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct SockAddrIn {
+    sin_family: u16,
+    sin_port: u16,
+    sin_addr: InAddr,
+    sin_zero: [u8; 8],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct InAddr {
+    s_addr: u32,
+}
+
+/// Portable `sockaddr_in6`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct SockAddrIn6 {
+    sin6_family: u16,
+    sin6_port: u16,
+    sin6_flowinfo: u32,
+    sin6_addr: In6Addr,
+    sin6_scope_id: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct In6Addr {
+    s6_addr: [u8; 16],
+}
 
 // ---------------------------------------------------------------------------
 // Internal helpers: PP_NetAddress_Private ↔ SocketAddr conversion
@@ -22,21 +75,21 @@ pub fn addr_to_socketaddr(addr: &PP_NetAddress_Private) -> Option<SocketAddr> {
     // We store sockaddr_in / sockaddr_in6 directly in `data`.
     let family = u16::from_ne_bytes([addr.data[0], addr.data[1]]);
     match family as i32 {
-        libc::AF_INET => {
-            if (addr.size as usize) < mem::size_of::<libc::sockaddr_in>() {
+        AF_INET => {
+            if (addr.size as usize) < mem::size_of::<SockAddrIn>() {
                 return None;
             }
-            let sa: libc::sockaddr_in =
+            let sa: SockAddrIn =
                 unsafe { std::ptr::read_unaligned(addr.data.as_ptr() as *const _) };
             let ip = Ipv4Addr::from(u32::from_be(sa.sin_addr.s_addr));
             let port = u16::from_be(sa.sin_port);
             Some(SocketAddr::V4(SocketAddrV4::new(ip, port)))
         }
-        libc::AF_INET6 => {
-            if (addr.size as usize) < mem::size_of::<libc::sockaddr_in6>() {
+        AF_INET6 => {
+            if (addr.size as usize) < mem::size_of::<SockAddrIn6>() {
                 return None;
             }
-            let sa: libc::sockaddr_in6 =
+            let sa: SockAddrIn6 =
                 unsafe { std::ptr::read_unaligned(addr.data.as_ptr() as *const _) };
             let ip = Ipv6Addr::from(sa.sin6_addr.s6_addr);
             let port = u16::from_be(sa.sin6_port);
@@ -52,11 +105,11 @@ pub fn socketaddr_to_addr(sa: &SocketAddr, out: &mut PP_NetAddress_Private) {
     out.data = [0u8; 128];
     match sa {
         SocketAddr::V4(v4) => {
-            let mut sin: libc::sockaddr_in = unsafe { mem::zeroed() };
-            sin.sin_family = libc::AF_INET as u16;
+            let mut sin: SockAddrIn = unsafe { mem::zeroed() };
+            sin.sin_family = AF_INET as u16;
             sin.sin_port = v4.port().to_be();
             sin.sin_addr.s_addr = u32::from(*v4.ip()).to_be();
-            let size = mem::size_of::<libc::sockaddr_in>();
+            let size = mem::size_of::<SockAddrIn>();
             out.size = size as u32;
             unsafe {
                 std::ptr::copy_nonoverlapping(
@@ -67,12 +120,12 @@ pub fn socketaddr_to_addr(sa: &SocketAddr, out: &mut PP_NetAddress_Private) {
             }
         }
         SocketAddr::V6(v6) => {
-            let mut sin6: libc::sockaddr_in6 = unsafe { mem::zeroed() };
-            sin6.sin6_family = libc::AF_INET6 as u16;
+            let mut sin6: SockAddrIn6 = unsafe { mem::zeroed() };
+            sin6.sin6_family = AF_INET6 as u16;
             sin6.sin6_port = v6.port().to_be();
             sin6.sin6_addr.s6_addr = v6.ip().octets();
             sin6.sin6_scope_id = v6.scope_id();
-            let size = mem::size_of::<libc::sockaddr_in6>();
+            let size = mem::size_of::<SockAddrIn6>();
             out.size = size as u32;
             unsafe {
                 std::ptr::copy_nonoverlapping(
@@ -88,7 +141,7 @@ pub fn socketaddr_to_addr(sa: &SocketAddr, out: &mut PP_NetAddress_Private) {
 /// Get the address family from a PP_NetAddress_Private.
 fn get_family_raw(addr: &PP_NetAddress_Private) -> i32 {
     if addr.size == 0 {
-        return libc::AF_UNSPEC;
+        return AF_UNSPEC;
     }
     let family = u16::from_ne_bytes([addr.data[0], addr.data[1]]);
     family as i32
@@ -200,8 +253,8 @@ unsafe extern "C" fn get_family(
     }
     let a = unsafe { &*addr };
     match get_family_raw(a) {
-        f if f == libc::AF_INET => PP_NETADDRESSFAMILY_PRIVATE_IPV4,
-        f if f == libc::AF_INET6 => PP_NETADDRESSFAMILY_PRIVATE_IPV6,
+        f if f == AF_INET => PP_NETADDRESSFAMILY_PRIVATE_IPV4,
+        f if f == AF_INET6 => PP_NETADDRESSFAMILY_PRIVATE_IPV6,
         _ => PP_NETADDRESSFAMILY_PRIVATE_UNSPECIFIED,
     }
 }

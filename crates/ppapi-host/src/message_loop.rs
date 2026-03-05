@@ -25,6 +25,9 @@ pub struct MessageLoop {
     destroyed: bool,
     /// Whether this is the main-thread message loop (cannot be Run or PostQuit).
     is_main_thread_loop: bool,
+    /// Work items that were received but not yet ready (deferred/delayed).
+    /// Kept here to avoid re-posting them to the channel on every poll.
+    deferred: Vec<WorkItem>,
 }
 
 impl MessageLoop {
@@ -38,7 +41,38 @@ impl MessageLoop {
             depth: 0,
             destroyed: false,
             is_main_thread_loop: false,
+            deferred: Vec::new(),
         }
+    }
+
+    /// Clear all pending work items (channel + deferred).
+    ///
+    /// Used during shutdown to discard stale callbacks that may hold
+    /// dangling pointers into a destroyed plugin instance.
+    pub fn clear_pending(&mut self) {
+        // Drain the channel.
+        while self.receiver.try_recv().is_ok() {}
+        // Clear deferred items.
+        self.deferred.clear();
+    }
+
+    /// Replace the internal channel with a fresh one, invalidating all
+    /// existing `MessageLoopPoster` handles.
+    ///
+    /// After this call, any background thread holding an old
+    /// `MessageLoopPoster` will get `PP_ERROR_FAILED` when it tries to
+    /// `post_work` (because the old receiver has been dropped).
+    ///
+    /// Returns a new `MessageLoopPoster` for the fresh channel.
+    pub fn reset_channel(&mut self) -> MessageLoopPoster {
+        // Drop the old receiver and sender — this disconnects all
+        // outstanding `MessageLoopPoster` clones.
+        let (sender, receiver) = unbounded();
+        self.sender = sender;
+        self.receiver = receiver;
+        // Clear deferred items from the old channel.
+        self.deferred.clear();
+        self.poster()
     }
 
     /// Mark this loop as the main-thread message loop.
@@ -194,7 +228,22 @@ impl MessageLoop {
     /// caller actually invokes the callbacks.
     pub fn drain_ready(&mut self) -> Vec<(PP_CompletionCallback, i32)> {
         let mut ready: Vec<(PP_CompletionCallback, i32)> = Vec::new();
-        let mut deferred: Vec<WorkItem> = Vec::new();
+
+        // First, drain ready items from the deferred list (items from
+        // previous polls that weren't ready yet).  This avoids
+        // receiving-and-re-sending on the channel every poll cycle.
+        let now = Instant::now();
+        let mut i = 0;
+        while i < self.deferred.len() {
+            if self.deferred[i].fire_at <= now {
+                let item = self.deferred.swap_remove(i);
+                ready.push((item.callback, item.result));
+            } else {
+                i += 1;
+            }
+        }
+
+        // Then drain the channel for newly posted items.
         loop {
             match self.receiver.try_recv() {
                 Ok(item) => {
@@ -203,21 +252,16 @@ impl MessageLoop {
                         continue;
                     }
 
-                    let now = Instant::now();
-                    if item.fire_at > now {
-                        // Not ready yet — save for re-posting.
-                        deferred.push(item);
-                    } else {
+                    if item.fire_at <= now {
                         ready.push((item.callback, item.result));
+                    } else {
+                        // Not ready yet — stash for future polls.
+                        self.deferred.push(item);
                     }
                 }
                 Err(crossbeam_channel::TryRecvError::Empty) => break,
                 Err(crossbeam_channel::TryRecvError::Disconnected) => break,
             }
-        }
-        // Re-post deferred items.
-        for item in deferred {
-            let _ = self.sender.send(item);
         }
         ready
     }

@@ -4,6 +4,7 @@
 //! resources, interface dispatch, threading, and completion callbacks.
 
 pub mod callback;
+pub mod filesystem;
 pub mod instance;
 pub mod interface_registry;
 pub mod interfaces;
@@ -57,8 +58,11 @@ pub struct UrlLoadResponse {
 /// when the plugin does something that needs external handling.
 pub trait HostCallbacks: Send + Sync {
     /// Called when PPB_Graphics2D::Flush is called — a new frame is ready.
-    /// `pixels` is BGRA_PREMUL, row-major, `width * 4` bytes per row.
-    fn on_flush(&self, graphics_2d: PP_Resource, pixels: &[u8], width: i32, height: i32);
+    /// `pixels` is the full BGRA_PREMUL buffer, row-major, `stride` bytes per row.
+    /// `dirty_*` describes the sub-region that changed since the last flush.
+    fn on_flush(&self, graphics_2d: PP_Resource, pixels: &[u8],
+                width: i32, height: i32, stride: i32,
+                dirty_x: i32, dirty_y: i32, dirty_w: i32, dirty_h: i32);
 
     /// Open a URL and return a streaming response.
     ///
