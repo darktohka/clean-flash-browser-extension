@@ -45,7 +45,7 @@ unsafe extern "C" fn is_url_response_info(resource: PP_Resource) -> PP_Bool {
     let result = HOST.get()
         .map(|h| pp_from_bool(h.resources.is_type(resource, "PPB_URLResponseInfo")))
         .unwrap_or(PP_FALSE);
-    tracing::debug!("PPB_URLResponseInfo::IsURLResponseInfo(resource={}) -> {}", resource, result);
+    tracing::info!("PPB_URLResponseInfo::IsURLResponseInfo(resource={}) -> {} <-- Flash checking response type", resource, result);
     result
 }
 
@@ -62,32 +62,32 @@ unsafe extern "C" fn get_property(
         .with_downcast::<URLResponseInfoResource, _>(response, |r| match property {
             PP_URLRESPONSEPROPERTY_URL => {
                 let v = host.vars.var_from_str(&r.url);
-                tracing::debug!("PPB_URLResponseInfo::GetProperty(response={}, URL) -> {:?}", response, r.url);
+                tracing::info!("PPB_URLResponseInfo::GetProperty(response={}, URL) -> {:?} <-- Flash querying URL", response, r.url);
                 v
             }
             PP_URLRESPONSEPROPERTY_STATUSCODE => {
-                tracing::debug!("PPB_URLResponseInfo::GetProperty(response={}, STATUSCODE) -> {}", response, r.status_code);
+                tracing::info!("PPB_URLResponseInfo::GetProperty(response={}, STATUSCODE) -> {} <-- Flash querying status", response, r.status_code);
                 PP_Var::from_int(r.status_code)
             }
             PP_URLRESPONSEPROPERTY_STATUSLINE => {
-                tracing::debug!("PPB_URLResponseInfo::GetProperty(response={}, STATUSLINE) -> {:?}", response, r.status_line);
+                tracing::info!("PPB_URLResponseInfo::GetProperty(response={}, STATUSLINE) -> {:?} <-- Flash querying status line", response, r.status_line);
                 host.vars.var_from_str(&r.status_line)
             }
             PP_URLRESPONSEPROPERTY_HEADERS => {
-                tracing::debug!("PPB_URLResponseInfo::GetProperty(response={}, HEADERS) -> {:?}", response, r.headers);
+                tracing::info!("PPB_URLResponseInfo::GetProperty(response={}, HEADERS) -> {:?} <-- Flash querying headers", response, r.headers);
                 host.vars.var_from_str(&r.headers)
             }
             PP_URLRESPONSEPROPERTY_REDIRECTURL | PP_URLRESPONSEPROPERTY_REDIRECTMETHOD => {
-                tracing::debug!("PPB_URLResponseInfo::GetProperty(response={}, property={}) -> undefined", response, property);
+                tracing::info!("PPB_URLResponseInfo::GetProperty(response={}, property={}) -> undefined <-- Flash querying redirect", response, property);
                 PP_Var::undefined()
             }
             _ => {
-                tracing::debug!("PPB_URLResponseInfo::GetProperty(response={}, property={}) -> undefined (unknown)", response, property);
+                tracing::info!("PPB_URLResponseInfo::GetProperty(response={}, property={}) -> undefined (unknown) <-- Flash querying unknown property", response, property);
                 PP_Var::undefined()
             }
         })
         .unwrap_or_else(|| {
-            tracing::debug!("PPB_URLResponseInfo::GetProperty(response={}, property={}) -> undefined (bad resource)", response, property);
+            tracing::warn!("PPB_URLResponseInfo::GetProperty(response={}, property={}) -> undefined (bad resource) <-- Flash querying invalid resource!", response, property);
             PP_Var::undefined()
         });
     result

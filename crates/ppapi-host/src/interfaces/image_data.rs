@@ -60,6 +60,13 @@ unsafe extern "C" fn create(
     size: *const PP_Size,
     init_to_zero: PP_Bool,
 ) -> PP_Resource {
+    tracing::debug!(
+        "PPB_ImageData::Create(instance={}, format={}, size={:?}, init_to_zero={})",
+        instance,
+        format,
+        unsafe { *size },
+        pp_to_bool(init_to_zero)
+    );
     let Some(host) = HOST.get() else {
         return 0;
     };
@@ -91,12 +98,14 @@ unsafe extern "C" fn create(
 }
 
 unsafe extern "C" fn is_image_data(image_data: PP_Resource) -> PP_Bool {
+    tracing::debug!("PPB_ImageData::IsImageData(image_data={})", image_data);
     HOST.get()
         .map(|h| pp_from_bool(h.resources.is_type(image_data, "PPB_ImageData")))
         .unwrap_or(PP_FALSE)
 }
 
 unsafe extern "C" fn describe(image_data: PP_Resource, desc: *mut PP_ImageDataDesc) -> PP_Bool {
+    tracing::debug!("PPB_ImageData::Describe(image_data={}, desc={:?})", image_data, desc);
     let Some(host) = HOST.get() else {
         return PP_FALSE;
     };
@@ -118,6 +127,7 @@ unsafe extern "C" fn describe(image_data: PP_Resource, desc: *mut PP_ImageDataDe
 }
 
 unsafe extern "C" fn map(image_data: PP_Resource) -> *mut c_void {
+    tracing::debug!("PPB_ImageData::Map(image_data={})", image_data);
     let Some(host) = HOST.get() else {
         return std::ptr::null_mut();
     };

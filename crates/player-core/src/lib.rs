@@ -4,9 +4,9 @@
 //! (player-ui-traits) to form the complete Flash player logic.
 
 use parking_lot::Mutex;
+use player_ui_traits::{DialogProvider, FileChooserProvider, FrameData, PlayerState};
 use ppapi_host::{HostCallbacks, HostState, PluginLoader};
 use ppapi_sys::*;
-use player_ui_traits::{DialogProvider, FileChooserProvider, FrameData, PlayerState};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -118,11 +118,13 @@ impl FlashPlayer {
 
         // Initialize the module.
         let get_iface: PPB_GetInterface = Some(HostState::get_interface);
-        let result = unsafe { loader.initialize_module(1, get_iface) };
+        let result = unsafe { loader.initialize_module(20, get_iface) };
 
         if result != PP_OK {
             let msg = format!("PPP_InitializeModule returned error: {}", result);
-            *self.state.lock() = PlayerState::Error { message: msg.clone() };
+            *self.state.lock() = PlayerState::Error {
+                message: msg.clone(),
+            };
             return Err(msg);
         }
 
@@ -140,9 +142,7 @@ impl FlashPlayer {
     ///  4. If full-frame: create URLRequestInfo + URLLoader, Open, HandleDocumentLoad
     pub fn open_swf(&mut self, swf_path: &str) -> Result<(), String> {
         tracing::info!("open_swf: starting for {}", swf_path);
-        let host = ppapi_host::HOST
-            .get()
-            .ok_or("Host not initialized")?;
+        let host = ppapi_host::HOST.get().ok_or("Host not initialized")?;
 
         // Ensure the plugin is loaded.
         let plugin = self
@@ -150,13 +150,20 @@ impl FlashPlayer {
             .as_ref()
             .ok_or("No plugin loaded. Set plugin_path first.")?;
 
-        // Build a proper file:// URL from the filesystem path (like freshplayerplugin's
-        // ppb_url_util_resolve_relative_to_url does with the document base URL).
-        let abs_path = std::fs::canonicalize(swf_path)
-            .map_err(|e| format!("Cannot resolve SWF path {}: {}", swf_path, e))?
-            .to_string_lossy()
-            .to_string();
-        let instance_url = format!("file://{}", abs_path);
+        // Accept either a URL (http/https/file) or a local filesystem path.
+        let instance_url = if swf_path.starts_with("http://")
+            || swf_path.starts_with("https://")
+            || swf_path.starts_with("file://")
+        {
+            swf_path.to_string()
+        } else {
+            // Build a file:// URL from a local filesystem path.
+            let abs_path = std::fs::canonicalize(swf_path)
+                .map_err(|e| format!("Cannot resolve SWF path {}: {}", swf_path, e))?
+                .to_string_lossy()
+                .to_string();
+            format!("file://{}", abs_path)
+        };
         tracing::info!("open_swf: resolved instance URL = {}", instance_url);
 
         // Create an instance.
@@ -186,37 +193,28 @@ impl FlashPlayer {
         let did_create = ppp.DidCreate.ok_or("PPP_Instance::DidCreate is null")?;
         tracing::info!("open_swf: calling DidCreate for instance {}", instance_id);
 
-        // Prepare argc/argn/argv — mirror what the browser passes for a
-        // full-frame plugin: src + type (like Chrome's internal embed).
-        //let src_key = std::ffi::CString::new("src").unwrap();
-        //let src_val = std::ffi::CString::new(instance_url.as_str()).unwrap();
-        //let type_key = std::ffi::CString::new("type").unwrap();
-        //let type_val = std::ffi::CString::new("application/x-shockwave-flash").unwrap();
+        // Pass type attribute for the MIME type. We'll deliver the actual  
+        // SWF data through HandleDocumentLoad.
+        let type_key = std::ffi::CString::new("type").unwrap();
+        let type_val = std::ffi::CString::new("application/x-shockwave-flash").unwrap();
 
-        //println!("DidCreate args:");
-        //println!("  {} = {}", src_key.to_str().unwrap(), src_val.to_str().unwrap());
-//
-        //let argn = [src_key.as_ptr(), type_key.as_ptr()];
-        //let argv = [src_val.as_ptr(), type_val.as_ptr()];
-        // Make empty argn and argv
-        let argn: [*const i8; 0] = [];
-        let argv: [*const i8; 0] = [];
+        let argn = [type_key.as_ptr()];
+        let argv = [type_val.as_ptr()];
         let argc = argn.len() as u32;
 
-        let result = unsafe {
-            did_create(instance_id, argc, argn.as_ptr(), argv.as_ptr())
-        };
+        let result = unsafe { did_create(instance_id, argc, argn.as_ptr(), argv.as_ptr()) };
         tracing::info!("open_swf: DidCreate returned {}", result);
 
         if result == PP_FALSE {
             host.instances.destroy_instance(instance_id);
             let msg = "PPP_Instance::DidCreate returned PP_FALSE".to_string();
-            *self.state.lock() = PlayerState::Error { message: msg.clone() };
+            *self.state.lock() = PlayerState::Error {
+                message: msg.clone(),
+            };
             return Err(msg);
         }
 
         self.instance_id = Some(instance_id);
-        self.notify_view_change(800, 600);
 
         // ---- Step 3: PPP_Instance_Private → GetInstanceObject ----------
         // freshplayerplugin queries this immediately after DidCreate and
@@ -243,27 +241,60 @@ impl FlashPlayer {
         // Open (which loads data via the host callback), then pass the
         // loader to HandleDocumentLoad.
         if let Some(handle_doc_load) = ppp.HandleDocumentLoad {
-            tracing::info!("open_swf: calling HandleDocumentLoad for instance {}", instance_id);
+            tracing::info!(
+                "open_swf: calling HandleDocumentLoad for instance {}",
+                instance_id
+            );
+            println!(
+                "Calling HandleDocumentLoad with a URLLoader containing the SWF data... {}",
+                instance_url
+            );
 
             let loader_res = crate::create_document_url_loader(instance_id, host, &instance_url);
 
-            tracing::info!("open_swf: document URLLoader created with resource ID {}", loader_res);
+            tracing::info!(
+                "open_swf: document URLLoader created with resource ID {}",
+                loader_res
+            );
 
-            let res = unsafe {
-                handle_doc_load(instance_id, loader_res)
-            };
+            if loader_res == 0 {
+                tracing::error!("open_swf: Failed to create document URLLoader");
+                host.instances.destroy_instance(instance_id);
+                *self.state.lock() = PlayerState::Error {
+                    message: "Failed to create URLLoader for HandleDocumentLoad".to_string(),
+                };
+                return Err("Failed to create URLLoader for HandleDocumentLoad".to_string());
+            }
+
+            let res = unsafe { handle_doc_load(instance_id, loader_res) };
             //let res = PP_FALSE;
 
-            tracing::info!("open_swf: HandleDocumentLoad returned: {} ({})",
-                res, if res == PP_TRUE { "PP_TRUE / handled" } else { "PP_FALSE / not handled" });
+            tracing::info!(
+                "open_swf: HandleDocumentLoad returned: {} ({})",
+                res,
+                if res == PP_TRUE {
+                    "PP_TRUE / handled"
+                } else {
+                    "PP_FALSE / not handled"
+                }
+            );
 
+            // The handle_doc_load function receives the loader resource.
+            // If Flash accepts it (returns PP_TRUE), it will manage its lifetime.
+            // If it rejects it (returns PP_FALSE), the resource will be auto-cleaned up.
+            // Do NOT manually release - let the resource manager handle cleanup.
             if res == PP_FALSE {
                 tracing::warn!(
-                    "open_swf: HandleDocumentLoad returned PP_FALSE. \
-                     Flash may load the SWF via its own URLLoader using the 'src' attribute."
+                    "open_swf: HandleDocumentLoad returned PP_FALSE - \
+                     Flash rejected the document loader"
                 );
             }
+        } else {
+            tracing::warn!("open_swf: PPP_Instance::HandleDocumentLoad is null");
         }
+
+        // ---- Step 5: DidChangeView after document-load handoff ---------
+        self.notify_view_change(800, 600);
 
         tracing::info!("Instance {} created for {}", instance_id, swf_path);
         *self.state.lock() = PlayerState::Running {
@@ -277,11 +308,18 @@ impl FlashPlayer {
     /// Notify the plugin of a view change (resize).
     pub fn notify_view_change(&self, width: i32, height: i32) {
         tracing::debug!("notify_view_change: width={}, height={}", width, height);
-        let Some(instance_id) = self.instance_id else { return };
-        let Some(host) = ppapi_host::HOST.get() else { return };
+        let Some(instance_id) = self.instance_id else {
+            return;
+        };
+        let Some(host) = ppapi_host::HOST.get() else {
+            return;
+        };
         let Some(plugin) = &self.plugin else { return };
 
-        tracing::trace!("notify_view_change: posting view change to main thread for instance {}", instance_id);
+        tracing::trace!(
+            "notify_view_change: posting view change to main thread for instance {}",
+            instance_id
+        );
 
         // Create a View resource.
         use ppapi_host::interfaces::view::ViewResource;
@@ -301,9 +339,7 @@ impl FlashPlayer {
 
         if let Some(ppp) = ppp_instance {
             if let Some(did_change_view) = ppp.DidChangeView {
-                unsafe {
-                    did_change_view(instance_id, view_id)
-                };
+                unsafe { did_change_view(instance_id, view_id) };
                 tracing::debug!("notify_view_change: DidChangeView returned");
             }
         }
@@ -318,7 +354,9 @@ impl FlashPlayer {
 
     /// Send an input event to the plugin.
     pub fn send_input_event(&self, event_resource: PP_Resource) {
-        let Some(instance_id) = self.instance_id else { return };
+        let Some(instance_id) = self.instance_id else {
+            return;
+        };
         let Some(plugin) = &self.plugin else { return };
 
         let ppp_input: Option<&'static PPP_InputEvent_0_1> = unsafe {
@@ -464,13 +502,36 @@ impl HostCallbacks for PlayerHostCallbacks {
 
         // Try to load from the local filesystem.
         if let Ok(data) = std::fs::read(path) {
+            tracing::info!("URL load: loaded {} bytes from filesystem: {}", data.len(), path);
             return data;
+        }
+
+        if url.starts_with("http://") || url.starts_with("https://") {
+            // Use reqwest for http/https URLs. This is a blocking call, but that's fine since
+            // the plugin expects on_url_load to be synchronous.
+            match reqwest::blocking::get(url) {
+                Ok(response) => {
+                    match response.bytes() {
+                        Ok(bytes) => {
+                            let data = bytes.to_vec();
+                            tracing::info!("URL load: loaded {} bytes from HTTP: {}", data.len(), url);
+                            return data;
+                        }
+                        Err(e) => {
+                            tracing::warn!("URL load: failed to read response body from {}: {}", url, e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("URL load: HTTP request failed for {}: {}", url, e);
+                }
+            }
         }
 
         // If it looks like a relative path, try resolving it.
         // For now, return empty.
         tracing::warn!("Could not load URL: {} (path: {})", url, path);
-        Vec::new()
+        Vec::<u8>::new()
     }
 
     fn show_alert(&self, message: &str) {
@@ -515,107 +576,182 @@ impl HostCallbacks for PlayerHostCallbacks {
 ///  4. Release the request info
 ///  5. Return the loader resource for HandleDocumentLoad.
 ///
-/// The data is loaded synchronously through `on_url_load` inside Open().
+/// Create a document URLLoader pre-populated with SWF data.
+/// This bypasses the URLRequestInfo/URLLoader::Open API and directly
+/// pre-populates the loader, matching Chromium's approach for document loads.
+///
+/// The data is loaded synchronously before returning.
+fn create_preloaded_document_url_loader(
+    instance_id: PP_Instance,
+    host: &ppapi_host::HostState,
+    url: &str,
+) -> PP_Resource {
+    tracing::debug!("Creating pre-loaded document URLLoader for '{}'", url);
+
+    // Load the data synchronously from the URL.
+    if let Some(cb) = host.host_callbacks.lock().as_ref() {
+        let body: Vec<u8> = cb.on_url_load(url);
+        let body_len = body.len();
+
+        tracing::debug!("Pre-loaded URLLoader: on_url_load returned {} bytes", body_len);
+
+        if body_len == 0 {
+            tracing::warn!("Pre-loaded URLLoader: on_url_load returned empty body for {}", url);
+        }
+
+        // Create the response info with proper HTTP headers.
+        let content_type = if url.to_ascii_lowercase().ends_with(".swf") {
+            "application/x-shockwave-flash"
+        } else {
+            "application/octet-stream"
+        };
+        let headers = format!(
+            "Content-Type: {}\r\nContent-Length: {}\r\nServer: PepperFlash\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n",
+            content_type,
+            body_len,
+        );
+
+        let response_info = ppapi_host::interfaces::url_response_info::URLResponseInfoResource {
+            url: url.to_string(),
+            status_code: 200,
+            status_line: "200 OK".to_string(),
+            headers,
+        };
+
+        let response_info_id = host.resources.insert(instance_id, Box::new(response_info));
+
+        // Create the URLLoader resource directly with pre-populated data.
+        // This matches Chromium's approach for document loads where the loader
+        // is in MODE_OPENING or MODE_STREAMING_DATA state (not finished yet).
+        let loader = ppapi_host::interfaces::url_loader::URLLoaderResource {
+            instance: instance_id,
+            url: Some(url.to_string()),
+            response_body: body,
+            read_offset: 0,
+            open_complete: true,     // Mark as already open (response ready)
+            finished_loading: false, // Still streaming (Flash expects to read data)
+            response_info: Some(response_info_id),
+        };
+
+        let loader_id = host.resources.insert(instance_id, Box::new(loader));
+
+        tracing::debug!(
+            "Pre-loaded document URLLoader created: loader={}, url={}, body_size={}",
+            loader_id,
+            url,
+            body_len
+        );
+
+        loader_id
+    } else {
+        tracing::error!("Pre-loaded URLLoader: No host callbacks available");
+        0
+    }
+}
+
+/// Create a document URLLoader by using the PPB_URLLoader::Open API.
+/// This approach calls URLRequestInfo::Create, URLLoader::Create, and URLLoader::Open,
+/// matching what freshplayerplugin does. The Open() call is blocking/synchronous.
 fn create_document_url_loader(
     instance_id: PP_Instance,
     host: &ppapi_host::HostState,
     url: &str,
 ) -> PP_Resource {
-    use ppapi_host::interfaces::url_loader::URLLoaderResource;
-    use ppapi_host::interfaces::url_request_info::URLRequestInfoResource;
+    tracing::debug!("Creating document URLLoader via Open() for '{}'", url);
 
-    tracing::debug!("Creating document URLLoader for '{}'", url);
-
-    // Load the SWF data upfront so we can populate both the request info body
-    // and the loader response body from the same fetch.
-    let swf_data = if let Some(cb) = host.host_callbacks.lock().as_ref() {
-        cb.on_url_load(url)
-    } else {
-        Vec::new()
-    };
-    let body_len = swf_data.len();
-
-    // 1. Create the URLRequestInfo resource (mimics ppb_url_request_info_create +
-    //    set_property(URL) + set_property(METHOD)).
-    let request_info = URLRequestInfoResource {
-        url: Some(url.to_string()),
-        method: Some("GET".to_string()),
-        headers: None,
-        stream_to_file: false,
-        follow_redirects: true,
-        record_download_progress: false,
-        record_upload_progress: false,
-        body: swf_data.clone(),
-    };
-    let request_info_id = host.resources.insert(instance_id, Box::new(request_info));
-
-    // 2. Create the URLLoader resource (mimics ppb_url_loader_create).
-    let loader = URLLoaderResource {
-        instance: instance_id,
-        url: None,
-        response_info: None,
-        response_body: Vec::new(),
-        read_offset: 0,
-        open_complete: false,
-        finished_loading: false,
-    };
-    let loader_id = host.resources.insert(instance_id, Box::new(loader));
-
-    // 3. Fill the loader with the already-fetched data (mirrors
-    //    ppb_url_loader_open with a null/do_nothing callback — the open
-    //    completes synchronously in our implementation).
-    {
-
-        //println!("Body: {:?}", body);
-
-        // 3a. Create a URLResponseInfo eagerly with proper Content-Type.
-        //     Flash calls GetResponseInfo() during HandleDocumentLoad and
-        //     checks the Content-Type header to validate the response.
-        //     Without this, the lazily-created response info would have
-        //     empty headers, causing Flash to reject the document load.
-        use ppapi_host::interfaces::url_response_info::URLResponseInfoResource;
-        let response_info = URLResponseInfoResource {
-            url: url.to_string(),
-            status_code: 200,
-            status_line: "OK".to_string(),
-            headers: format!(
-                "Content-Type: application/x-shockwave-flash\nContent-Length: {}",
-                body_len,
-            ),
-        };
-        let response_info_id = host.resources.insert(instance_id, Box::new(response_info));
-
-        host.resources.with_downcast_mut::<URLLoaderResource, _>(loader_id, |l| {
-            l.url = Some(url.to_string());
-            l.response_body = swf_data;
-            l.read_offset = 0;
-            l.open_complete = true;
-            l.instance = instance_id;
-            l.finished_loading = true;
-            l.response_info = Some(response_info_id);
-        });
-        // Print the URLLoaderResource state to verify
-        //host.resources.with_downcast::<URLLoaderResource, _>(loader_id, |l| {
-        //    tracing::debug!(
-        //        "URLLoader state after open: {:?}",
-        //        l
-        //    );
-        //});
-        tracing::debug!(
-            "Document URLLoader open: loader={} loaded {} bytes, response_info={}",
-            loader_id, body_len, response_info_id
+    let req_iface_ptr = host.registry.get_by_str("PPB_URLRequestInfo;1.0");
+    let loader_iface_ptr = host.registry.get_by_str("PPB_URLLoader;1.0");
+    if req_iface_ptr.is_null() || loader_iface_ptr.is_null() {
+        tracing::warn!(
+            "create_document_url_loader: required URL interfaces missing"
         );
+        return 0;
     }
 
-    // 4. Release the request info (like freshplayerplugin's
-    //    ppb_core_release_resource(request_info)).
+    let req_iface = unsafe { &*(req_iface_ptr as *const PPB_URLRequestInfo_1_0) };
+    let loader_iface = unsafe { &*(loader_iface_ptr as *const PPB_URLLoader_1_0) };
+
+    let Some(req_create) = req_iface.Create else {
+        tracing::warn!("create_document_url_loader: PPB_URLRequestInfo::Create is null");
+        return 0;
+    };
+    let Some(req_set_property) = req_iface.SetProperty else {
+        tracing::warn!("create_document_url_loader: PPB_URLRequestInfo::SetProperty is null");
+        return 0;
+    };
+    let Some(loader_create) = loader_iface.Create else {
+        tracing::warn!("create_document_url_loader: PPB_URLLoader::Create is null");
+        return 0;
+    };
+    let Some(loader_open) = loader_iface.Open else {
+        tracing::warn!("create_document_url_loader: PPB_URLLoader::Open is null");
+        return 0;
+    };
+
+    let request_info_id = unsafe { req_create(instance_id) };
+    let loader_id = unsafe { loader_create(instance_id) };
+    if request_info_id == 0 || loader_id == 0 {
+        tracing::warn!(
+            "create_document_url_loader: failed to create request/loader"
+        );
+        if request_info_id != 0 {
+            host.resources.release(request_info_id);
+        }
+        if loader_id != 0 {
+            host.resources.release(loader_id);
+        }
+        return 0;
+    }
+
+    let url_var = host.vars.var_from_str(url);
+    let method_var = host.vars.var_from_str("GET");
+
+    let set_url_ok =
+        unsafe { req_set_property(request_info_id, PP_URLREQUESTPROPERTY_URL, url_var) };
+    let set_method_ok =
+        unsafe { req_set_property(request_info_id, PP_URLREQUESTPROPERTY_METHOD, method_var) };
+
+    host.vars.release(url_var);
+    host.vars.release(method_var);
+
+    if set_url_ok == PP_FALSE || set_method_ok == PP_FALSE {
+        tracing::warn!(
+            "create_document_url_loader: SetProperty failed"
+        );
+        host.resources.release(request_info_id);
+        host.resources.release(loader_id);
+        return 0;
+    }
+
+    // Call Open with a BLOCKING (null) callback. Mirror freshplayerplugin.
+    let open_result = unsafe {
+        loader_open(
+            loader_id,
+            request_info_id,
+            PP_CompletionCallback::blocking(),
+        )
+    };
+
+    // Release the request info - it's temporary
     host.resources.release(request_info_id);
+
+    tracing::debug!(
+        "Document URLLoader::Open result: {}", open_result
+    );
+
+    if open_result != PP_OK && open_result != PP_OK_COMPLETIONPENDING {
+        tracing::warn!(
+            "create_document_url_loader: PPB_URLLoader::Open failed with {}",
+            open_result
+        );
+        host.resources.release(loader_id);
+        return 0;
+    }
 
     tracing::debug!(
         "Document URLLoader created: loader={}, url={}",
         loader_id,
-        url,
+        url
     );
-
     loader_id
 }

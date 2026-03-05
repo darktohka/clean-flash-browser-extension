@@ -83,11 +83,11 @@ unsafe extern "C" fn create(instance: PP_Instance) -> PP_Resource {
 }
 
 unsafe extern "C" fn is_url_loader(resource: PP_Resource) -> PP_Bool {
-    tracing::debug!("PPB_URLLoader::IsURLLoader(resource={})", resource);
+    tracing::info!("PPB_URLLoader::IsURLLoader(resource={}) <-- Flash checking if this is a URLLoader", resource);
     let result = HOST.get()
         .map(|h| pp_from_bool(h.resources.is_type(resource, "PPB_URLLoader")))
         .unwrap_or(PP_FALSE);
-    tracing::debug!("PPB_URLLoader::IsURLLoader(resource={}) -> {}", resource, result);
+    tracing::info!("PPB_URLLoader::IsURLLoader(resource={}) -> {}", resource, result);
     result
 }
 
@@ -118,16 +118,60 @@ unsafe extern "C" fn open(
     if let Some(url) = url {
         // Notify the host that a URL load is requested.
         if let Some(cb) = host.host_callbacks.lock().as_ref() {
-            let body = cb.on_url_load(&url);
+            let body: Vec<u8> = cb.on_url_load(&url);
             let body_len = body.len();
+            
+            tracing::debug!("PPB_URLLoader::Open: on_url_load returned {} bytes", body_len);
+            
+            if body_len == 0 {
+                tracing::warn!("PPB_URLLoader::Open: on_url_load returned empty body for {}", url);
+            }
+
+            // Create response info eagerly with basic HTTP-like metadata.
+            // Flash commonly queries response headers and may reject loads
+            // when Content-Type is missing.
+            let content_type = if url.to_ascii_lowercase().ends_with(".swf") {
+                "application/x-shockwave-flash"
+            } else {
+                "application/octet-stream"
+            };
+            // Headers must be properly formatted with CRLF line endings and blank line terminator.
+            // This matches HTTP response header format that Flash expects.
+            let headers = format!(
+                "Content-Type: {}\r\nContent-Length: {}\r\nServer: PepperFlash\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n",
+                content_type,
+                body_len,
+            );
+            let response_info = super::url_response_info::URLResponseInfoResource {
+                url: url.clone(),
+                status_code: 200,
+                status_line: "200 OK".to_string(),
+                headers,
+            };
+            let loader_instance = host
+                .resources
+                .with_downcast::<URLLoaderResource, _>(loader, |l| l.instance)
+                .unwrap_or(0);
+            let response_info_id = host.resources.insert(
+                loader_instance,
+                Box::new(response_info),
+            );
+
             host.resources.with_downcast_mut::<URLLoaderResource, _>(loader, |l| {
                 l.url = Some(url.clone());
                 l.response_body = body;
                 l.read_offset = 0;
                 l.open_complete = true;
                 l.finished_loading = true;
+                l.response_info = Some(response_info_id);
             });
-            tracing::debug!("PPB_URLLoader::Open: loader={} loaded {} bytes from {:?}", loader, body_len, url);
+            tracing::debug!(
+                "PPB_URLLoader::Open: loader={} loaded {} bytes from {:?}, response_info={}",
+                loader,
+                body_len,
+                url,
+                response_info_id
+            );
         }
     }
 
@@ -213,9 +257,9 @@ unsafe extern "C" fn get_download_progress(
 }
 
 unsafe extern "C" fn get_response_info(loader: PP_Resource) -> PP_Resource {
-    tracing::debug!("PPB_URLLoader::GetResponseInfo(loader={})", loader);
+    tracing::info!("PPB_URLLoader::GetResponseInfo(loader={}) <-- Flash querying response info", loader);
     let Some(host) = HOST.get() else {
-        tracing::debug!("PPB_URLLoader::GetResponseInfo(loader={}) -> 0 (no host)", loader);
+        tracing::warn!("PPB_URLLoader::GetResponseInfo(loader={}) -> 0 (no host)", loader);
         return 0;
     };
 
@@ -227,7 +271,7 @@ unsafe extern "C" fn get_response_info(loader: PP_Resource) -> PP_Resource {
     if let Some(id) = existing {
         // Add a ref since we're returning a new handle to the caller.
         host.resources.add_ref(id);
-        tracing::debug!("PPB_URLLoader::GetResponseInfo(loader={}) -> {} (existing)", loader, id);
+        tracing::info!("PPB_URLLoader::GetResponseInfo(loader={}) -> {} (existing response)", loader, id);
         return id;
     }
 
