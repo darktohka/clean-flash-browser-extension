@@ -139,16 +139,14 @@ function replaceFlashElement(elem) {
 
   // ---- Handle messages from the native host (via background) ----
   port.onMessage.addListener((msg) => {
-    if (msg.type === "frame") {
-      drawDirtyRegion(ctx, msg);
-    } else if (msg.type === "cursor") {
-      canvas.style.cursor = ppCursorToCss(msg.cursor);
-    } else if (msg.type === "state") {
-      if (msg.state === "error") {
-        console.error("[Flash Player]", msg.message);
-      }
-    } else if (msg.type === "error") {
-      console.error("[Flash Player]", msg.message);
+    // Extension-originated error (e.g. host disconnect).
+    if (msg.error) {
+      console.error("[Flash Player]", msg.error);
+      return;
+    }
+    // Binary message from the host, base64-encoded.
+    if (msg.b64) {
+      handleBinaryMessage(ctx, canvas, msg.b64);
     }
   });
 
@@ -177,39 +175,124 @@ function replaceFlashElement(elem) {
 }
 
 // ---------------------------------------------------------------------------
-// Drawing — paint dirty BGRA sub-regions onto the canvas
+// Binary message decoding
 // ---------------------------------------------------------------------------
 
+// Message type tags (must match protocol.rs).
+const TAG_FRAME  = 0x01;
+const TAG_STATE  = 0x02;
+const TAG_CURSOR = 0x03;
+const TAG_ERROR  = 0x04;
+
 /**
- * Draw a dirty region received from the native host onto the canvas.
- *
- * The `msg` has: x, y, width, height, frameWidth, frameHeight, data (base64 BGRA).
+ * Read a little-endian u32 from a DataView at the given offset.
  */
-function drawDirtyRegion(ctx, msg) {
-  const { x, y, width, height, frameWidth, frameHeight, data } = msg;
-
-  // Resize canvas if frame dimensions changed.
-  if (ctx.canvas.width !== frameWidth || ctx.canvas.height !== frameHeight) {
-    ctx.canvas.width = frameWidth;
-    ctx.canvas.height = frameHeight;
-  }
-
-  // Decode base64 → Uint8Array (BGRA premultiplied).
-  const raw = atob(data);
-  const len = raw.length;
-  const rgba = new Uint8Array(len);
-
-  // Convert BGRA → RGBA in-place.
-  for (let i = 0; i < len; i += 4) {
-    rgba[i]     = raw.charCodeAt(i + 2); // R ← B
-    rgba[i + 1] = raw.charCodeAt(i + 1); // G
-    rgba[i + 2] = raw.charCodeAt(i);     // B ← R
-    rgba[i + 3] = raw.charCodeAt(i + 3); // A
-  }
-
-  const imageData = new ImageData(new Uint8ClampedArray(rgba.buffer), width, height);
-  ctx.putImageData(imageData, x, y);
+function readU32(dv, off) {
+  return dv.getUint32(off, true);
 }
+
+/**
+ * Read a little-endian i32 from a DataView at the given offset.
+ */
+function readI32(dv, off) {
+  return dv.getInt32(off, true);
+}
+
+/**
+ * Decode a base64 string into a Uint8Array.
+ */
+function b64ToUint8(b64) {
+  const bin = atob(b64);
+  const len = bin.length;
+  const arr = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    arr[i] = bin.charCodeAt(i);
+  }
+  return arr;
+}
+
+/**
+ * Handle a fully reassembled binary message (as a base64 string).
+ */
+function handleBinaryMessage(ctx, canvas, b64) {
+  const bytes = b64ToUint8(b64);
+  if (bytes.length === 0) return;
+
+  const tag = bytes[0];
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+
+  switch (tag) {
+    case TAG_FRAME: {
+      // 1 byte tag + 7 x u32 header (28 bytes) + BGRA pixels
+      const x       = readU32(dv, 1);
+      const y       = readU32(dv, 5);
+      const width   = readU32(dv, 9);
+      const height  = readU32(dv, 13);
+      const frameW  = readU32(dv, 17);
+      const frameH  = readU32(dv, 21);
+      // stride at offset 25, not needed for drawing
+      const pixelOffset = 29; // 1 + 7*4
+
+      // Resize canvas if frame dimensions changed.
+      if (ctx.canvas.width !== frameW || ctx.canvas.height !== frameH) {
+        ctx.canvas.width = frameW;
+        ctx.canvas.height = frameH;
+      }
+
+      // Convert BGRA -> RGBA in-place within the bytes buffer.
+      const pixelLen = width * height * 4;
+      const rgba = new Uint8Array(pixelLen);
+      for (let i = 0; i < pixelLen; i += 4) {
+        const off = pixelOffset + i;
+        rgba[i]     = bytes[off + 2]; // R <- B
+        rgba[i + 1] = bytes[off + 1]; // G
+        rgba[i + 2] = bytes[off];     // B <- R
+        rgba[i + 3] = bytes[off + 3]; // A
+      }
+
+      const imageData = new ImageData(new Uint8ClampedArray(rgba.buffer), width, height);
+      ctx.putImageData(imageData, x, y);
+      break;
+    }
+
+    case TAG_STATE: {
+      // 1 byte tag + 1 byte code + u32 width + u32 height
+      const code   = bytes[1];
+      const width  = readU32(dv, 2);
+      const height = readU32(dv, 6);
+      const stateNames = ["idle", "loading", "running", "error"];
+      const stateName = stateNames[code] || "unknown";
+      if (code === 3) { // error
+        console.error("[Flash Player] State: error");
+      }
+      break;
+    }
+
+    case TAG_CURSOR: {
+      // 1 byte tag + i32 cursor type
+      const cursor = readI32(dv, 1);
+      canvas.style.cursor = ppCursorToCss(cursor);
+      break;
+    }
+
+    case TAG_ERROR: {
+      // 1 byte tag + u32 msg_len + UTF-8 bytes
+      const msgLen = readU32(dv, 1);
+      const msgBytes = bytes.subarray(5, 5 + msgLen);
+      const decoder = new TextDecoder();
+      const message = decoder.decode(msgBytes);
+      console.error("[Flash Player]", message);
+      break;
+    }
+
+    default:
+      console.warn("[Flash Player] Unknown binary message tag:", tag);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Drawing helpers (kept for reference; frame drawing is now in handleBinaryMessage)
+// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Input event binding

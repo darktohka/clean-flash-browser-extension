@@ -6,9 +6,15 @@
  * multiplexes them over a single native messaging connection (one host
  * process per extension lifetime).
  *
+ * The host sends chunked binary messages:
+ *   {"s": seq, "c": chunk_index, "t": total_chunks, "d": "base64_data"}
+ *
+ * This script reassembles multi-chunk messages, then forwards the
+ * complete base64 blob to the content script for binary decoding.
+ *
  * Protocol flow:
- *   content.js  ──port──▶  background.js  ──nativePort──▶  flash-player-host
- *               ◀──port──                 ◀──nativePort──
+ *   content.js  --port-->  background.js  --nativePort-->  flash-player-host
+ *               <--port--                 <--nativePort--
  */
 
 "use strict";
@@ -16,13 +22,62 @@
 const NATIVE_HOST_NAME = "org.nickvision.flash_player";
 
 /**
- * Map of instanceId → content script port.
+ * Map of instanceId -> content script port.
  * Each Flash instance on a page gets its own port.
  */
 const instances = new Map();
 
 /** The single native messaging port (lazy-connected). */
 let nativePort = null;
+
+/**
+ * In-progress chunked messages being reassembled.
+ * Map of sequence_id -> { total, received, chunks: string[] }
+ */
+const pendingChunks = new Map();
+
+/**
+ * Reassemble a chunk. When all chunks for a sequence are received,
+ * returns the concatenated base64 string. Otherwise returns null.
+ */
+function handleChunk(msg) {
+  const { s: seq, c: index, t: total, d: data } = msg;
+
+  // Single-chunk message -- fast path.
+  if (total === 1) {
+    return data;
+  }
+
+  let entry = pendingChunks.get(seq);
+  if (!entry) {
+    entry = { total, received: 0, chunks: new Array(total) };
+    pendingChunks.set(seq, entry);
+  }
+
+  entry.chunks[index] = data;
+  entry.received++;
+
+  if (entry.received === entry.total) {
+    pendingChunks.delete(seq);
+    return entry.chunks.join("");
+  }
+
+  return null;
+}
+
+/**
+ * Forward a fully reassembled message to all connected content-script
+ * instances.  The message is sent as `{b64: "<base64 binary blob>"}`.
+ */
+function broadcastMessage(b64) {
+  for (const [, port] of instances) {
+    try {
+      port.postMessage({ b64 });
+    } catch {
+      // Port may have disconnected.
+    }
+  }
+}
 
 /**
  * Connect to the native host if not already connected.
@@ -33,15 +88,10 @@ function ensureNativePort() {
   nativePort = chrome.runtime.connectNative(NATIVE_HOST_NAME);
 
   nativePort.onMessage.addListener((msg) => {
-    // Forward host messages to the appropriate content-script instance.
-    // Currently we support a single instance per host process.
-    // Broadcast to all connected instances.
-    for (const [, port] of instances) {
-      try {
-        port.postMessage(msg);
-      } catch {
-        // Port may have disconnected.
-      }
+    // All host messages are chunked: {s, c, t, d}.
+    const b64 = handleChunk(msg);
+    if (b64 !== null) {
+      broadcastMessage(b64);
     }
   });
 
@@ -51,13 +101,14 @@ function ensureNativePort() {
       console.error("[Flash Player] Native host disconnected:", error.message);
     }
     nativePort = null;
+    pendingChunks.clear();
 
-    // Notify all instances.
+    // Notify all instances with an inline error (not chunked since
+    // it originates from the extension, not the host).
     for (const [, port] of instances) {
       try {
         port.postMessage({
-          type: "error",
-          message: "Native host disconnected" + (error ? ": " + error.message : ""),
+          error: "Native host disconnected" + (error ? ": " + error.message : ""),
         });
       } catch {
         // ignore
@@ -112,6 +163,7 @@ chrome.runtime.onConnect.addListener((port) => {
       nativePort.postMessage({ type: "close" });
       nativePort.disconnect();
       nativePort = null;
+      pendingChunks.clear();
     }
   });
 });

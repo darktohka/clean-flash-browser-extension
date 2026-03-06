@@ -35,7 +35,6 @@
 
 mod protocol;
 
-use base64::Engine;
 use parking_lot::Mutex;
 use player_core::FlashPlayer;
 use ppapi_sys::*;
@@ -125,20 +124,20 @@ fn main() {
     }
 
     if let Err(e) = player.init_host() {
-        let _ = protocol::write_message(&json!({
-            "type": "error",
-            "message": format!("Failed to initialize host: {}", e),
-        }));
+        let _ = protocol::send_host_message(&protocol::HostMessage::Error(
+            &format!("Failed to initialize host: {}", e),
+        ));
         std::process::exit(1);
     }
 
     tracing::info!("Host initialized successfully, entering main loop");
 
     // Send initial state.
-    let _ = protocol::write_message(&json!({
-        "type": "state",
-        "state": "idle",
-    }));
+    let _ = protocol::send_host_message(&protocol::HostMessage::State {
+        code: 0, // idle
+        width: 0,
+        height: 0,
+    });
 
     let mut last_cursor: i32 = -1;
 
@@ -166,10 +165,7 @@ fn main() {
             let cur = cursor_type_handle.load(Ordering::Relaxed);
             if cur != last_cursor {
                 last_cursor = cur;
-                let _ = protocol::write_message(&json!({
-                    "type": "cursor",
-                    "cursor": cur,
-                }));
+                let _ = protocol::send_host_message(&protocol::HostMessage::Cursor(cur));
             }
         }
 
@@ -258,25 +254,24 @@ fn handle_command(player: &mut FlashPlayer, cmd: &serde_json::Value) -> bool {
         "open" => {
             let url = cmd["url"].as_str().unwrap_or("");
             if url.is_empty() {
-                let _ = protocol::write_message(&json!({
-                    "type": "error",
-                    "message": "missing 'url' in open command",
-                }));
+                let _ = protocol::send_host_message(&protocol::HostMessage::Error(
+                    "missing 'url' in open command",
+                ));
                 return true;
             }
             tracing::info!("Opening SWF: {}", url);
             match player.open_swf(url) {
                 Ok(()) => {
-                    let _ = protocol::write_message(&json!({
-                        "type": "state",
-                        "state": "running",
-                    }));
+                    let _ = protocol::send_host_message(&protocol::HostMessage::State {
+                        code: 2, // running
+                        width: 0,
+                        height: 0,
+                    });
                 }
                 Err(e) => {
-                    let _ = protocol::write_message(&json!({
-                        "type": "error",
-                        "message": format!("Failed to open SWF: {}", e),
-                    }));
+                    let _ = protocol::send_host_message(&protocol::HostMessage::Error(
+                        &format!("Failed to open SWF: {}", e),
+                    ));
                 }
             }
         }
@@ -381,7 +376,7 @@ fn handle_command(player: &mut FlashPlayer, cmd: &serde_json::Value) -> bool {
 // ===========================================================================
 
 /// Extract the pending dirty region from the shared frame buffer and send
-/// it to the extension as a base64-encoded BGRA subimage.
+/// it to the extension as a chunked binary message.
 fn send_dirty_frame(frame_handle: &Arc<Mutex<Option<player_core::SharedFrameBuffer>>>) {
     let mut guard = frame_handle.lock();
     let Some(buf) = guard.as_mut() else { return };
@@ -409,22 +404,19 @@ fn send_dirty_frame(frame_handle: &Arc<Mutex<Option<player_core::SharedFrameBuff
         }
     }
 
-    // Release the lock before the potentially slow base64 encode + I/O.
+    // Release the lock before the potentially slow encode + I/O.
     drop(guard);
 
-    let encoded = base64::engine::general_purpose::STANDARD.encode(&region);
-
-    let _ = protocol::write_message(&json!({
-        "type": "frame",
-        "x": dx,
-        "y": dy,
-        "width": dw,
-        "height": dh,
-        "frameWidth": frame_w,
-        "frameHeight": frame_h,
-        "stride": stride,
-        "data": encoded,
-    }));
+    let _ = protocol::send_host_message(&protocol::HostMessage::Frame {
+        x: dx,
+        y: dy,
+        width: dw,
+        height: dh,
+        frame_width: frame_w,
+        frame_height: frame_h,
+        stride,
+        pixels: &region,
+    });
 }
 
 // ===========================================================================
