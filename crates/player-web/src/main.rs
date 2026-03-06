@@ -51,7 +51,9 @@ fn main() {
     // Set up logging: write to log file ONLY.
     // stdout is reserved for native messaging; stderr is silenced so that
     // libpepflashplayer.so cannot corrupt the native messaging channel.
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = 
+                EnvFilter::new("trace");
+                //EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     // Create a new log file for each execution, named with a timestamp.
     let log_dir = std::env::var("FLASH_PLAYER_LOG_DIR")

@@ -19,6 +19,7 @@ pub unsafe fn register(registry: &mut InterfaceRegistry) {
 }
 
 unsafe extern "C" fn is_fullscreen(instance: PP_Instance) -> PP_Bool {
+    tracing::trace!("PPB_FlashFullscreen::IsFullscreen called for instance {}", instance);
     HOST.get()
         .and_then(|h| {
             h.instances
@@ -32,6 +33,7 @@ unsafe extern "C" fn set_fullscreen(
     _fullscreen: PP_Bool,
 ) -> PP_Bool {
     // TODO: fullscreen support.
+    tracing::trace!("PPB_FlashFullscreen::SetFullscreen called (fullscreen={})", _fullscreen != PP_FALSE);
     PP_TRUE
 }
 
@@ -39,6 +41,7 @@ unsafe extern "C" fn get_screen_size(
     _instance: PP_Instance,
     size: *mut PP_Size,
 ) -> PP_Bool {
+    tracing::trace!("PPB_FlashFullscreen::GetScreenSize called");
     if !size.is_null() {
         // Return a reasonable default screen size.
         unsafe {

@@ -26,24 +26,26 @@ A Chrome/Firefox extension that detects Flash content (`<object>` and `<embed>` 
 cargo build --release -p player-web
 ```
 
-The binary will be at `target/release/flash-player-host`.
+The binary will be at `target/release/flash-player-host` on Linux and `target/release/flash-player-host.exe` on Windows.
 
 ### 2. Install the native messaging manifest
 
 ```bash
 cd web-extension
-./install-host.sh ../target/release/flash-player-host
+python install-host.py ../target/release/flash-player-host
 ```
 
-This installs the JSON manifest to the standard locations for Firefox, Chrome, and Chromium.
+On Windows, run `py -3 install-host.py ..\target\release\flash-player-host.exe` instead.
 
-**For Chrome:** After loading the extension, copy its ID from `chrome://extensions` and replace `YOUR_EXTENSION_ID_HERE` in the installed Chrome manifest files.
+This installs the JSON manifest to the standard locations for Firefox, Chrome, Chromium, and Brave on Linux, and writes the corresponding per-user registry entries on Windows.
 
 ### 3. Set the Flash plugin path
 
 ```bash
 export FLASH_PLUGIN_PATH=/path/to/libpepflashplayer.so
 ```
+
+On Windows, set `FLASH_PLUGIN_PATH` to the PepperFlash `.dll` path before launching the browser.
 
 ### 4. Load the extension
 

@@ -3,5 +3,5 @@
   "description": "Flash Player Native Messaging Host",
   "path": "/usr/local/bin/flash-player-host",
   "type": "stdio",
-  "allowed_origins": ["chrome-extension://hfhcmepflmneeagholdmjbnlmcnmiekb/"]
+  "allowed_origins": ["chrome-extension://anhpdblalmhfhailclfnnlflfanhgohn/"]
 }

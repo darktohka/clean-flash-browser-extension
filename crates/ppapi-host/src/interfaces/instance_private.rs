@@ -76,6 +76,8 @@ unsafe extern "C" fn execute_script(
         script
     );
 
+    tracing::info!("The script in string format: {}", script);
+
     // If the caller provided an exception output, set it to undefined
     // (no exception).
     if !exception.is_null() {

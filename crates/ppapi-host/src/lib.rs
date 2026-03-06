@@ -25,7 +25,7 @@ pub use threading::ThreadManager;
 pub use var::VarManager;
 
 use parking_lot::Mutex;
-use ppapi_sys::PP_Resource;
+use ppapi_sys::{PP_Resource, PP_Var};
 use std::ffi::{c_char, c_void, CStr};
 use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
@@ -142,6 +142,15 @@ impl HostState {
     /// # Panics
     /// Panics if called more than once.
     pub fn init() -> &'static Self {
+        // Register the string resolver so Display for PP_Var can print
+        // the actual string content instead of opaque IDs.
+        ppapi_sys::set_var_string_resolver(|id| {
+            HOST.get().and_then(|h| {
+                let var = PP_Var::from_string_id(id);
+                h.vars.get_string(var)
+            })
+        });
+
         HOST.get_or_init(|| {
             let mut registry = InterfaceRegistry::new();
             unsafe {

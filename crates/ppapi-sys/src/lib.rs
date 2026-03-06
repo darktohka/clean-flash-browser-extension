@@ -12,6 +12,22 @@
 
 use std::ffi::{c_char, c_void};
 use std::fmt;
+use std::sync::OnceLock;
+
+// ===========================================================================
+// Global string resolver for Display
+// ===========================================================================
+
+/// Optional callback that resolves a string-var ID to its content.
+/// Set by `ppapi-host` at initialisation so that `Display for PP_Var`
+/// can print the actual string instead of just the opaque ID.
+static VAR_STRING_RESOLVER: OnceLock<fn(i64) -> Option<String>> = OnceLock::new();
+
+/// Register a function that maps a string-var ID to its `String` content.
+/// Should be called once during host initialisation.
+pub fn set_var_string_resolver(resolver: fn(i64) -> Option<String>) {
+    let _ = VAR_STRING_RESOLVER.set(resolver);
+}
 
 // ===========================================================================
 // Scalar handle types
@@ -154,6 +170,40 @@ impl fmt::Debug for PP_Var {
                 PP_VARTYPE_OBJECT => write!(f, "PP_Var(object, id={})", self.value.as_id),
                 PP_VARTYPE_RESOURCE => write!(f, "PP_Var(resource, id={})", self.value.as_id),
                 other => write!(f, "PP_Var(type={})", other),
+            }
+        }
+    }
+}
+
+impl fmt::Display for PP_Var {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        unsafe {
+            match self.type_ {
+                PP_VARTYPE_UNDEFINED => write!(f, "undefined"),
+                PP_VARTYPE_NULL => write!(f, "null"),
+                PP_VARTYPE_BOOL => {
+                    if self.value.as_bool != 0 {
+                        write!(f, "true")
+                    } else {
+                        write!(f, "false")
+                    }
+                }
+                PP_VARTYPE_INT32 => write!(f, "{}", self.value.as_int),
+                PP_VARTYPE_DOUBLE => write!(f, "{}", self.value.as_double),
+                PP_VARTYPE_STRING => {
+                    let id = self.value.as_id;
+                    if let Some(s) = VAR_STRING_RESOLVER.get().and_then(|r| r(id)) {
+                        write!(f, "{}", s)
+                    } else {
+                        write!(f, "<string id={}>", id)
+                    }
+                }
+                PP_VARTYPE_OBJECT => write!(f, "<object id={}>", self.value.as_id),
+                PP_VARTYPE_ARRAY => write!(f, "<array id={}>", self.value.as_id),
+                PP_VARTYPE_DICTIONARY => write!(f, "<dictionary id={}>", self.value.as_id),
+                PP_VARTYPE_ARRAY_BUFFER => write!(f, "<arraybuffer id={}>", self.value.as_id),
+                PP_VARTYPE_RESOURCE => write!(f, "<resource id={}>", self.value.as_id),
+                other => write!(f, "<unknown type={}>", other),
             }
         }
     }
