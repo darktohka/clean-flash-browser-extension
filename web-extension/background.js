@@ -27,12 +27,12 @@ const NATIVE_HOST_NAME = "org.nickvision.flash_player";
  */
 const instances = new Map();
 
-/** The single native messaging port (lazy-connected). */
-let nativePort = null;
+/** Map of instanceId -> native messaging port. */
+const nativePorts = new Map();
 
 /**
- * In-progress chunked messages being reassembled.
- * Map of sequence_id -> { total, received, chunks: string[] }
+ * In-progress chunked messages being reassembled, per instance.
+ * Map of instanceId -> Map of sequence_id -> { total, received, chunks: string[] }
  */
 const pendingChunks = new Map();
 
@@ -40,7 +40,11 @@ const pendingChunks = new Map();
  * Reassemble a chunk. When all chunks for a sequence are received,
  * returns the concatenated base64 string. Otherwise returns null.
  */
-function handleChunk(msg) {
+/**
+ * Reassemble a chunk for a specific instance. When all chunks for a sequence are received,
+ * returns the concatenated base64 string. Otherwise returns null.
+ */
+function handleChunk(instanceId, msg) {
   const { s: seq, c: index, t: total, d: data } = msg;
 
   // Single-chunk message -- fast path.
@@ -48,17 +52,23 @@ function handleChunk(msg) {
     return data;
   }
 
-  let entry = pendingChunks.get(seq);
+  let instanceChunks = pendingChunks.get(instanceId);
+  if (!instanceChunks) {
+    instanceChunks = new Map();
+    pendingChunks.set(instanceId, instanceChunks);
+  }
+
+  let entry = instanceChunks.get(seq);
   if (!entry) {
     entry = { total, received: 0, chunks: new Array(total) };
-    pendingChunks.set(seq, entry);
+    instanceChunks.set(seq, entry);
   }
 
   entry.chunks[index] = data;
   entry.received++;
 
   if (entry.received === entry.total) {
-    pendingChunks.delete(seq);
+    instanceChunks.delete(seq);
     return entry.chunks.join("");
   }
 
@@ -80,42 +90,45 @@ function broadcastMessage(b64) {
 }
 
 /**
- * Connect to the native host if not already connected.
+ * Create a native messaging port for a SWF instance.
+ * Returns the port, or null if creation failed.
  */
-function ensureNativePort() {
-  if (nativePort) return;
-
-  nativePort = chrome.runtime.connectNative(NATIVE_HOST_NAME);
+function createNativePort(instanceId, port) {
+  const nativePort = chrome.runtime.connectNative(NATIVE_HOST_NAME);
+  nativePorts.set(instanceId, nativePort);
 
   nativePort.onMessage.addListener((msg) => {
     // All host messages are chunked: {s, c, t, d}.
-    const b64 = handleChunk(msg);
+    const b64 = handleChunk(instanceId, msg);
     if (b64 !== null) {
-      broadcastMessage(b64);
+      // Only send to the matching content script instance.
+      try {
+        port.postMessage({ b64 });
+      } catch {
+        // Port may have disconnected.
+      }
     }
   });
 
   nativePort.onDisconnect.addListener(() => {
     const error = chrome.runtime.lastError;
     if (error) {
-      console.error("[Flash Player] Native host disconnected:", error.message);
+      console.error(`[Flash Player] Native host disconnected for instance ${instanceId}:`, error.message);
     }
-    nativePort = null;
-    pendingChunks.clear();
-
-    // Notify all instances with an inline error (not chunked since
-    // it originates from the extension, not the host).
-    for (const [, port] of instances) {
-      try {
-        port.postMessage({
-          error: "Native host disconnected" + (error ? ": " + error.message : ""),
-        });
-      } catch {
-        // ignore
-      }
+    nativePorts.delete(instanceId);
+    pendingChunks.delete(instanceId);
+    // Notify the instance with an inline error.
+    try {
+      port.postMessage({
+        error: "Native host disconnected" + (error ? ": " + error.message : ""),
+      });
+    } catch {
+      // ignore
     }
-    instances.clear();
+    instances.delete(instanceId);
   });
+
+  return nativePort;
 }
 
 /**
@@ -125,14 +138,16 @@ chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "flash-instance") return;
 
   let instanceId = null;
+  let nativePort = null;
 
   port.onMessage.addListener((msg) => {
     if (msg.type === "start") {
       instanceId = msg.instanceId;
       instances.set(instanceId, port);
 
-      // Start the native host and send the open command.
-      ensureNativePort();
+      // Create a native host for this instance and send the open command.
+      nativePort = createNativePort(instanceId, port);
+      if (!nativePort) return;
       nativePort.postMessage({
         type: "open",
         url: msg.url,
@@ -157,13 +172,14 @@ chrome.runtime.onConnect.addListener((port) => {
   port.onDisconnect.addListener(() => {
     if (instanceId != null) {
       instances.delete(instanceId);
-    }
-    // If no more instances, close the native host.
-    if (instances.size === 0 && nativePort) {
-      nativePort.postMessage({ type: "close" });
-      nativePort.disconnect();
-      nativePort = null;
-      pendingChunks.clear();
+      // Close the native host for this instance.
+      const np = nativePorts.get(instanceId);
+      if (np) {
+        np.postMessage({ type: "close" });
+        np.disconnect();
+        nativePorts.delete(instanceId);
+        pendingChunks.delete(instanceId);
+      }
     }
   });
 });
