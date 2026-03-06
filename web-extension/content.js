@@ -308,207 +308,80 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
 
 // ---------------------------------------------------------------------------
 // JavaScript scripting bridge  (TAG_SCRIPT = 0x10)
+//
+// The actual JS execution runs in page-script.js (MAIN world).  This
+// content script (ISOLATED world) proxies requests/responses through a
+// shared hidden DOM element using synchronous dispatchEvent.
 // ---------------------------------------------------------------------------
 
-/**
- * Object reference store.  Browser-side JS objects that have been returned
- * to the native host are stored here, keyed by a monotonically increasing
- * integer id.  The host sends the id back when it wants to access the
- * object again.
- */
-const jsObjects = new Map();
-let nextJsObjectId = 1;  // 0 is reserved for "window"
-
-// Pre-register the window object.
-jsObjects.set(0, window);
+const COMM_ID = "__flash_player_comm__";
 
 /**
- * Register a JS value and return its id.  Primitives are returned as-is;
- * only objects/functions get stored in the map.
+ * Ensure the hidden communication element exists in the DOM.
+ * Both the content script and the page script reference it by id.
  */
-function registerJsObject(obj) {
-  // Check if it's already registered (avoid duplicates for common objects).
-  for (const [id, existing] of jsObjects) {
-    if (existing === obj) return id;
+function getCommElement() {
+  let el = document.getElementById(COMM_ID);
+  if (!el) {
+    el = document.createElement("div");
+    el.id = COMM_ID;
+    el.style.display = "none";
+    (document.documentElement || document.body || document.head).appendChild(el);
   }
-  const id = nextJsObjectId++;
-  jsObjects.set(id, obj);
-  return id;
+  return el;
 }
 
 /**
- * Encode a JS value into the JSON wire format expected by the native host.
- *   {type: "undefined|null|bool|int|double|string|object", v: ...}
+ * Send a scripting request to the MAIN-world page script and return
+ * the JSON-parsed response synchronously.
+ *
+ * Works because `dispatchEvent` is synchronous — the page script's
+ * listener runs in the same call stack, writes the response attribute,
+ * and then control returns here.
  */
-function encodeJsValue(val) {
-  if (val === undefined) return { type: "undefined" };
-  if (val === null) return { type: "null" };
-  switch (typeof val) {
-    case "boolean":
-      return { type: "bool", v: val };
-    case "number":
-      if (Number.isInteger(val) && val >= -2147483648 && val <= 2147483647) {
-        return { type: "int", v: val };
-      }
-      return { type: "double", v: val };
-    case "string":
-      return { type: "string", v: val };
-    case "function":
-    case "object":
-      return { type: "object", v: registerJsObject(val) };
-    default:
-      return { type: "undefined" };
-  }
-}
-
-/**
- * Decode a JSON-encoded value from the native host into a JS value.
- */
-function decodeJsValue(encoded) {
-  if (!encoded || !encoded.type) return undefined;
-  switch (encoded.type) {
-    case "undefined": return undefined;
-    case "null": return null;
-    case "bool": return !!encoded.v;
-    case "int": return encoded.v | 0;
-    case "double": return +encoded.v;
-    case "string": return String(encoded.v ?? "");
-    case "object": return jsObjects.get(encoded.v);
-    default: return undefined;
+function sendToPageScript(req) {
+  const comm = getCommElement();
+  comm.setAttribute("data-req", JSON.stringify(req));
+  comm.setAttribute("data-resp", ""); // clear previous
+  comm.dispatchEvent(new CustomEvent("__flash_req"));
+  const respStr = comm.getAttribute("data-resp");
+  if (!respStr) return null;
+  try {
+    return JSON.parse(respStr);
+  } catch {
+    return null;
   }
 }
 
 /**
  * Handle a scripting request from the native host.
- * @param {object} req  Parsed JSON request.
- * @param {MessagePort} port  Port to send the response back through.
+ * Forwards to the MAIN-world page script and sends the response back.
  */
 function handleScriptRequest(req, port) {
   const id = req.id;
   const op = req.op;
 
-  try {
-    switch (op) {
-      case "getWindow": {
-        // window is always object id 0.
-        sendScriptResponse(port, id, encodeJsValue(window));
-        break;
-      }
+  // Fire-and-forget operations (e.g. "release") don't need a response.
+  if (op === "release") {
+    sendToPageScript(req);
+    return;
+  }
 
-      case "hasProperty": {
-        const obj = jsObjects.get(req.obj);
-        const result = obj != null && req.name in Object(obj);
-        sendScriptResponse(port, id, { type: "bool", v: result });
-        break;
-      }
+  const resp = sendToPageScript(req);
+  if (!resp) {
+    sendScriptError(port, id, "no response from page script");
+    return;
+  }
 
-      case "hasMethod": {
-        const obj = jsObjects.get(req.obj);
-        const result = obj != null && typeof Object(obj)[req.name] === "function";
-        sendScriptResponse(port, id, { type: "bool", v: result });
-        break;
-      }
-
-      case "getProperty": {
-        const obj = jsObjects.get(req.obj);
-        if (obj == null) {
-          sendScriptResponse(port, id, { type: "undefined" });
-        } else {
-          const val = Object(obj)[req.name];
-          sendScriptResponse(port, id, encodeJsValue(val));
-        }
-        break;
-      }
-
-      case "setProperty": {
-        const obj = jsObjects.get(req.obj);
-        if (obj != null) {
-          Object(obj)[req.name] = decodeJsValue(req.value);
-        }
-        sendScriptResponse(port, id, { type: "undefined" });
-        break;
-      }
-
-      case "removeProperty": {
-        const obj = jsObjects.get(req.obj);
-        if (obj != null) {
-          delete Object(obj)[req.name];
-        }
-        sendScriptResponse(port, id, { type: "undefined" });
-        break;
-      }
-
-      case "getAllPropertyNames": {
-        const obj = jsObjects.get(req.obj);
-        const names = obj != null ? Object.keys(Object(obj)) : [];
-        // Special response: names array instead of value.
-        port.postMessage({ type: "jsResponse", id, names });
-        break;
-      }
-
-      case "callMethod": {
-        const obj = jsObjects.get(req.obj);
-        if (obj == null) {
-          sendScriptError(port, id, "object not found");
-          break;
-        }
-        const fn_ = Object(obj)[req.method];
-        if (typeof fn_ !== "function") {
-          sendScriptError(port, id, `${req.method} is not a function`);
-          break;
-        }
-        const args = (req.args || []).map(decodeJsValue);
-        const result = fn_.apply(obj, args);
-        sendScriptResponse(port, id, encodeJsValue(result));
-        break;
-      }
-
-      case "call": {
-        const fn_ = jsObjects.get(req.obj);
-        if (typeof fn_ !== "function") {
-          sendScriptError(port, id, "object is not callable");
-          break;
-        }
-        const args = (req.args || []).map(decodeJsValue);
-        const result = fn_(...args);
-        sendScriptResponse(port, id, encodeJsValue(result));
-        break;
-      }
-
-      case "construct": {
-        const ctor = jsObjects.get(req.obj);
-        if (typeof ctor !== "function") {
-          sendScriptError(port, id, "object is not a constructor");
-          break;
-        }
-        const args = (req.args || []).map(decodeJsValue);
-        const result = new ctor(...args);
-        sendScriptResponse(port, id, encodeJsValue(result));
-        break;
-      }
-
-      case "executeScript": {
-        // Use indirect eval so it runs in global scope.
-        const result = (0, eval)(req.script);
-        sendScriptResponse(port, id, encodeJsValue(result));
-        break;
-      }
-
-      case "release": {
-        const objId = req.obj;
-        // Never release the window object (id 0).
-        if (objId !== 0) {
-          jsObjects.delete(objId);
-        }
-        // No response needed for release (id is 0 = fire-and-forget).
-        break;
-      }
-
-      default:
-        sendScriptError(port, id, `unknown script op: ${op}`);
-    }
-  } catch (e) {
-    sendScriptError(port, id, String(e));
+  if (resp.error) {
+    sendScriptError(port, id, resp.error);
+  } else if (resp.names) {
+    // getAllPropertyNames returns {names: [...]}
+    try {
+      port.postMessage({ type: "jsResponse", id, names: resp.names });
+    } catch { /* port disconnected */ }
+  } else {
+    sendScriptResponse(port, id, resp.value);
   }
 }
 
