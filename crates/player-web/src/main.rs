@@ -80,10 +80,10 @@ fn main() {
         .with(file_layer)
         .init();
 
-    // Redirect stdout and stderr to /dev/null so that libpepflashplayer.so
-    // (and any other native code) cannot write to them and corrupt the
-    // native messaging channel. Our protocol::write_message() uses the
-    // saved fd from above.
+    // Redirect stdout and stderr to /dev/null (Unix) or NUL (Windows) so
+    // that libpepflashplayer (and any other native code) cannot write to
+    // them and corrupt the native messaging channel.  Our
+    // protocol::send_host_message() uses the saved handle from above.
     #[cfg(unix)]
     unsafe {
         let devnull = libc::open(b"/dev/null\0".as_ptr() as *const _, libc::O_WRONLY);
@@ -92,6 +92,29 @@ fn main() {
             libc::dup2(devnull, 2); // stderr → /dev/null
             libc::close(devnull);
         }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::Console::{
+            SetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
+        };
+
+        // Open the NUL device (Windows equivalent of /dev/null).
+        let nul = std::fs::OpenOptions::new()
+            .write(true)
+            .open("NUL")
+            .expect("failed to open NUL device");
+        let nul_handle = nul.as_raw_handle();
+
+        unsafe {
+            SetStdHandle(STD_OUTPUT_HANDLE, nul_handle); // stdout → NUL
+            SetStdHandle(STD_ERROR_HANDLE, nul_handle);  // stderr → NUL
+        }
+
+        // Leak so the handle stays valid for the entire process lifetime.
+        std::mem::forget(nul);
     }
 
     tracing::info!("Flash Player Native Messaging Host starting");

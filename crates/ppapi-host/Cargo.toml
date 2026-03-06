@@ -6,7 +6,7 @@ license.workspace = true
 description = "Core PPAPI host implementation — loads and hosts PPAPI plugins"
 
 [features]
-default = ["fs-stub"]
+default = ["fs-os"]
 ## Use the real OS filesystem for Flash file storage (works on all platforms).
 fs-os = []
 ## Use an in-memory filesystem — data is not persisted to disk.

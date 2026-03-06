@@ -5,15 +5,14 @@ members = [
     "crates/player-core",
     "crates/player-ui-traits",
     "crates/player-egui",
+    "crates/player-win32",
     "crates/player-web",
 ]
-exclude = ["v86"]
 resolver = "2"
 
 [workspace.package]
 edition = "2021"
 license = "MIT"
-rust-version = "1.75"
 
 [workspace.dependencies]
 ppapi-sys = { path = "crates/ppapi-sys" }
@@ -30,3 +29,6 @@ inherits = "release"
 lto = "fat"
 strip = true
 codegen-units = 1
+
+[profile.release]
+debug = true

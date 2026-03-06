@@ -18,9 +18,10 @@
 //! | 0x03  | Cursor | i32 cursor_type                                      |
 //! | 0x04  | Error  | u32 msg_len + UTF-8 bytes                            |
 //!
-//! Because stdout/stderr are redirected to `/dev/null` (to prevent the
-//! Flash plugin from corrupting the native messaging channel), we write
-//! to a duplicated fd that was saved before the redirect.
+//! Because stdout/stderr are redirected to `/dev/null` (Unix) or `NUL`
+//! (Windows) to prevent the Flash plugin from corrupting the native
+//! messaging channel, we write to a duplicated fd/handle that was saved
+//! before the redirect.
 
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -30,6 +31,9 @@ use base64::Engine;
 
 #[cfg(unix)]
 use std::os::unix::io::{FromRawFd, RawFd};
+
+#[cfg(windows)]
+use std::os::windows::io::{FromRawHandle, RawHandle};
 
 /// Maximum base64 characters per chunk.  The JSON envelope around each
 /// chunk is at most ~64 bytes (`{"s":4294967295,"c":999,"t":999,"d":""}`),
@@ -60,6 +64,44 @@ pub fn init_saved_stdout() {
         .set(parking_lot::Mutex::new(file))
         .ok()
         .expect("init_saved_stdout called twice");
+}
+
+/// Duplicate the current stdout handle and store it for later use.
+/// Must be called **before** stdout is redirected.
+#[cfg(windows)]
+pub fn init_saved_stdout() {
+    use windows_sys::Win32::Foundation::{
+        DuplicateHandle, DUPLICATE_SAME_ACCESS, INVALID_HANDLE_VALUE,
+    };
+    use windows_sys::Win32::System::Console::{GetStdHandle, STD_OUTPUT_HANDLE};
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    unsafe {
+        let stdout_handle = GetStdHandle(STD_OUTPUT_HANDLE);
+        assert!(
+            stdout_handle != INVALID_HANDLE_VALUE && !stdout_handle.is_null(),
+            "failed to get stdout handle",
+        );
+
+        let process = GetCurrentProcess();
+        let mut dup_handle: *mut std::ffi::c_void = std::ptr::null_mut();
+        let ok = DuplicateHandle(
+            process,
+            stdout_handle,
+            process,
+            &mut dup_handle,
+            0,            // dwDesiredAccess (ignored with DUPLICATE_SAME_ACCESS)
+            0,            // bInheritHandle = FALSE
+            DUPLICATE_SAME_ACCESS,
+        );
+        assert!(ok != 0, "failed to duplicate stdout handle");
+
+        let file = std::fs::File::from_raw_handle(dup_handle as RawHandle);
+        SAVED_STDOUT
+            .set(parking_lot::Mutex::new(file))
+            .ok()
+            .expect("init_saved_stdout called twice");
+    }
 }
 
 // -----------------------------------------------------------------------
