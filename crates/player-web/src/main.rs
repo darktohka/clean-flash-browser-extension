@@ -34,6 +34,7 @@
 //! ```
 
 mod protocol;
+mod script_bridge;
 
 use parking_lot::Mutex;
 use player_core::FlashPlayer;
@@ -155,6 +156,21 @@ fn main() {
         std::process::exit(1);
     }
 
+    // Set up the JavaScript scripting bridge so that the PPAPI host can
+    // proxy GetWindowObject / ExecuteScript / property access / method
+    // calls through the real browser DOM via the Chrome Extension.
+    let script_bridge = Arc::new(script_bridge::ScriptBridge::new());
+    SCRIPT_BRIDGE
+        .set(script_bridge.clone())
+        .expect("SCRIPT_BRIDGE already initialised");
+
+    {
+        let host = ppapi_host::HOST.get().expect("HOST not initialised");
+        host.set_script_provider(Box::new(
+            script_bridge::WebScriptProvider::new(script_bridge),
+        ));
+    }
+
     tracing::info!("Host initialized successfully, entering main loop");
 
     // Send initial state.
@@ -219,21 +235,33 @@ fn main() {
 // ===========================================================================
 
 use std::sync::mpsc;
+use std::sync::OnceLock;
+
+/// Global script bridge for routing `jsResponse` messages from the stdin
+/// reader thread to the blocking `ScriptProvider` calls.
+static SCRIPT_BRIDGE: OnceLock<Arc<script_bridge::ScriptBridge>> = OnceLock::new();
 
 /// Lazily-initialized channel that receives messages from a background reader.
 fn try_read_command() -> Option<serde_json::Value> {
-    use std::sync::OnceLock;
-
     static RX: OnceLock<Mutex<mpsc::Receiver<Option<serde_json::Value>>>> = OnceLock::new();
 
     let rx = RX.get_or_init(|| {
         let (tx, rx) = mpsc::channel();
+        let bridge = SCRIPT_BRIDGE.get().cloned();
         std::thread::Builder::new()
             .name("stdin-reader".into())
             .spawn(move || {
                 loop {
                     match protocol::read_message() {
                         Ok(Some(msg)) => {
+                            // Route jsResponse messages to the script bridge
+                            // instead of the normal command channel.
+                            if msg.get("type").and_then(|v| v.as_str()) == Some("jsResponse") {
+                                if let Some(ref b) = bridge {
+                                    b.handle_response(&msg);
+                                }
+                                continue;
+                            }
                             if tx.send(Some(msg)).is_err() {
                                 break;
                             }

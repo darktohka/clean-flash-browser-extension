@@ -170,6 +170,9 @@ pub enum HostMessage<'a> {
     Cursor(i32),
     /// Error message.
     Error(&'a str),
+    /// JavaScript scripting request (host → browser → content script).
+    /// The payload is a JSON string that the content script interprets.
+    ScriptRequest(&'a str),
 }
 
 // Message type tags.
@@ -177,6 +180,7 @@ const TAG_FRAME: u8 = 0x01;
 const TAG_STATE: u8 = 0x02;
 const TAG_CURSOR: u8 = 0x03;
 const TAG_ERROR: u8 = 0x04;
+const TAG_SCRIPT: u8 = 0x10;
 
 impl<'a> HostMessage<'a> {
     /// Serialize to a compact binary representation (little-endian).
@@ -215,6 +219,14 @@ impl<'a> HostMessage<'a> {
                 let bytes = msg.as_bytes();
                 let mut buf = Vec::with_capacity(1 + 4 + bytes.len());
                 buf.push(TAG_ERROR);
+                buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+                buf.extend_from_slice(bytes);
+                buf
+            }
+            HostMessage::ScriptRequest(json) => {
+                let bytes = json.as_bytes();
+                let mut buf = Vec::with_capacity(1 + 4 + bytes.len());
+                buf.push(TAG_SCRIPT);
                 buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
                 buf.extend_from_slice(bytes);
                 buf

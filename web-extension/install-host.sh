@@ -52,11 +52,10 @@ for CHROME_DIR in \
   "description": "Flash Player Native Messaging Host",
   "path": "$HOST_BIN",
   "type": "stdio",
-  "allowed_origins": ["chrome-extension://hfhcmepflmneeagholdmjbnlmcnmiekb/"]
+  "allowed_origins": ["chrome-extension://anhpdblalmhfhailclfnnlflfanhgohn/"]
 }
 EOF
   echo "Installed Chrome manifest: $CHROME_DIR/$HOST_NAME.json"
-  echo "  NOTE: Replace YOUR_EXTENSION_ID_HERE with the actual extension ID after loading it."
 done
 
 echo ""

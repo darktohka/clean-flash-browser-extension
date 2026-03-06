@@ -4,6 +4,7 @@
 //! resources, interface dispatch, threading, and completion callbacks.
 
 pub mod callback;
+pub mod browser_object;
 pub mod filesystem;
 pub mod instance;
 pub mod interface_registry;
@@ -134,6 +135,11 @@ pub struct HostState {
     pub host_callbacks: Mutex<Option<Arc<dyn HostCallbacks>>>,
     /// File chooser provider for native file dialogs.
     pub file_chooser_provider: Mutex<Option<Box<dyn player_ui_traits::FileChooserProvider>>>,
+    /// JavaScript scripting provider for browser-hosted players.
+    /// When set, `instance_private` and `var_deprecated` use this to
+    /// proxy scripting calls (GetWindowObject, ExecuteScript, property
+    /// access, method calls, …) through the real browser DOM.
+    pub script_provider: Mutex<Option<Arc<dyn player_ui_traits::ScriptProvider>>>,
 }
 
 impl HostState {
@@ -168,6 +174,7 @@ impl HostState {
                 main_message_loop: Mutex::new(None),
                 host_callbacks: Mutex::new(None),
                 file_chooser_provider: Mutex::new(None),
+                script_provider: Mutex::new(None),
             }
         })
     }
@@ -180,6 +187,16 @@ impl HostState {
     /// Set the file chooser provider for native file dialogs.
     pub fn set_file_chooser_provider(&self, provider: Box<dyn player_ui_traits::FileChooserProvider>) {
         *self.file_chooser_provider.lock() = Some(provider);
+    }
+
+    /// Set the JavaScript scripting provider (for browser-hosted players).
+    pub fn set_script_provider(&self, provider: Box<dyn player_ui_traits::ScriptProvider>) {
+        *self.script_provider.lock() = Some(Arc::from(provider));
+    }
+
+    /// Get a cloned `Arc` handle to the scripting provider, if set.
+    pub fn get_script_provider(&self) -> Option<Arc<dyn player_ui_traits::ScriptProvider>> {
+        self.script_provider.lock().clone()
     }
 
     /// The `PPB_GetInterface` function that we pass to the plugin's

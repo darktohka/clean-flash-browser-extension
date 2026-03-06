@@ -146,7 +146,7 @@ function replaceFlashElement(elem) {
     }
     // Binary message from the host, base64-encoded.
     if (msg.b64) {
-      handleBinaryMessage(ctx, canvas, msg.b64);
+      handleBinaryMessage(ctx, canvas, msg.b64, port);
     }
   });
 
@@ -183,6 +183,7 @@ const TAG_FRAME  = 0x01;
 const TAG_STATE  = 0x02;
 const TAG_CURSOR = 0x03;
 const TAG_ERROR  = 0x04;
+const TAG_SCRIPT = 0x10;
 
 /**
  * Read a little-endian u32 from a DataView at the given offset.
@@ -214,7 +215,7 @@ function b64ToUint8(b64) {
 /**
  * Handle a fully reassembled binary message (as a base64 string).
  */
-function handleBinaryMessage(ctx, canvas, b64) {
+function handleBinaryMessage(ctx, canvas, b64, port) {
   const bytes = b64ToUint8(b64);
   if (bytes.length === 0) return;
 
@@ -285,8 +286,245 @@ function handleBinaryMessage(ctx, canvas, b64) {
       break;
     }
 
+    case TAG_SCRIPT: {
+      // 1 byte tag + u32 json_len + UTF-8 JSON bytes
+      const jsonLen = readU32(dv, 1);
+      const jsonBytes = bytes.subarray(5, 5 + jsonLen);
+      const decoder = new TextDecoder();
+      const jsonStr = decoder.decode(jsonBytes);
+      try {
+        const req = JSON.parse(jsonStr);
+        handleScriptRequest(req, port);
+      } catch (e) {
+        console.error("[Flash Player] Bad script request:", e, jsonStr);
+      }
+      break;
+    }
+
     default:
       console.warn("[Flash Player] Unknown binary message tag:", tag);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// JavaScript scripting bridge  (TAG_SCRIPT = 0x10)
+// ---------------------------------------------------------------------------
+
+/**
+ * Object reference store.  Browser-side JS objects that have been returned
+ * to the native host are stored here, keyed by a monotonically increasing
+ * integer id.  The host sends the id back when it wants to access the
+ * object again.
+ */
+const jsObjects = new Map();
+let nextJsObjectId = 1;  // 0 is reserved for "window"
+
+// Pre-register the window object.
+jsObjects.set(0, window);
+
+/**
+ * Register a JS value and return its id.  Primitives are returned as-is;
+ * only objects/functions get stored in the map.
+ */
+function registerJsObject(obj) {
+  // Check if it's already registered (avoid duplicates for common objects).
+  for (const [id, existing] of jsObjects) {
+    if (existing === obj) return id;
+  }
+  const id = nextJsObjectId++;
+  jsObjects.set(id, obj);
+  return id;
+}
+
+/**
+ * Encode a JS value into the JSON wire format expected by the native host.
+ *   {type: "undefined|null|bool|int|double|string|object", v: ...}
+ */
+function encodeJsValue(val) {
+  if (val === undefined) return { type: "undefined" };
+  if (val === null) return { type: "null" };
+  switch (typeof val) {
+    case "boolean":
+      return { type: "bool", v: val };
+    case "number":
+      if (Number.isInteger(val) && val >= -2147483648 && val <= 2147483647) {
+        return { type: "int", v: val };
+      }
+      return { type: "double", v: val };
+    case "string":
+      return { type: "string", v: val };
+    case "function":
+    case "object":
+      return { type: "object", v: registerJsObject(val) };
+    default:
+      return { type: "undefined" };
+  }
+}
+
+/**
+ * Decode a JSON-encoded value from the native host into a JS value.
+ */
+function decodeJsValue(encoded) {
+  if (!encoded || !encoded.type) return undefined;
+  switch (encoded.type) {
+    case "undefined": return undefined;
+    case "null": return null;
+    case "bool": return !!encoded.v;
+    case "int": return encoded.v | 0;
+    case "double": return +encoded.v;
+    case "string": return String(encoded.v ?? "");
+    case "object": return jsObjects.get(encoded.v);
+    default: return undefined;
+  }
+}
+
+/**
+ * Handle a scripting request from the native host.
+ * @param {object} req  Parsed JSON request.
+ * @param {MessagePort} port  Port to send the response back through.
+ */
+function handleScriptRequest(req, port) {
+  const id = req.id;
+  const op = req.op;
+
+  try {
+    switch (op) {
+      case "getWindow": {
+        // window is always object id 0.
+        sendScriptResponse(port, id, encodeJsValue(window));
+        break;
+      }
+
+      case "hasProperty": {
+        const obj = jsObjects.get(req.obj);
+        const result = obj != null && req.name in Object(obj);
+        sendScriptResponse(port, id, { type: "bool", v: result });
+        break;
+      }
+
+      case "hasMethod": {
+        const obj = jsObjects.get(req.obj);
+        const result = obj != null && typeof Object(obj)[req.name] === "function";
+        sendScriptResponse(port, id, { type: "bool", v: result });
+        break;
+      }
+
+      case "getProperty": {
+        const obj = jsObjects.get(req.obj);
+        if (obj == null) {
+          sendScriptResponse(port, id, { type: "undefined" });
+        } else {
+          const val = Object(obj)[req.name];
+          sendScriptResponse(port, id, encodeJsValue(val));
+        }
+        break;
+      }
+
+      case "setProperty": {
+        const obj = jsObjects.get(req.obj);
+        if (obj != null) {
+          Object(obj)[req.name] = decodeJsValue(req.value);
+        }
+        sendScriptResponse(port, id, { type: "undefined" });
+        break;
+      }
+
+      case "removeProperty": {
+        const obj = jsObjects.get(req.obj);
+        if (obj != null) {
+          delete Object(obj)[req.name];
+        }
+        sendScriptResponse(port, id, { type: "undefined" });
+        break;
+      }
+
+      case "getAllPropertyNames": {
+        const obj = jsObjects.get(req.obj);
+        const names = obj != null ? Object.keys(Object(obj)) : [];
+        // Special response: names array instead of value.
+        port.postMessage({ type: "jsResponse", id, names });
+        break;
+      }
+
+      case "callMethod": {
+        const obj = jsObjects.get(req.obj);
+        if (obj == null) {
+          sendScriptError(port, id, "object not found");
+          break;
+        }
+        const fn_ = Object(obj)[req.method];
+        if (typeof fn_ !== "function") {
+          sendScriptError(port, id, `${req.method} is not a function`);
+          break;
+        }
+        const args = (req.args || []).map(decodeJsValue);
+        const result = fn_.apply(obj, args);
+        sendScriptResponse(port, id, encodeJsValue(result));
+        break;
+      }
+
+      case "call": {
+        const fn_ = jsObjects.get(req.obj);
+        if (typeof fn_ !== "function") {
+          sendScriptError(port, id, "object is not callable");
+          break;
+        }
+        const args = (req.args || []).map(decodeJsValue);
+        const result = fn_(...args);
+        sendScriptResponse(port, id, encodeJsValue(result));
+        break;
+      }
+
+      case "construct": {
+        const ctor = jsObjects.get(req.obj);
+        if (typeof ctor !== "function") {
+          sendScriptError(port, id, "object is not a constructor");
+          break;
+        }
+        const args = (req.args || []).map(decodeJsValue);
+        const result = new ctor(...args);
+        sendScriptResponse(port, id, encodeJsValue(result));
+        break;
+      }
+
+      case "executeScript": {
+        // Use indirect eval so it runs in global scope.
+        const result = (0, eval)(req.script);
+        sendScriptResponse(port, id, encodeJsValue(result));
+        break;
+      }
+
+      case "release": {
+        const objId = req.obj;
+        // Never release the window object (id 0).
+        if (objId !== 0) {
+          jsObjects.delete(objId);
+        }
+        // No response needed for release (id is 0 = fire-and-forget).
+        break;
+      }
+
+      default:
+        sendScriptError(port, id, `unknown script op: ${op}`);
+    }
+  } catch (e) {
+    sendScriptError(port, id, String(e));
+  }
+}
+
+function sendScriptResponse(port, id, value) {
+  try {
+    port.postMessage({ type: "jsResponse", id, value });
+  } catch {
+    // Port may have disconnected.
+  }
+}
+
+function sendScriptError(port, id, error) {
+  try {
+    port.postMessage({ type: "jsResponse", id, error });
+  } catch {
+    // Port may have disconnected.
   }
 }
 

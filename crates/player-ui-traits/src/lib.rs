@@ -167,3 +167,91 @@ pub trait FileChooserProvider: Send + Sync {
     ) -> Vec<String>;
 }
 
+// ===========================================================================
+// JavaScript / DOM scripting bridge  (for browser-hosted players)
+// ===========================================================================
+
+/// A value that can be passed to or received from the browser's JavaScript
+/// engine.  Used by [`ScriptProvider`] to represent arguments and return
+/// values when bridging PPAPI scripting calls to the real DOM.
+#[derive(Debug, Clone)]
+pub enum JsValue {
+    Undefined,
+    Null,
+    Bool(bool),
+    Int(i32),
+    Double(f64),
+    String(String),
+    /// Opaque handle to a live JavaScript object on the browser side.
+    /// The browser (content script) maintains an id→object map; this id
+    /// is only meaningful over the native-messaging channel.
+    Object(u64),
+}
+
+impl JsValue {
+    /// Returns `true` if this value represents an object reference.
+    pub fn is_object(&self) -> bool {
+        matches!(self, JsValue::Object(_))
+    }
+
+    /// Returns the object id if this is an `Object`, otherwise `None`.
+    pub fn as_object_id(&self) -> Option<u64> {
+        match self {
+            JsValue::Object(id) => Some(*id),
+            _ => None,
+        }
+    }
+}
+
+/// Provides JavaScript / DOM scripting capabilities for browser-hosted
+/// players.
+///
+/// When the Flash player runs inside a real browser (e.g. via the Chrome
+/// Extension Native Messaging bridge), this trait lets the PPAPI host
+/// forward scripting operations (`GetWindowObject`, `ExecuteScript`,
+/// `HasProperty`, `GetProperty`, `Call`, …) to the actual page.
+///
+/// Implementations are expected to be **synchronous** — each method blocks
+/// until the browser responds.
+pub trait ScriptProvider: Send + Sync {
+    /// Obtain a reference to the global `window` object.
+    fn get_window_object(&self) -> JsValue;
+
+    /// Check whether `object[name]` exists.
+    fn has_property(&self, object_id: u64, name: &str) -> bool;
+
+    /// Check whether `object[name]` is callable.
+    fn has_method(&self, object_id: u64, name: &str) -> bool;
+
+    /// Read `object[name]`.
+    fn get_property(&self, object_id: u64, name: &str) -> JsValue;
+
+    /// Write `object[name] = value`.
+    fn set_property(&self, object_id: u64, name: &str, value: &JsValue);
+
+    /// Delete `object[name]`.
+    fn remove_property(&self, object_id: u64, name: &str);
+
+    /// Return all own enumerable property names of `object`.
+    fn get_all_property_names(&self, object_id: u64) -> Vec<String>;
+
+    /// Call `object.method(args…)` and return the result (or an error string).
+    fn call_method(
+        &self,
+        object_id: u64,
+        method_name: &str,
+        args: &[JsValue],
+    ) -> Result<JsValue, String>;
+
+    /// Call `object(args…)` — invoke the object itself as a function.
+    fn call(&self, object_id: u64, args: &[JsValue]) -> Result<JsValue, String>;
+
+    /// `new object(args…)` — construct via the object.
+    fn construct(&self, object_id: u64, args: &[JsValue]) -> Result<JsValue, String>;
+
+    /// Evaluate a JavaScript string and return the result.
+    fn execute_script(&self, script: &str) -> Result<JsValue, String>;
+
+    /// Tell the browser it may release the object reference with this id.
+    fn release_object(&self, object_id: u64);
+}
