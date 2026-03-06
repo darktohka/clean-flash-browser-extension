@@ -6,6 +6,7 @@ members = [
     "crates/player-ui-traits",
     "crates/player-egui",
 ]
+exclude = ["v86"]
 resolver = "2"
 
 [workspace.package]

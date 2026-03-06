@@ -289,14 +289,15 @@ unsafe extern "C" fn query(
         return PP_ERROR_BADRESOURCE;
     };
 
-    let meta = match std::fs::metadata(&path) {
-        Ok(m) => m,
-        Err(_) => return PP_ERROR_FILENOTFOUND,
+    let fs = crate::filesystem::get_filesystem();
+    let fi = match fs.query_file(&path) {
+        Ok(fi) => fi,
+        Err(e) => return e,
     };
 
-    let file_type = if meta.is_dir() {
+    let file_type = if fi.is_dir {
         PP_FILETYPE_DIRECTORY
-    } else if meta.is_file() {
+    } else if fi.is_file {
         PP_FILETYPE_REGULAR
     } else {
         PP_FILETYPE_OTHER
@@ -304,12 +305,12 @@ unsafe extern "C" fn query(
 
     unsafe {
         *info = PP_FileInfo {
-            size: meta.len() as i64,
+            size: fi.size,
             type_: file_type,
             system_type: PP_FILESYSTEMTYPE_EXTERNAL,
-            creation_time: 0.0,
-            last_access_time: 0.0,
-            last_modified_time: 0.0,
+            creation_time: fi.creation_time,
+            last_access_time: fi.last_access_time,
+            last_modified_time: fi.last_modified_time,
         };
     }
     PP_OK

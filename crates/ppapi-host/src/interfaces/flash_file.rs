@@ -48,7 +48,7 @@ fn data_dir() -> PathBuf {
     let base = std::env::temp_dir().to_string_lossy().into_owned();
 
     let dir = PathBuf::from(base).join("flash-player").join("PepperFlash");
-    let _ = std::fs::create_dir_all(&dir);
+    let _ = filesystem::get_filesystem().create_dir(&dir.to_string_lossy());
     dir
 }
 
@@ -64,7 +64,7 @@ fn resolve_path(rel: &str) -> Option<PathBuf> {
         full.canonicalize().ok()?
     } else {
         let parent = full.parent()?;
-        let _ = std::fs::create_dir_all(parent);
+        let _ = filesystem::get_filesystem().create_dir(&parent.to_string_lossy());
         if parent.exists() {
             let canon_parent = parent.canonicalize().ok()?;
             canon_parent.join(full.file_name()?)
@@ -136,13 +136,10 @@ unsafe extern "C" fn rename_file(
     let Some(abs_from) = resolve_path(from) else { return PP_ERROR_NOACCESS };
     let Some(abs_to) = resolve_path(to) else { return PP_ERROR_NOACCESS };
 
-    match std::fs::rename(&abs_from, &abs_to) {
+    let fs = filesystem::get_filesystem();
+    match fs.rename_file(&abs_from.to_string_lossy(), &abs_to.to_string_lossy()) {
         Ok(()) => PP_OK,
-        Err(e) => match e.kind() {
-            std::io::ErrorKind::NotFound => PP_ERROR_FILENOTFOUND,
-            std::io::ErrorKind::PermissionDenied => PP_ERROR_NOACCESS,
-            _ => PP_ERROR_FAILED,
-        },
+        Err(e) => e,
     }
 }
 
@@ -162,23 +159,10 @@ unsafe extern "C" fn delete_file_or_dir(
     let path_str = unsafe { CStr::from_ptr(path) }.to_str().unwrap_or("");
     let Some(abs_path) = resolve_path(path_str) else { return PP_ERROR_NOACCESS };
 
-    let result = if abs_path.is_dir() {
-        if pp_to_bool(recursive) {
-            std::fs::remove_dir_all(&abs_path)
-        } else {
-            std::fs::remove_dir(&abs_path)
-        }
-    } else {
-        std::fs::remove_file(&abs_path)
-    };
-
-    match result {
+    let fs = filesystem::get_filesystem();
+    match fs.delete_file_or_dir(&abs_path.to_string_lossy(), pp_to_bool(recursive)) {
         Ok(()) => PP_OK,
-        Err(e) => match e.kind() {
-            std::io::ErrorKind::NotFound => PP_ERROR_FILENOTFOUND,
-            std::io::ErrorKind::PermissionDenied => PP_ERROR_NOACCESS,
-            _ => PP_ERROR_FAILED,
-        },
+        Err(e) => e,
     }
 }
 
@@ -197,17 +181,10 @@ unsafe extern "C" fn create_dir(
     let path_str = unsafe { CStr::from_ptr(path) }.to_str().unwrap_or("");
     let Some(abs_path) = resolve_path(path_str) else { return PP_ERROR_NOACCESS };
 
-    // Check if directory already exists; if so, return OK (idempotent)
-    if abs_path.is_dir() {
-        return PP_OK;
-    }
-
-    match std::fs::create_dir_all(&abs_path) {
+    let fs = filesystem::get_filesystem();
+    match fs.create_dir(&abs_path.to_string_lossy()) {
         Ok(()) => PP_OK,
-        Err(e) => match e.kind() {
-            std::io::ErrorKind::PermissionDenied => PP_ERROR_NOACCESS,
-            _ => PP_ERROR_FAILED,
-        },
+        Err(e) => e,
     }
 }
 
@@ -226,44 +203,28 @@ unsafe extern "C" fn query_file(
     let path_str = unsafe { CStr::from_ptr(path) }.to_str().unwrap_or("");
     let Some(abs_path) = resolve_path(path_str) else { return PP_ERROR_FILENOTFOUND };
 
-    let meta = match std::fs::metadata(&abs_path) {
-        Ok(m) => m,
-        Err(_) => return PP_ERROR_FILENOTFOUND,
+    let fs = filesystem::get_filesystem();
+    let fi = match fs.query_file(&abs_path.to_string_lossy()) {
+        Ok(fi) => fi,
+        Err(e) => return e,
     };
 
-    let file_type = if meta.is_dir() {
+    let file_type = if fi.is_dir {
         PP_FILETYPE_DIRECTORY
-    } else if meta.is_file() {
+    } else if fi.is_file {
         PP_FILETYPE_REGULAR
     } else {
         PP_FILETYPE_OTHER
     };
-    
-    // Get file times; convert SystemTime to seconds since UNIX_EPOCH
-    let creation_time = meta.created()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0);
-    let last_access_time = meta.accessed()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0);
-    let last_modified_time = meta.modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0);
 
     unsafe {
         *info = PP_FileInfo {
-            size: meta.len() as i64,
+            size: fi.size,
             type_: file_type,
             system_type: PP_FILESYSTEMTYPE_ISOLATED,
-            creation_time,
-            last_access_time,
-            last_modified_time,
+            creation_time: fi.creation_time,
+            last_access_time: fi.last_access_time,
+            last_modified_time: fi.last_modified_time,
         };
     }
     PP_OK
@@ -284,9 +245,10 @@ unsafe extern "C" fn get_dir_contents(
     let path_str = unsafe { CStr::from_ptr(path) }.to_str().unwrap_or("");
     let Some(abs_path) = resolve_path(path_str) else { return PP_ERROR_FILENOTFOUND };
 
-    let entries: Vec<_> = match std::fs::read_dir(&abs_path) {
-        Ok(rd) => rd.filter_map(|e| e.ok()).collect(),
-        Err(_) => return PP_ERROR_FAILED,
+    let fs = filesystem::get_filesystem();
+    let entries = match fs.read_dir(&abs_path.to_string_lossy()) {
+        Ok(entries) => entries,
+        Err(e) => return e,
     };
 
     let count = entries.len() as i32;
@@ -296,8 +258,6 @@ unsafe extern "C" fn get_dir_contents(
         entries: std::ptr::null_mut(),
     });
 
-    // Allocate entries array only if needed. For empty directories, keep
-    // entries=NULL and count=0 exactly like C implementations typically do.
     let entries_ptr = if entries.is_empty() {
         std::ptr::null_mut()
     } else {
@@ -310,14 +270,12 @@ unsafe extern "C" fn get_dir_contents(
     };
 
     for (i, entry) in entries.iter().enumerate() {
-        let name = entry.file_name();
-        let name_c = CString::new(name.to_string_lossy().as_bytes()).unwrap_or_default();
+        let name_c = CString::new(entry.name.as_bytes()).unwrap_or_default();
         let name_ptr = name_c.into_raw(); // reclaimed in FreeDirContents
-        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
         unsafe {
             *entries_ptr.add(i) = PP_DirEntry_Dev {
                 name: name_ptr,
-                is_dir: pp_from_bool(is_dir),
+                is_dir: pp_from_bool(entry.is_dir),
             };
         }
     }
