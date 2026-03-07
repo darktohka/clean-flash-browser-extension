@@ -3,6 +3,19 @@
 //! Provides TCP socket operations: create, connect (by host:port or
 //! by PP_NetAddress_Private), read, write, disconnect, and set-option.
 //! SSL handshake is stubbed (returns PP_ERROR_NOTSUPPORTED).
+//!
+//! ## Flash socket policy handling
+//!
+//! Flash Player checks cross-domain socket policies before allowing a
+//! connection.  It first tries port 843, then falls back to sending a
+//! `<policy-file-request/>\0` on the application port itself.
+//!
+//! Our host intercepts both cases and returns a permissive
+//! `<cross-domain-policy>` response locally so that:
+//!   - Policy checks complete instantly (no server round-trip).
+//!   - Game servers that don't serve policy files work out of the box.
+//!   - The behaviour matches Chrome's PPAPI host (which allowed all
+//!     socket access for trusted plugins).
 
 use crate::interface_registry::InterfaceRegistry;
 use crate::resource::Resource;
@@ -11,9 +24,27 @@ use std::any::Any;
 use std::ffi::{c_char, CStr};
 use std::io::{Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream, ToSocketAddrs};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use super::net_address::{addr_to_socketaddr, socketaddr_to_addr};
 use crate::HOST;
+
+// ---------------------------------------------------------------------------
+// Flash socket policy auto-response
+// ---------------------------------------------------------------------------
+
+/// Standard Flash socket policy that permits connections from any domain to any
+/// port.  The null terminator is required by the Flash policy protocol.
+const PERMISSIVE_POLICY: &[u8] =
+    b"<?xml version=\"1.0\"?>\
+      <!DOCTYPE cross-domain-policy SYSTEM \"http://www.macromedia.com/xml/dtds/cross-domain-policy.dtd\">\
+      <cross-domain-policy>\
+        <allow-access-from domain=\"*\" to-ports=\"*\" />\
+      </cross-domain-policy>\0";
+
+/// The exact bytes Flash sends when requesting a socket policy file.
+const POLICY_FILE_REQUEST: &[u8] = b"<policy-file-request/>\0";
 
 // ---------------------------------------------------------------------------
 // Resource
@@ -27,6 +58,13 @@ pub struct TcpSocketResource {
     pub disconnected: bool,
     /// Whether TCP_NODELAY is requested (before or after connect).
     pub no_delay: bool,
+    /// Cancellation token — set to `true` on Disconnect so that
+    /// background threads know they should not fire their callback.
+    pub cancel: Arc<AtomicBool>,
+    /// Pre-loaded policy response bytes to hand back on the next read.
+    /// Set when we intercept a `<policy-file-request/>` write or when
+    /// connecting to port 843.
+    pub pending_policy_response: Option<Vec<u8>>,
 }
 
 impl Resource for TcpSocketResource {
@@ -53,6 +91,8 @@ unsafe extern "C" fn create(instance: PP_Instance) -> PP_Resource {
         stream: None,
         disconnected: false,
         no_delay: false,
+        cancel: Arc::new(AtomicBool::new(false)),
+        pending_policy_response: None,
     };
     let id = host.resources.insert(instance, Box::new(res));
     tracing::debug!("PPB_TCPSocket_Private::Create -> resource={}", id);
@@ -88,18 +128,43 @@ unsafe extern "C" fn connect(
         return PP_ERROR_FAILED;
     };
 
-    // Get no_delay preference before spawning.
-    let no_delay = host
+    // -----------------------------------------------------------------
+    // Port 843 interception — Flash socket-policy master server.
+    // Instead of connecting to the remote host (which usually has no
+    // policy server), immediately pretend we connected and pre-load a
+    // permissive policy response so the subsequent Read returns it.
+    // -----------------------------------------------------------------
+    if port == 843 {
+        tracing::info!(
+            "PPB_TCPSocket_Private::Connect: intercepting port 843 policy \
+             request for resource={} — will auto-respond with permissive policy",
+            tcp_socket
+        );
+        host.resources
+            .with_downcast_mut::<TcpSocketResource, _>(tcp_socket, |s| {
+                s.pending_policy_response = Some(PERMISSIVE_POLICY.to_vec());
+            });
+        // Fire the connect callback on the main loop with PP_OK.
+        if let Some(poster) = &*host.main_loop_poster.lock() {
+            poster.post_work(callback, 0, PP_OK);
+        }
+        return PP_OK_COMPLETIONPENDING;
+    }
+
+    // Get no_delay preference and cancel token before spawning.
+    let (no_delay, cancel) = host
         .resources
-        .with_downcast::<TcpSocketResource, _>(tcp_socket, |s| s.no_delay)
-        .unwrap_or(false);
+        .with_downcast::<TcpSocketResource, _>(tcp_socket, |s| {
+            (s.no_delay, s.cancel.clone())
+        })
+        .unwrap_or((false, Arc::new(AtomicBool::new(true))));
 
     // Perform DNS resolution + connect asynchronously.
     let cb = callback;
     let resource_id = tcp_socket;
     std::thread::spawn(move || {
         let result = do_connect_host(&host_str, port, no_delay);
-        finish_connect(resource_id, result, cb);
+        finish_connect(resource_id, result, cb, &cancel);
     });
 
     PP_OK_COMPLETIONPENDING
@@ -127,16 +192,18 @@ unsafe extern "C" fn connect_with_net_address(
         return PP_ERROR_FAILED;
     };
 
-    let no_delay = host
+    let (no_delay, cancel) = host
         .resources
-        .with_downcast::<TcpSocketResource, _>(tcp_socket, |s| s.no_delay)
-        .unwrap_or(false);
+        .with_downcast::<TcpSocketResource, _>(tcp_socket, |s| {
+            (s.no_delay, s.cancel.clone())
+        })
+        .unwrap_or((false, Arc::new(AtomicBool::new(true))));
 
     let cb = callback;
     let resource_id = tcp_socket;
     std::thread::spawn(move || {
         let result = do_connect_addr(&sa, no_delay);
-        finish_connect(resource_id, result, cb);
+        finish_connect(resource_id, result, cb, &cancel);
     });
 
     PP_OK_COMPLETIONPENDING
@@ -195,7 +262,19 @@ fn finish_connect(
     resource_id: PP_Resource,
     result: Result<TcpStream, i32>,
     cb: PP_CompletionCallback,
+    cancel: &AtomicBool,
 ) {
+    // If the socket was already disconnected / resource freed while
+    // we were connecting, do NOT fire the callback — the plugin has
+    // already cleaned up and the user_data pointer may be stale.
+    if cancel.load(Ordering::Acquire) {
+        tracing::debug!(
+            "PPB_TCPSocket_Private: connect finished for cancelled resource {} — dropping callback",
+            resource_id
+        );
+        return;
+    }
+
     let Some(host) = HOST.get() else { return };
     let code = match result {
         Ok(stream) => {
@@ -307,13 +386,50 @@ unsafe extern "C" fn read(
         return PP_ERROR_FAILED;
     };
 
-    // Clone the TcpStream so we can read on a background thread.
-    let stream_clone = host
+    // -----------------------------------------------------------------
+    // If we have a pending policy response (from an intercepted port-843
+    // connect or a `<policy-file-request/>` write), serve it directly
+    // instead of reading from the network.
+    // -----------------------------------------------------------------
+    let policy_data = host
         .resources
-        .with_downcast::<TcpSocketResource, _>(tcp_socket, |s| {
-            s.stream.as_ref().and_then(|st| st.try_clone().ok())
+        .with_downcast_mut::<TcpSocketResource, _>(tcp_socket, |s| {
+            s.pending_policy_response.take()
         })
         .flatten();
+
+    if let Some(policy_bytes) = policy_data {
+        let max_read = bytes_to_read.min(1024 * 1024) as usize;
+        let n = policy_bytes.len().min(max_read);
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                policy_bytes.as_ptr(),
+                buffer as *mut u8,
+                n,
+            );
+        }
+        tracing::info!(
+            "PPB_TCPSocket_Private::Read(resource={}): serving {} bytes of \
+             auto-generated policy response",
+            tcp_socket, n
+        );
+        // Fire the read callback with the byte count.
+        if let Some(poster) = &*host.main_loop_poster.lock() {
+            poster.post_work(callback, 0, n as i32);
+        }
+        return PP_OK_COMPLETIONPENDING;
+    }
+
+    // -----------------------------------------------------------------
+    // Normal read path — clone the stream and read on a bg thread.
+    // -----------------------------------------------------------------
+    let (stream_clone, cancel) = host
+        .resources
+        .with_downcast::<TcpSocketResource, _>(tcp_socket, |s| {
+            let sc = s.stream.as_ref().and_then(|st| st.try_clone().ok());
+            (sc, s.cancel.clone())
+        })
+        .unwrap_or((None, Arc::new(AtomicBool::new(true))));
 
     let Some(mut stream) = stream_clone else {
         tracing::warn!("PPB_TCPSocket_Private::Read: not connected");
@@ -324,17 +440,41 @@ unsafe extern "C" fn read(
     let max_read = bytes_to_read.min(1024 * 1024) as usize;
     let buf_ptr = buffer as usize; // raw pointer sent to thread
     let cb = callback;
+    let resource_id = tcp_socket;
 
     std::thread::spawn(move || {
         let slice = unsafe { std::slice::from_raw_parts_mut(buf_ptr as *mut u8, max_read) };
         let result = match stream.read(slice) {
-            Ok(0) => 0, // EOF
-            Ok(n) => n as i32,
+            Ok(0) => {
+                tracing::debug!(
+                    "PPB_TCPSocket_Private::Read(resource={}): EOF (0 bytes)",
+                    resource_id
+                );
+                0
+            }
+            Ok(n) => {
+                tracing::debug!(
+                    "PPB_TCPSocket_Private::Read(resource={}): received {} bytes",
+                    resource_id, n
+                );
+                n as i32
+            }
             Err(e) => {
-                tracing::warn!("PPB_TCPSocket_Private::Read error: {}", e);
+                tracing::warn!(
+                    "PPB_TCPSocket_Private::Read(resource={}): error: {}",
+                    resource_id, e
+                );
                 PP_ERROR_FAILED
             }
         };
+
+        if cancel.load(Ordering::Acquire) {
+            tracing::debug!(
+                "PPB_TCPSocket_Private::Read(resource={}): cancelled — dropping callback",
+                resource_id
+            );
+            return;
+        }
 
         let Some(host) = HOST.get() else { return };
         if let Some(poster) = &*host.main_loop_poster.lock() {
@@ -365,32 +505,78 @@ unsafe extern "C" fn write(
         return PP_ERROR_FAILED;
     };
 
-    let stream_clone = host
+    // Cap at 1 MB as per spec.
+    let max_write = bytes_to_write.min(1024 * 1024) as usize;
+    // Copy data so the thread owns it.
+    let data = unsafe { std::slice::from_raw_parts(buffer as *const u8, max_write) }.to_vec();
+
+    // -----------------------------------------------------------------
+    // Policy-file-request interception.  If Flash writes exactly the
+    // 23-byte `<policy-file-request/>\0` payload to ANY socket, we
+    // treat it as a policy check: don't forward the data to the server
+    // and instead queue a permissive response for the next Read.
+    // -----------------------------------------------------------------
+    if data == POLICY_FILE_REQUEST {
+        tracing::info!(
+            "PPB_TCPSocket_Private::Write(resource={}): intercepted policy-file-request \
+             — queuing permissive policy response",
+            tcp_socket
+        );
+        host.resources
+            .with_downcast_mut::<TcpSocketResource, _>(tcp_socket, |s| {
+                s.pending_policy_response = Some(PERMISSIVE_POLICY.to_vec());
+            });
+        // Report success immediately (all bytes "written").
+        if let Some(poster) = &*host.main_loop_poster.lock() {
+            poster.post_work(callback, 0, max_write as i32);
+        }
+        return PP_OK_COMPLETIONPENDING;
+    }
+
+    // -----------------------------------------------------------------
+    // Normal write path.
+    // -----------------------------------------------------------------
+    let (stream_clone, cancel) = host
         .resources
         .with_downcast::<TcpSocketResource, _>(tcp_socket, |s| {
-            s.stream.as_ref().and_then(|st| st.try_clone().ok())
+            let sc = s.stream.as_ref().and_then(|st| st.try_clone().ok());
+            (sc, s.cancel.clone())
         })
-        .flatten();
+        .unwrap_or((None, Arc::new(AtomicBool::new(true))));
 
     let Some(mut stream) = stream_clone else {
         tracing::warn!("PPB_TCPSocket_Private::Write: not connected");
         return PP_ERROR_FAILED;
     };
 
-    // Cap at 1 MB as per spec.
-    let max_write = bytes_to_write.min(1024 * 1024) as usize;
-    // Copy data so the thread owns it.
-    let data = unsafe { std::slice::from_raw_parts(buffer as *const u8, max_write) }.to_vec();
     let cb = callback;
+    let resource_id = tcp_socket;
 
     std::thread::spawn(move || {
         let result = match stream.write(&data) {
-            Ok(n) => n as i32,
+            Ok(n) => {
+                tracing::debug!(
+                    "PPB_TCPSocket_Private::Write(resource={}): wrote {} bytes",
+                    resource_id, n
+                );
+                n as i32
+            }
             Err(e) => {
-                tracing::warn!("PPB_TCPSocket_Private::Write error: {}", e);
+                tracing::warn!(
+                    "PPB_TCPSocket_Private::Write(resource={}): error: {}",
+                    resource_id, e
+                );
                 PP_ERROR_FAILED
             }
         };
+
+        if cancel.load(Ordering::Acquire) {
+            tracing::debug!(
+                "PPB_TCPSocket_Private::Write(resource={}): cancelled — dropping callback",
+                resource_id
+            );
+            return;
+        }
 
         let Some(host) = HOST.get() else { return };
         if let Some(poster) = &*host.main_loop_poster.lock() {
@@ -409,10 +595,14 @@ unsafe extern "C" fn disconnect(tcp_socket: PP_Resource) {
     host.resources
         .with_downcast_mut::<TcpSocketResource, _>(tcp_socket, |s| {
             s.disconnected = true;
+            // Signal cancellation so background threads drop their
+            // callbacks instead of posting stale completions.
+            s.cancel.store(true, Ordering::Release);
             if let Some(ref stream) = s.stream {
                 let _ = stream.shutdown(Shutdown::Both);
             }
             s.stream = None;
+            s.pending_policy_response = None;
         });
 }
 
