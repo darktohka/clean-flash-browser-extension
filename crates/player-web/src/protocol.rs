@@ -376,11 +376,12 @@ impl<'a> HostMessage<'a> {
 // Chunked sending
 // -----------------------------------------------------------------------
 
-/// Serialize a [`HostMessage`] to binary, base64-encode it, chunk it to
-/// stay under the 1 MB native-messaging limit, and send each chunk.
+/// Serialize a [`HostMessage`] to binary, LZ4-compress it, base64-encode,
+/// chunk it to stay under the 1 MB native-messaging limit, and send each chunk.
 pub fn send_host_message(msg: &HostMessage<'_>) -> io::Result<()> {
     let binary = msg.to_bytes();
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&binary);
+    let compressed = lz4_flex::compress_prepend_size(&binary);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&compressed);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
 
     let total_chunks = (b64.len() + MAX_B64_PER_CHUNK - 1) / MAX_B64_PER_CHUNK;

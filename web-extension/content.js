@@ -1115,11 +1115,14 @@ function audioInputClose(streamId) {
 
 /**
  * Handle a fully reassembled binary message (as a base64 string).
+ * The binary payload is LZ4-compressed (with prepended uncompressed size).
  */
 function handleBinaryMessage(ctx, canvas, b64, port) {
   const b64Len = b64.length;
   const t0 = FLASH_DEBUG ? performance.now() : 0;
-  const bytes = b64ToUint8(b64);
+  const compressed = b64ToUint8(b64);
+  // LZ4 decompress (lz4_decompress is provided by lz4.js loaded before us).
+  const bytes = lz4_decompress(compressed);
   const decodeMs = FLASH_DEBUG ? performance.now() - t0 : 0;
   if (bytes.length === 0) return;
 
