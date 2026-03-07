@@ -56,7 +56,7 @@ unsafe extern "C" fn get_window_object(instance: PP_Instance) -> PP_Var {
         return var;
     }
 
-    // Fallback: fake window object stubs (standalone player, no browser).
+    // Fallback: fake window object stubs (standalone player, no browser).\\g\g
     let var = crate::window_object::create_window_object(instance);
     tracing::debug!(
         "ppb_instance_private_get_window_object: instance={} -> {:?} (fake)",
@@ -67,13 +67,32 @@ unsafe extern "C" fn get_window_object(instance: PP_Instance) -> PP_Var {
 }
 
 unsafe extern "C" fn get_owner_element_object(instance: PP_Instance) -> PP_Var {
+    let host = HOST.get().unwrap();
+
+    if !host.instances.exists(instance) {
+        tracing::error!(
+            "ppb_instance_private_get_owner_element_object: bad instance {}",
+            instance
+        );
+        return PP_Var::undefined();
+    }
+
+    // If a ScriptProvider is registered, return the real <object>/<embed> element.
+    if let Some(sp) = host.get_script_provider() {
+        let js_val = sp.get_owner_element();
+        let var = crate::browser_object::js_value_to_pp_var(&js_val);
+        tracing::debug!(
+            "ppb_instance_private_get_owner_element_object: instance={} -> {:?} (browser)",
+            instance,
+            var
+        );
+        return var;
+    }
+
     tracing::debug!(
         "ppb_instance_private_get_owner_element_object: instance={} -> undefined (no DOM)",
         instance
     );
-
-    // If a ScriptProvider is available we could return the <object>/<embed>
-    // element, but PepperFlash doesn't rely on this — return undefined.
     PP_Var::undefined()
 }
 

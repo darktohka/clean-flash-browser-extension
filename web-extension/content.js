@@ -90,6 +90,9 @@ function resolveSwfUrl(src) {
 /** Unique instance counter for this content script. */
 let nextInstanceId = 0;
 
+/** Active native messaging port — used by the ExternalInterface bridge. */
+let activePort = null;
+
 /**
  * Replace a Flash element with a <canvas> and wire up the native messaging
  * bridge via the background service worker.
@@ -127,6 +130,7 @@ function replaceFlashElement(elem) {
 
   // ---- Open a port to the background service worker ----
   const port = chrome.runtime.connect({ name: "flash-instance" });
+  activePort = port;
 
   // Tell the background to start the native host and open the SWF.
   port.postMessage({
@@ -402,6 +406,33 @@ function sendScriptError(port, id, error) {
 }
 
 // ---------------------------------------------------------------------------
+// ExternalInterface: JS → AS (CallFunction bridge)
+//
+// page-script.js dispatches "__flash_callfn" CustomEvents on the shared
+// comm element when JavaScript calls a registered ExternalInterface
+// callback (e.g. game.startup(…)).  We forward the invoke XML to the
+// native host which routes it to PepperFlash's scriptable object.
+// ---------------------------------------------------------------------------
+
+/**
+ * Set up the listener that forwards CallFunction invocations from the
+ * MAIN-world page script to the native messaging host.
+ */
+function initCallFunctionBridge() {
+  const comm = getCommElement();
+  comm.addEventListener("__flash_callfn", () => {
+    const xml = comm.getAttribute("data-callfn");
+    if (xml && activePort) {
+      try {
+        activePort.postMessage({ type: "callFunction", xml });
+      } catch {
+        // Port may have disconnected.
+      }
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Drawing helpers (kept for reference; frame drawing is now in handleBinaryMessage)
 // ---------------------------------------------------------------------------
 
@@ -635,6 +666,9 @@ function flashMutationObserver(mutations) {
 // ---------------------------------------------------------------------------
 
 function init() {
+  // Set up the ExternalInterface CallFunction bridge (JS → AS).
+  initCallFunctionBridge();
+
   // Scan existing elements.
   const tags = ["object", "embed"];
   for (const tagName of tags) {

@@ -217,6 +217,9 @@ pub trait ScriptProvider: Send + Sync {
     /// Obtain a reference to the global `window` object.
     fn get_window_object(&self) -> JsValue;
 
+    /// Obtain a reference to the plugin's owner `<object>` or `<embed>` element.
+    fn get_owner_element(&self) -> JsValue;
+
     /// Check whether `object[name]` exists.
     fn has_property(&self, object_id: u64, name: &str) -> bool;
 

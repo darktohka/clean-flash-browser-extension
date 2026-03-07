@@ -54,7 +54,11 @@ unsafe extern "C" fn var_from_utf8(data: *const c_char, len: u32) -> PP_Var {
     }
 
     let slice = unsafe { std::slice::from_raw_parts(data as *const u8, len as usize) };
-    host.vars.var_from_utf8(slice)
+    let data = host.vars.var_from_utf8(slice);
+
+    tracing::trace!("PPB_Var::VarFromUtf8: created var {}", data);
+
+    data
 }
 
 unsafe extern "C" fn var_to_utf8(var: PP_Var, len: *mut u32) -> *const c_char {

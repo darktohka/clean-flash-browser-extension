@@ -26,7 +26,7 @@ pub use threading::ThreadManager;
 pub use var::VarManager;
 
 use parking_lot::Mutex;
-use ppapi_sys::{PP_Resource, PP_Var};
+use ppapi_sys::{PP_Resource, PP_Var, PP_VARTYPE_STRING};
 use std::ffi::{c_char, c_void, CStr};
 use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
@@ -140,6 +140,11 @@ pub struct HostState {
     /// proxy scripting calls (GetWindowObject, ExecuteScript, property
     /// access, method calls, …) through the real browser DOM.
     pub script_provider: Mutex<Option<Arc<dyn player_ui_traits::ScriptProvider>>>,
+    /// The plugin's main scriptable object, obtained via
+    /// `PPP_Instance_Private::GetInstanceObject`.  Used to route incoming
+    /// `CallFunction` invocations (ExternalInterface JS→AS direction)
+    /// back into PepperFlash.
+    pub instance_object: Mutex<Option<PP_Var>>,
 }
 
 impl HostState {
@@ -175,6 +180,7 @@ impl HostState {
                 host_callbacks: Mutex::new(None),
                 file_chooser_provider: Mutex::new(None),
                 script_provider: Mutex::new(None),
+                instance_object: Mutex::new(None),
             }
         })
     }
@@ -197,6 +203,80 @@ impl HostState {
     /// Get a cloned `Arc` handle to the scripting provider, if set.
     pub fn get_script_provider(&self) -> Option<Arc<dyn player_ui_traits::ScriptProvider>> {
         self.script_provider.lock().clone()
+    }
+
+    /// Save the plugin's main scriptable object (from `GetInstanceObject`).
+    pub fn set_instance_object(&self, var: PP_Var) {
+        *self.instance_object.lock() = Some(var);
+    }
+
+    /// Get the saved scriptable object, if any.
+    pub fn get_instance_object(&self) -> Option<PP_Var> {
+        *self.instance_object.lock()
+    }
+
+    /// Route an ExternalInterface `CallFunction` XML string to the plugin's
+    /// scriptable object.
+    ///
+    /// Returns the result as a `String` (the eval-able JS text that
+    /// PepperFlash would normally return), or `None` on failure.
+    ///
+    /// # Safety
+    /// Must be called from the main (plugin) thread.
+    pub unsafe fn handle_external_call(&self, xml: &str) -> Option<String> {
+        let obj_var = self.get_instance_object()?;
+
+        // Look up the object's vtable and data pointers.
+        let ptrs = self.vars.with_object(obj_var, |entry| {
+            (entry.class, entry.data)
+        })?;
+        let (class, data) = ptrs;
+
+        // Build PP_Var arguments: method name = "QueryInterface" on some
+        // builds, but standard PepperFlash uses the Call vtable with
+        // method name = "QueryInterface".  Actually, Chrome calls the
+        // vtable directly with method_name = "QueryInterface" for some
+        // things, but for CallFunction it uses the standard Call with a
+        // string method name of "QueryInterface"… 
+        //
+        // After checking: Chrome simply passes the *method name* that JS
+        // used on the element.  For `elem.CallFunction(xml)`, Chrome
+        // calls PPP_Class_Deprecated::Call with
+        //   method_name = PP_Var("CallFunction")
+        //   argc = 1
+        //   argv = [PP_Var(xml_string)]
+        let method_var = self.vars.var_from_str("CallFunction");
+        let xml_var = self.vars.var_from_str(xml);
+        let mut argv = [xml_var];
+        let mut exception = PP_Var::undefined();
+
+        let call_fn = unsafe { (*class).Call }?;
+        let result = unsafe {
+            call_fn(data, method_var, 1, argv.as_mut_ptr(), &mut exception)
+        };
+
+        // Release the temporary string vars.
+        self.vars.release(method_var);
+        self.vars.release(xml_var);
+
+        // Check for exception.
+        if exception.type_ != ppapi_sys::PP_VARTYPE_UNDEFINED {
+            if exception.type_ == PP_VARTYPE_STRING {
+                let msg = self.vars.get_string(exception).unwrap_or_default();
+                tracing::warn!("handle_external_call exception: {}", msg);
+                self.vars.release(exception);
+            }
+            return None;
+        }
+
+        // Convert result to string (PepperFlash returns a JS-eval-able string).
+        let result_str = if result.type_ == PP_VARTYPE_STRING {
+            self.vars.get_string(result)
+        } else {
+            None
+        };
+        self.vars.release(result);
+        result_str
     }
 
     /// The `PPB_GetInterface` function that we pass to the plugin's

@@ -411,6 +411,29 @@ fn handle_command(player: &mut FlashPlayer, cmd: &serde_json::Value) -> bool {
             player.notify_focus_change(has_focus);
         }
 
+        "callFunction" => {
+            // ExternalInterface: JS → AS.  The invoke XML was sent by
+            // page-script.js when JavaScript called a registered callback
+            // (e.g. game.startup(…)).  Route it to PepperFlash's scriptable
+            // object.
+            let xml = cmd["xml"].as_str().unwrap_or("");
+            if xml.is_empty() {
+                tracing::warn!("callFunction: empty XML");
+            } else {
+                tracing::info!("callFunction: routing invoke XML to PepperFlash");
+                tracing::debug!("callFunction XML: {}", xml);
+                let host = ppapi_host::HOST.get().expect("HOST not initialised");
+                let result = unsafe { host.handle_external_call(xml) };
+                if let Some(ref js) = result {
+                    tracing::debug!("callFunction result: {}", js);
+                }
+                // For now the result is discarded — the JS caller already
+                // returned undefined (fire-and-forget).  If synchronous
+                // return values are needed in the future, send the result
+                // back to the extension here.
+            }
+        }
+
         "close" | "eof" => {
             tracing::info!("Received {} — shutting down", msg_type);
             return false;

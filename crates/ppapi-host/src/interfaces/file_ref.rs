@@ -169,6 +169,7 @@ unsafe extern "C" fn get_file_system_type(_file_ref: PP_Resource) -> PP_FileSyst
 }
 
 unsafe extern "C" fn get_name(file_ref: PP_Resource) -> PP_Var {
+    tracing::debug!("PPB_FileRef::GetName({})", file_ref);
     let Some(host) = HOST.get() else { return PP_Var::undefined() };
 
     let name = host.resources.with_downcast::<FileRefResource, _>(file_ref, |fr| {
@@ -187,6 +188,7 @@ unsafe extern "C" fn get_name(file_ref: PP_Resource) -> PP_Var {
 }
 
 unsafe extern "C" fn get_path(file_ref: PP_Resource) -> PP_Var {
+    tracing::debug!("PPB_FileRef::GetPath({})", file_ref);  
     let Some(host) = HOST.get() else { return PP_Var::undefined() };
 
     let path = host.resources.with_downcast::<FileRefResource, _>(file_ref, |fr| {

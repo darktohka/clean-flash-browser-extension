@@ -296,11 +296,18 @@ impl FlashPlayer {
         if let Some(priv_iface) = ppp_instance_private {
             if let Some(get_obj) = priv_iface.GetInstanceObject {
                 tracing::info!("open_swf: calling PPP_Instance_Private::GetInstanceObject");
-                let _scriptable_obj = unsafe { get_obj(instance_id) };
-                tracing::warn!("open_swf: PPP_Instance_Private::GetInstanceObject: {:?}", _scriptable_obj);
-                // We don't use the returned PP_Var (scripting bridge) in
-                // our standalone player, but Flash may rely on this call
-                // happening before HandleDocumentLoad.
+                let scriptable_obj = unsafe { get_obj(instance_id) };
+                tracing::warn!("open_swf: PPP_Instance_Private::GetInstanceObject: {:?}", scriptable_obj);
+
+                // Save the scriptable object so we can route CallFunction
+                // (ExternalInterface JS→AS) back into PepperFlash.
+                if scriptable_obj.type_ == ppapi_sys::PP_VARTYPE_OBJECT {
+                    host.set_instance_object(scriptable_obj);
+                    tracing::info!("open_swf: saved scriptable object for ExternalInterface");
+                }
+                // We don't release the object — the host holds a reference
+                // for the lifetime of the instance to receive CallFunction
+                // invocations.
             }
         } else {
             tracing::debug!("open_swf: PPP_Instance_Private;0.1 not available");

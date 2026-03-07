@@ -168,6 +168,14 @@ impl ScriptProvider for WebScriptProvider {
             .unwrap_or(JsValue::Undefined)
     }
 
+    fn get_owner_element(&self) -> JsValue {
+        let resp = self.bridge.request(json!({"op": "getOwnerElement"}));
+        resp.as_ref()
+            .and_then(|r| r.get("value"))
+            .map(json_to_js_value)
+            .unwrap_or(JsValue::Undefined)
+    }
+
     fn has_property(&self, object_id: u64, name: &str) -> bool {
         let resp = self.bridge.request(json!({
             "op": "hasProperty",

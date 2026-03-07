@@ -160,6 +160,7 @@ unsafe extern "C" fn get_css_scale(resource: PP_Resource) -> f32 {
 }
 
 unsafe extern "C" fn get_scroll_offset(resource: PP_Resource, offset: *mut PP_Point) -> PP_Bool {
+    tracing::trace!("PPB_View::GetScrollOffset({}, {:?})", resource, if offset.is_null() { None } else { Some(unsafe { &*offset }) });
     let Some(host) = HOST.get() else {
         return PP_FALSE;
     };

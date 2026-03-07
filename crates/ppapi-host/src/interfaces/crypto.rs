@@ -2,6 +2,8 @@
 
 use crate::interface_registry::InterfaceRegistry;
 use ppapi_sys::*;
+use rand::rngs::SysRng;
+use rand::TryRng;
 use std::ffi::c_char;
 
 static VTABLE: PPB_Crypto_Dev_0_1 = PPB_Crypto_Dev_0_1 {
@@ -19,25 +21,11 @@ unsafe extern "C" fn get_random_bytes(buffer: *mut c_char, num_bytes: u32) {
         return;
     }
 
-    // Read from /dev/urandom for cryptographic randomness.
     let slice = unsafe { std::slice::from_raw_parts_mut(buffer as *mut u8, num_bytes as usize) };
 
-    // Try getrandom first, fall back to /dev/urandom.
-    #[cfg(target_os = "linux")]
-    {
-        use std::io::Read;
-        if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-            let _ = f.read_exact(slice);
-            return;
-        }
-    }
-
-    // Fallback: fill with pseudo-random data using a simple xorshift.
-    let mut state: u64 = 0x12345678_9ABCDEF0;
-    for byte in slice.iter_mut() {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        *byte = state as u8;
+    let mut rng = SysRng;
+    if let Err(err) = rng.try_fill_bytes(slice) {
+        tracing::error!(?err, "PPB_Crypto::GetRandomBytes failed");
+        slice.fill(0);
     }
 }
