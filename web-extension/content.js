@@ -94,6 +94,12 @@ let nextInstanceId = 0;
 let activePort = null;
 
 /**
+ * Per-instance metadata used for crash recovery.
+ * instanceId -> { canvas, ctx, swfUrl, origWidth, origHeight, port, container, elem }
+ */
+const instanceMeta = new Map();
+
+/**
  * Replace a Flash element with a <canvas> and wire up the native messaging
  * bridge via the background service worker.
  *
@@ -128,8 +134,51 @@ function replaceFlashElement(elem) {
 
   const ctx = canvas.getContext("2d");
 
-  // ---- Open a port to the background service worker ----
+  // ---- Wrap canvas in a container for crash overlay support ----
+  const container = document.createElement("div");
+  container.style.position = "relative";
+  container.style.display = "inline-block";
+  container.style.width = canvas.style.width;
+  container.style.height = canvas.style.height;
+  container.appendChild(canvas);
+
+  // ---- Store instance metadata for crash recovery ----
+  const meta = { canvas, ctx, swfUrl, origWidth, origHeight, port: null, container, elem };
+  instanceMeta.set(instanceId, meta);
+
+  // ---- Connect and start ----
+  startInstance(instanceId, meta);
+
+  // ---- Replace the original element in the DOM ----
+  if (elem.tagName === "EMBED") {
+    // For <embed>, insert the container and hide the original (some pages
+    // reference the embed by id afterwards).
+    elem.style.display = "none";
+    elem.parentNode.insertBefore(container, elem);
+  } else {
+    // For <object>, remove children and append container inside.
+    while (elem.firstChild) elem.removeChild(elem.firstChild);
+    elem.style.display = "inline-block";
+    elem.appendChild(container);
+  }
+  elem.setAttribute("data-flash-player", instanceId);
+
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Instance lifecycle (start / restart)
+// ---------------------------------------------------------------------------
+
+/**
+ * Start (or restart) a Flash instance by opening a new port to the
+ * background service worker and wiring up message handlers.
+ */
+function startInstance(instanceId, meta) {
+  const { canvas, ctx, swfUrl, origWidth, origHeight } = meta;
+
   const port = chrome.runtime.connect({ name: "flash-instance" });
+  meta.port = port;
   activePort = port;
 
   // Tell the background to start the native host and open the SWF.
@@ -146,36 +195,189 @@ function replaceFlashElement(elem) {
     // Extension-originated error (e.g. host disconnect).
     if (msg.error) {
       console.error("[Flash Player]", msg.error);
+      showCrashOverlay(instanceId);
       return;
     }
     // Binary message from the host, base64-encoded.
+    // Always read from meta so we use the current canvas/ctx after restarts.
     if (msg.b64) {
-      handleBinaryMessage(ctx, canvas, msg.b64, port);
+      handleBinaryMessage(meta.ctx, meta.canvas, msg.b64, port);
     }
   });
 
   port.onDisconnect.addListener(() => {
     console.warn("[Flash Player] Native host disconnected for instance", instanceId);
+    showCrashOverlay(instanceId);
   });
 
   // ---- Wire up input events on the canvas ----
-  bindInputEvents(canvas, port);
-
-  // ---- Replace the original element in the DOM ----
-  if (elem.tagName === "EMBED") {
-    // For <embed>, insert the canvas and hide the original (some pages
-    // reference the embed by id afterwards).
-    elem.style.display = "none";
-    elem.parentNode.insertBefore(canvas, elem);
+  // On restart, clone the canvas to strip old event listeners.
+  if (meta._started) {
+    const freshCanvas = canvas.cloneNode(false);
+    freshCanvas.getContext("2d"); // ensure context
+    meta.canvas = freshCanvas;
+    meta.ctx = freshCanvas.getContext("2d");
+    if (canvas.parentNode) {
+      canvas.parentNode.replaceChild(freshCanvas, canvas);
+    }
+    bindInputEvents(freshCanvas, port);
   } else {
-    // For <object>, remove children and append canvas inside.
-    while (elem.firstChild) elem.removeChild(elem.firstChild);
-    elem.style.display = "inline-block";
-    elem.appendChild(canvas);
+    meta._started = true;
+    bindInputEvents(canvas, port);
   }
-  elem.setAttribute("data-flash-player", instanceId);
+}
 
-  return true;
+// ---------------------------------------------------------------------------
+// Crash overlay
+// ---------------------------------------------------------------------------
+
+/**
+ * Show a styled crash overlay on top of the canvas for the given instance.
+ */
+function showCrashOverlay(instanceId) {
+  const meta = instanceMeta.get(instanceId);
+  if (!meta) return;
+
+  const { container } = meta;
+
+  // Don't add a second overlay.
+  if (container.querySelector(".flash-crash-overlay")) return;
+
+  const overlay = document.createElement("div");
+  overlay.className = "flash-crash-overlay";
+  Object.assign(overlay.style, {
+    position: "absolute",
+    inset: "0",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    background: "linear-gradient(135deg, #0b1a3e 0%, #162d6b 40%, #1e3f8f 70%, #2557b8 100%)",
+    color: "#fff",
+    fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
+    textAlign: "center",
+    zIndex: "999999",
+    borderRadius: "0",
+    overflow: "hidden",
+    userSelect: "none",
+  });
+
+  // Subtle grid-line pattern for depth.
+  const patternOverlay = document.createElement("div");
+  Object.assign(patternOverlay.style, {
+    position: "absolute",
+    inset: "0",
+    backgroundImage:
+      "linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px), " +
+      "linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px)",
+    backgroundSize: "40px 40px",
+    pointerEvents: "none",
+  });
+  overlay.appendChild(patternOverlay);
+
+  // Icon
+  const icon = document.createElement("div");
+  icon.textContent = "\u26A0"; // ⚠
+  Object.assign(icon.style, {
+    fontSize: "48px",
+    marginBottom: "12px",
+    filter: "drop-shadow(0 2px 8px rgba(0,0,0,0.4))",
+    animation: "flash-crash-pulse 2s ease-in-out infinite",
+    position: "relative",
+    zIndex: "1",
+  });
+  overlay.appendChild(icon);
+
+  // Title
+  const title = document.createElement("div");
+  title.textContent = "Oops! Flash Player has crashed!";
+  Object.assign(title.style, {
+    fontSize: "22px",
+    fontWeight: "700",
+    letterSpacing: "0.3px",
+    marginBottom: "8px",
+    textShadow: "0 2px 12px rgba(0,0,0,0.5)",
+    position: "relative",
+    zIndex: "1",
+  });
+  overlay.appendChild(title);
+
+  // Subtitle
+  const subtitle = document.createElement("div");
+  subtitle.textContent = "The native host process ended unexpectedly.";
+  Object.assign(subtitle.style, {
+    fontSize: "13px",
+    opacity: "0.7",
+    marginBottom: "24px",
+    position: "relative",
+    zIndex: "1",
+  });
+  overlay.appendChild(subtitle);
+
+  // Restart button
+  const btn = document.createElement("button");
+  btn.textContent = "\u21BB  Restart";
+  Object.assign(btn.style, {
+    padding: "10px 32px",
+    fontSize: "14px",
+    fontWeight: "600",
+    color: "#0b1a3e",
+    background: "linear-gradient(135deg, #7ec8f2, #b4dff7)",
+    border: "none",
+    borderRadius: "8px",
+    cursor: "pointer",
+    boxShadow: "0 4px 20px rgba(30, 63, 143, 0.45), inset 0 1px 0 rgba(255,255,255,0.4)",
+    transition: "0.5s ease",
+    position: "relative",
+    zIndex: "1",
+    letterSpacing: "0.5px",
+  });
+  btn.addEventListener("mouseenter", () => {
+    // Slightly brighten the button on hover, do not grow.
+    btn.style.background = "linear-gradient(135deg, #8ed0f4, #c0e5fb)";
+  });
+  btn.addEventListener("mouseleave", () => {
+    btn.style.background = "linear-gradient(135deg, #7ec8f2, #b4dff7)";
+  });
+  btn.addEventListener("click", () => {
+    restartInstance(instanceId);
+  });
+  overlay.appendChild(btn);
+
+  // Inject keyframe animation (once)
+  if (!document.getElementById("flash-crash-styles")) {
+    const style = document.createElement("style");
+    style.id = "flash-crash-styles";
+    style.textContent = `
+      @keyframes flash-crash-pulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.6; transform: scale(1.08); }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  container.appendChild(overlay);
+}
+
+/**
+ * Remove the crash overlay and restart the native host for an instance.
+ */
+function restartInstance(instanceId) {
+  const meta = instanceMeta.get(instanceId);
+  if (!meta) return;
+
+  const { container } = meta;
+
+  // Remove the crash overlay.
+  const overlay = container.querySelector(".flash-crash-overlay");
+  if (overlay) overlay.remove();
+
+  // Clear the canvas.
+  meta.ctx.clearRect(0, 0, meta.canvas.width, meta.canvas.height);
+
+  // Re-connect.
+  startInstance(instanceId, meta);
 }
 
 // ---------------------------------------------------------------------------
