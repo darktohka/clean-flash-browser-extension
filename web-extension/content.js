@@ -224,12 +224,38 @@ function b64ToUint8(b64) {
 
 // ---------------------------------------------------------------------------
 // Web Audio playback — receives PCM from native host, plays via AudioContext
+//
+// Uses an adaptive jitter buffer: tracks the variance of inter-arrival
+// times and keeps enough scheduling headroom to absorb spikes without
+// audible gaps, while keeping latency as low as possible.
 // ---------------------------------------------------------------------------
 
 /**
- * Active audio streams.  stream_id -> { ctx, nextTime, sampleRate, frameCount }
+ * Active audio streams.
+ * stream_id -> {
+ *   ctx,              // AudioContext
+ *   nextTime,         // next scheduled start (ctx.currentTime units)
+ *   sampleRate,
+ *   frameCount,
+ *   bufferDuration,   // seconds per buffer (frameCount / sampleRate)
+ *   lastArrival,      // performance.now() of last write_samples
+ *   jitterEma,        // exponential moving average of |inter-arrival − expected|
+ *   targetAhead,      // current adaptive headroom (seconds)
+ * }
  */
 const audioStreams = new Map();
+
+/** Minimum scheduling headroom (seconds). */
+const MIN_AHEAD = 0.04;
+/** Maximum scheduling headroom (seconds) — caps latency. */
+const MAX_AHEAD = 0.25;
+/** EMA smoothing factor for jitter measurement (0 < α < 1). */
+const JITTER_ALPHA = 0.05;
+/**
+ * How many multiples of the jitter EMA to add on top of MIN_AHEAD.
+ * Higher = more resilient to spikes, but adds latency.
+ */
+const JITTER_MULTIPLIER = 3.0;
 
 /**
  * Create a new Web Audio stream.
@@ -239,14 +265,21 @@ function audioInit(streamId, sampleRate, frameCount) {
   audioClose(streamId);
 
   const ctx = new AudioContext({ sampleRate });
+  const bufferDuration = frameCount / sampleRate;
+
   audioStreams.set(streamId, {
     ctx,
     nextTime: 0,
     sampleRate,
     frameCount,
+    bufferDuration,
+    lastArrival: 0,
+    jitterEma: 0,
+    targetAhead: MIN_AHEAD,
   });
   console.log("[Flash Player] Audio stream created:", streamId,
-              "rate:", sampleRate, "frames:", frameCount);
+              "rate:", sampleRate, "frames:", frameCount,
+              "bufDur:", bufferDuration.toFixed(4) + "s");
 }
 
 /**
@@ -257,14 +290,30 @@ function audioWriteSamples(streamId, pcmBytes) {
   const stream = audioStreams.get(streamId);
   if (!stream) return;
 
-  const { ctx, sampleRate, frameCount } = stream;
+  const { ctx, sampleRate, frameCount, bufferDuration } = stream;
 
   // Resume the context if it was suspended (autoplay policy).
   if (ctx.state === "suspended") {
     ctx.resume();
   }
 
-  // Decode interleaved stereo i16 LE → float32 per-channel.
+  // --- Adaptive jitter measurement ---
+  const arrivalNow = performance.now();
+  if (stream.lastArrival > 0) {
+    const interArrival = (arrivalNow - stream.lastArrival) / 1000; // seconds
+    const deviation = Math.abs(interArrival - bufferDuration);
+    // Exponential moving average of the absolute deviation.
+    stream.jitterEma = stream.jitterEma * (1 - JITTER_ALPHA)
+                     + deviation * JITTER_ALPHA;
+    // Adaptive headroom: base + multiple of jitter.
+    stream.targetAhead = Math.min(
+      MAX_AHEAD,
+      Math.max(MIN_AHEAD, MIN_AHEAD + stream.jitterEma * JITTER_MULTIPLIER),
+    );
+  }
+  stream.lastArrival = arrivalNow;
+
+  // --- Decode interleaved stereo i16 LE → float32 per-channel ---
   const dv = new DataView(pcmBytes.buffer, pcmBytes.byteOffset, pcmBytes.byteLength);
   const actualFrames = Math.min(frameCount, (pcmBytes.byteLength / 4) | 0);
   const buffer = ctx.createBuffer(2, actualFrames, sampleRate);
@@ -281,10 +330,19 @@ function audioWriteSamples(streamId, pcmBytes) {
   source.connect(ctx.destination);
 
   const now = ctx.currentTime;
-  if (stream.nextTime < now) {
-    // First buffer or gap — start slightly in the future to build margin.
-    stream.nextTime = now + 0.02;
+  const ahead = stream.targetAhead;
+
+  if (stream.nextTime <= now) {
+    // First buffer after init, resume, or an underrun — schedule from
+    // `now + targetAhead` to build up a safe cushion before playback
+    // reaches the scheduled point.
+    stream.nextTime = now + ahead;
+  } else if (stream.nextTime > now + ahead + bufferDuration * 4) {
+    // We're scheduled way too far in the future (clock jump?).
+    // Re-anchor to avoid growing latency.
+    stream.nextTime = now + ahead;
   }
+
   source.start(stream.nextTime);
   stream.nextTime += actualFrames / sampleRate;
 }
@@ -307,6 +365,9 @@ function audioStop(streamId) {
   if (stream) {
     stream.ctx.suspend();
     stream.nextTime = 0;
+    stream.lastArrival = 0;
+    stream.jitterEma = 0;
+    stream.targetAhead = MIN_AHEAD;
   }
 }
 

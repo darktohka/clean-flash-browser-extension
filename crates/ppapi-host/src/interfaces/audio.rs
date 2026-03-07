@@ -271,6 +271,10 @@ fn audio_provider_pump(ctx: ProviderPumpContext) {
         interval,
     );
 
+    // Steady-clock loop: track the ideal next-wake time so that callback
+    // duration and send latency don't accumulate as drift.
+    let mut next_wake = std::time::Instant::now() + interval;
+
     while ctx.playing.load(Ordering::Relaxed) {
         let mut buf = vec![0u8; ctx.buffer_bytes];
         let latency = 0.0_f64;
@@ -295,7 +299,20 @@ fn audio_provider_pump(ctx: ProviderPumpContext) {
         }
 
         ctx.provider.write_samples(ctx.stream_id, &buf);
-        std::thread::sleep(interval);
+
+        // Sleep until the next scheduled wake time.  If we've already
+        // passed it (callback or send took too long), skip straight to
+        // the next period without accumulating lag.
+        let now = std::time::Instant::now();
+        if next_wake > now {
+            std::thread::sleep(next_wake - now);
+        }
+        next_wake += interval;
+        // If we fell behind by more than one full interval, snap forward
+        // so we don't try to "catch up" with a burst of rapid callbacks.
+        if next_wake < now {
+            next_wake = now + interval;
+        }
     }
 
     tracing::debug!(

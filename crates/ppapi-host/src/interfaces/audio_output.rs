@@ -233,6 +233,8 @@ fn audio_output_provider_pump(ctx: ProviderPumpContext) {
         ctx.sample_frame_count as f64 / ctx.sample_rate as f64,
     );
 
+    let mut next_wake = std::time::Instant::now() + interval;
+
     while ctx.playing.load(Ordering::Relaxed) {
         let mut buf = vec![0u8; ctx.buffer_bytes];
         if let Some(cb) = ctx.callback {
@@ -246,7 +248,15 @@ fn audio_output_provider_pump(ctx: ProviderPumpContext) {
             }
         }
         ctx.provider.write_samples(ctx.stream_id, &buf);
-        std::thread::sleep(interval);
+
+        let now = std::time::Instant::now();
+        if next_wake > now {
+            std::thread::sleep(next_wake - now);
+        }
+        next_wake += interval;
+        if next_wake < now {
+            next_wake = now + interval;
+        }
     }
 }
 
