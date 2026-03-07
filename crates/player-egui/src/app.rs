@@ -70,7 +70,11 @@ impl FlashPlayerApp {
         let plugin_path =
             std::env::var("FLASH_PLUGIN_PATH").unwrap_or_else(|_| String::from("libpepflashplayer.so"));
 
-        player.set_plugin_path(&plugin_path);
+        let actual_plugin_path = std::fs::canonicalize(&plugin_path)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| plugin_path.clone());
+
+        player.set_plugin_path(&actual_plugin_path);
 
         // Set up the dialog provider.
         let dialog_state = Arc::new(dialogs::DialogState::new());
