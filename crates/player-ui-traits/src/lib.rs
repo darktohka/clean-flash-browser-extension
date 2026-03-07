@@ -258,3 +258,44 @@ pub trait ScriptProvider: Send + Sync {
     /// Tell the browser it may release the object reference with this id.
     fn release_object(&self, object_id: u64);
 }
+
+// ===========================================================================
+// Audio provider — abstracts audio playback for browser-hosted players
+// ===========================================================================
+
+/// Provides audio playback capabilities for browser-hosted players.
+///
+/// When set on the PPAPI host, audio resources will use this provider
+/// instead of the native audio system (cpal).  The provider receives raw
+/// PCM sample data and is responsible for playing it (e.g. by forwarding
+/// it to the browser's Web Audio API via native messaging).
+///
+/// Audio format is always **stereo** (2 channels), interleaved signed
+/// 16-bit little-endian PCM.
+pub trait AudioProvider: Send + Sync {
+    /// Create a new audio output stream.
+    ///
+    /// - `sample_rate`: sample rate in Hz (e.g. 44100, 48000).
+    /// - `sample_frame_count`: number of frames per callback buffer.
+    ///
+    /// Returns an opaque stream ID (non-zero on success, 0 on failure).
+    fn create_stream(&self, sample_rate: u32, sample_frame_count: u32) -> u32;
+
+    /// Write a buffer of PCM audio samples for playback.
+    ///
+    /// `samples` contains `sample_frame_count × 2 channels × 2 bytes`
+    /// of interleaved stereo signed 16-bit little-endian PCM data.
+    ///
+    /// Called periodically from a background audio pump thread.
+    fn write_samples(&self, stream_id: u32, samples: &[u8]);
+
+    /// Begin playback on a previously created stream.
+    fn start_stream(&self, stream_id: u32) -> bool;
+
+    /// Pause/stop playback on a stream (may be restarted later).
+    fn stop_stream(&self, stream_id: u32);
+
+    /// Close and release a stream permanently.
+    /// Called when the audio resource is dropped.
+    fn close_stream(&self, stream_id: u32);
+}

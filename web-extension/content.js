@@ -189,6 +189,11 @@ const TAG_CURSOR = 0x03;
 const TAG_ERROR  = 0x04;
 const TAG_SCRIPT = 0x10;
 const TAG_NAVIGATE = 0x05;
+const TAG_AUDIO_INIT    = 0x20;
+const TAG_AUDIO_SAMPLES = 0x21;
+const TAG_AUDIO_START   = 0x22;
+const TAG_AUDIO_STOP    = 0x23;
+const TAG_AUDIO_CLOSE   = 0x24;
 
 /**
  * Read a little-endian u32 from a DataView at the given offset.
@@ -215,6 +220,106 @@ function b64ToUint8(b64) {
     arr[i] = bin.charCodeAt(i);
   }
   return arr;
+}
+
+// ---------------------------------------------------------------------------
+// Web Audio playback — receives PCM from native host, plays via AudioContext
+// ---------------------------------------------------------------------------
+
+/**
+ * Active audio streams.  stream_id -> { ctx, nextTime, sampleRate, frameCount }
+ */
+const audioStreams = new Map();
+
+/**
+ * Create a new Web Audio stream.
+ */
+function audioInit(streamId, sampleRate, frameCount) {
+  // Close any existing stream with the same id.
+  audioClose(streamId);
+
+  const ctx = new AudioContext({ sampleRate });
+  audioStreams.set(streamId, {
+    ctx,
+    nextTime: 0,
+    sampleRate,
+    frameCount,
+  });
+  console.log("[Flash Player] Audio stream created:", streamId,
+              "rate:", sampleRate, "frames:", frameCount);
+}
+
+/**
+ * Schedule a buffer of PCM samples for playback on a stream.
+ * `pcmBytes` is a Uint8Array of interleaved stereo i16 LE samples.
+ */
+function audioWriteSamples(streamId, pcmBytes) {
+  const stream = audioStreams.get(streamId);
+  if (!stream) return;
+
+  const { ctx, sampleRate, frameCount } = stream;
+
+  // Resume the context if it was suspended (autoplay policy).
+  if (ctx.state === "suspended") {
+    ctx.resume();
+  }
+
+  // Decode interleaved stereo i16 LE → float32 per-channel.
+  const dv = new DataView(pcmBytes.buffer, pcmBytes.byteOffset, pcmBytes.byteLength);
+  const actualFrames = Math.min(frameCount, (pcmBytes.byteLength / 4) | 0);
+  const buffer = ctx.createBuffer(2, actualFrames, sampleRate);
+  const left = buffer.getChannelData(0);
+  const right = buffer.getChannelData(1);
+
+  for (let i = 0; i < actualFrames; i++) {
+    left[i]  = dv.getInt16(i * 4,     true) / 32768.0;
+    right[i] = dv.getInt16(i * 4 + 2, true) / 32768.0;
+  }
+
+  const source = ctx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(ctx.destination);
+
+  const now = ctx.currentTime;
+  if (stream.nextTime < now) {
+    // First buffer or gap — start slightly in the future to build margin.
+    stream.nextTime = now + 0.02;
+  }
+  source.start(stream.nextTime);
+  stream.nextTime += actualFrames / sampleRate;
+}
+
+/**
+ * Start (resume) playback on a stream.
+ */
+function audioStart(streamId) {
+  const stream = audioStreams.get(streamId);
+  if (stream && stream.ctx.state === "suspended") {
+    stream.ctx.resume();
+  }
+}
+
+/**
+ * Stop (suspend) playback on a stream.
+ */
+function audioStop(streamId) {
+  const stream = audioStreams.get(streamId);
+  if (stream) {
+    stream.ctx.suspend();
+    stream.nextTime = 0;
+  }
+}
+
+/**
+ * Close and release a stream.
+ */
+function audioClose(streamId) {
+  const stream = audioStreams.get(streamId);
+  if (stream) {
+    stream.ctx.close().catch(() => {});
+    audioStreams.delete(streamId);
+    console.log("[Flash Player] Audio stream closed:", streamId);
+  }
 }
 
 /**
@@ -328,6 +433,43 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
       } catch (e) {
         console.error("[Flash Player] Navigate failed:", e);
       }
+      break;
+    }
+
+    // ---- Audio messages ----
+
+    case TAG_AUDIO_INIT: {
+      // 1 byte tag + u32 stream_id + u32 sample_rate + u32 frame_count
+      const streamId   = readU32(dv, 1);
+      const sampleRate = readU32(dv, 5);
+      const frameCount = readU32(dv, 9);
+      audioInit(streamId, sampleRate, frameCount);
+      break;
+    }
+
+    case TAG_AUDIO_SAMPLES: {
+      // 1 byte tag + u32 stream_id + PCM bytes
+      const streamId = readU32(dv, 1);
+      const pcmBytes = bytes.subarray(5);
+      audioWriteSamples(streamId, pcmBytes);
+      break;
+    }
+
+    case TAG_AUDIO_START: {
+      const streamId = readU32(dv, 1);
+      audioStart(streamId);
+      break;
+    }
+
+    case TAG_AUDIO_STOP: {
+      const streamId = readU32(dv, 1);
+      audioStop(streamId);
+      break;
+    }
+
+    case TAG_AUDIO_CLOSE: {
+      const streamId = readU32(dv, 1);
+      audioClose(streamId);
       break;
     }
 

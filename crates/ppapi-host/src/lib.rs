@@ -147,6 +147,9 @@ pub struct HostState {
     /// proxy scripting calls (GetWindowObject, ExecuteScript, property
     /// access, method calls, …) through the real browser DOM.
     pub script_provider: Mutex<Option<Arc<dyn player_ui_traits::ScriptProvider>>>,
+    /// Audio playback provider for browser-hosted players.
+    /// When set, PPB_Audio and PPB_AudioOutput use this instead of cpal.
+    pub audio_provider: Mutex<Option<Arc<dyn player_ui_traits::AudioProvider>>>,
     /// The plugin's main scriptable object, obtained via
     /// `PPP_Instance_Private::GetInstanceObject`.  Used to route incoming
     /// `CallFunction` invocations (ExternalInterface JS→AS direction)
@@ -187,6 +190,7 @@ impl HostState {
                 host_callbacks: Mutex::new(None),
                 file_chooser_provider: Mutex::new(None),
                 script_provider: Mutex::new(None),
+                audio_provider: Mutex::new(None),
                 instance_object: Mutex::new(None),
             }
         })
@@ -205,6 +209,16 @@ impl HostState {
     /// Set the JavaScript scripting provider (for browser-hosted players).
     pub fn set_script_provider(&self, provider: Box<dyn player_ui_traits::ScriptProvider>) {
         *self.script_provider.lock() = Some(Arc::from(provider));
+    }
+
+    /// Set the audio playback provider (for browser-hosted players).
+    pub fn set_audio_provider(&self, provider: Box<dyn player_ui_traits::AudioProvider>) {
+        *self.audio_provider.lock() = Some(Arc::from(provider));
+    }
+
+    /// Get a cloned `Arc` handle to the audio provider, if set.
+    pub fn get_audio_provider(&self) -> Option<Arc<dyn player_ui_traits::AudioProvider>> {
+        self.audio_provider.lock().clone()
     }
 
     /// Get a cloned `Arc` handle to the scripting provider, if set.

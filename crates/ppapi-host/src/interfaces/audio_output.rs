@@ -20,6 +20,28 @@ use std::sync::Arc;
 use super::super::HOST;
 
 // ---------------------------------------------------------------------------
+// Stream handle — either native (cpal) or provider-based
+// ---------------------------------------------------------------------------
+
+#[allow(dead_code)] // variants hold values kept alive for their Drop impl
+pub(crate) enum AudioOutputStreamHandle {
+    Cpal(cpal::Stream),
+    Provider(ProviderStreamHandle),
+}
+
+pub(crate) struct ProviderStreamHandle {
+    stream_id: u32,
+    provider: Arc<dyn player_ui_traits::AudioProvider>,
+}
+
+impl Drop for ProviderStreamHandle {
+    fn drop(&mut self) {
+        self.provider.close_stream(self.stream_id);
+        tracing::debug!("audio_output ProviderStreamHandle dropped (stream_id={})", self.stream_id);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Resource
 // ---------------------------------------------------------------------------
 
@@ -31,8 +53,8 @@ pub struct AudioOutputResource {
     pub callback: PPB_AudioOutput_Callback,
     pub user_data: *mut c_void,
     pub playing: Arc<AtomicBool>,
-    /// Handle to the cpal output stream (kept alive while playing).
-    pub stream: parking_lot::Mutex<Option<cpal::Stream>>,
+    /// Handle to the output stream (kept alive while playing).
+    pub(crate) stream: parking_lot::Mutex<Option<AudioOutputStreamHandle>>,
 }
 
 // SAFETY: user_data is plugin-managed.
@@ -187,6 +209,93 @@ fn start_cpal_stream(
         .ok()?;
 
     Some(stream)
+}
+
+// ---------------------------------------------------------------------------
+// Provider-based audio pump (for browser-hosted players)
+// ---------------------------------------------------------------------------
+
+struct ProviderPumpContext {
+    callback: PPB_AudioOutput_Callback,
+    user_data: *mut c_void,
+    playing: Arc<AtomicBool>,
+    buffer_bytes: usize,
+    stream_id: u32,
+    provider: Arc<dyn player_ui_traits::AudioProvider>,
+    sample_frame_count: u32,
+    sample_rate: u32,
+}
+
+unsafe impl Send for ProviderPumpContext {}
+
+fn audio_output_provider_pump(ctx: ProviderPumpContext) {
+    let interval = std::time::Duration::from_secs_f64(
+        ctx.sample_frame_count as f64 / ctx.sample_rate as f64,
+    );
+
+    while ctx.playing.load(Ordering::Relaxed) {
+        let mut buf = vec![0u8; ctx.buffer_bytes];
+        if let Some(cb) = ctx.callback {
+            unsafe {
+                cb(
+                    buf.as_mut_ptr() as *mut c_void,
+                    ctx.buffer_bytes as u32,
+                    0.0_f64,
+                    ctx.user_data,
+                );
+            }
+        }
+        ctx.provider.write_samples(ctx.stream_id, &buf);
+        std::thread::sleep(interval);
+    }
+}
+
+fn try_start_provider_stream(
+    sample_rate: u32,
+    sample_frame_count: u32,
+    callback: PPB_AudioOutput_Callback,
+    user_data: *mut c_void,
+    playing: Arc<AtomicBool>,
+) -> Option<AudioOutputStreamHandle> {
+    let host = HOST.get()?;
+    let provider = host.get_audio_provider()?;
+
+    let stream_id = provider.create_stream(sample_rate, sample_frame_count);
+    if stream_id == 0 {
+        return None;
+    }
+
+    if !provider.start_stream(stream_id) {
+        provider.close_stream(stream_id);
+        return None;
+    }
+
+    let buffer_bytes = (sample_frame_count as usize) * 2 * 2;
+    let pump_ctx = ProviderPumpContext {
+        callback,
+        user_data,
+        playing,
+        buffer_bytes,
+        stream_id,
+        provider: provider.clone(),
+        sample_frame_count,
+        sample_rate,
+    };
+
+    std::thread::Builder::new()
+        .name(format!("audio-out-pump-{}", stream_id))
+        .spawn(move || audio_output_provider_pump(pump_ctx))
+        .ok()?;
+
+    tracing::info!(
+        "ppb_audio_output: started provider stream {} (rate={}, frames={})",
+        stream_id, sample_rate, sample_frame_count,
+    );
+
+    Some(AudioOutputStreamHandle::Provider(ProviderStreamHandle {
+        stream_id,
+        provider,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -363,6 +472,20 @@ unsafe extern "C" fn start_playback(audio_output: PP_Resource) -> PP_Bool {
                 return PP_TRUE;
             }
 
+            // Try the audio provider first (browser-hosted players).
+            if let Some(handle) = try_start_provider_stream(
+                ao.sample_rate,
+                ao.sample_frame_count,
+                ao.callback,
+                ao.user_data,
+                ao.playing.clone(),
+            ) {
+                ao.playing.store(true, Ordering::SeqCst);
+                *ao.stream.lock() = Some(handle);
+                return PP_TRUE;
+            }
+
+            // Fall back to native cpal audio.
             let stream = start_cpal_stream(
                 ao.sample_rate,
                 ao.sample_frame_count,
@@ -381,9 +504,9 @@ unsafe extern "C" fn start_playback(audio_output: PP_Resource) -> PP_Bool {
                         return PP_FALSE;
                     }
                     ao.playing.store(true, Ordering::SeqCst);
-                    *ao.stream.lock() = Some(s);
+                    *ao.stream.lock() = Some(AudioOutputStreamHandle::Cpal(s));
                     tracing::info!(
-                        "ppb_audio_output_start_playback: started (rate={}, frames={})",
+                        "ppb_audio_output_start_playback: started via cpal (rate={}, frames={})",
                         ao.sample_rate,
                         ao.sample_frame_count
                     );

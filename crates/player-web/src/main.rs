@@ -40,7 +40,7 @@ use parking_lot::Mutex;
 use player_core::FlashPlayer;
 use ppapi_sys::*;
 use serde_json::json;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
@@ -177,6 +177,10 @@ fn main() {
         host.set_script_provider(Box::new(
             script_bridge::WebScriptProvider::new(script_bridge),
         ));
+
+        // Set up the audio provider so that Flash audio is forwarded to
+        // the browser's Web Audio API instead of playing via cpal.
+        host.set_audio_provider(Box::new(WebAudioProvider::new()));
     }
 
     tracing::info!("Host initialized successfully, entering main loop");
@@ -552,6 +556,69 @@ fn send_dirty_frame(frame_handle: &Arc<Mutex<Option<player_core::SharedFrameBuff
         stride,
         pixels: &region,
     });
+}
+
+// ===========================================================================
+// Audio provider — sends PCM audio to the browser via native messaging
+// ===========================================================================
+
+/// Audio provider that forwards PCM samples to the Chrome Extension's
+/// Web Audio API via native messaging binary messages.
+struct WebAudioProvider {
+    next_stream_id: AtomicU32,
+}
+
+impl WebAudioProvider {
+    fn new() -> Self {
+        Self {
+            next_stream_id: AtomicU32::new(1),
+        }
+    }
+}
+
+impl player_ui_traits::AudioProvider for WebAudioProvider {
+    fn create_stream(&self, sample_rate: u32, sample_frame_count: u32) -> u32 {
+        let id = self.next_stream_id.fetch_add(1, Ordering::Relaxed);
+        tracing::info!(
+            "WebAudioProvider: create_stream id={}, rate={}, frames={}",
+            id, sample_rate, sample_frame_count,
+        );
+        let _ = protocol::send_host_message(&protocol::HostMessage::AudioInit {
+            stream_id: id,
+            sample_rate,
+            sample_frame_count,
+        });
+        id
+    }
+
+    fn write_samples(&self, stream_id: u32, samples: &[u8]) {
+        let _ = protocol::send_host_message(&protocol::HostMessage::AudioSamples {
+            stream_id,
+            samples,
+        });
+    }
+
+    fn start_stream(&self, stream_id: u32) -> bool {
+        tracing::debug!("WebAudioProvider: start_stream {}", stream_id);
+        let _ = protocol::send_host_message(&protocol::HostMessage::AudioStart {
+            stream_id,
+        });
+        true
+    }
+
+    fn stop_stream(&self, stream_id: u32) {
+        tracing::debug!("WebAudioProvider: stop_stream {}", stream_id);
+        let _ = protocol::send_host_message(&protocol::HostMessage::AudioStop {
+            stream_id,
+        });
+    }
+
+    fn close_stream(&self, stream_id: u32) {
+        tracing::debug!("WebAudioProvider: close_stream {}", stream_id);
+        let _ = protocol::send_host_message(&protocol::HostMessage::AudioClose {
+            stream_id,
+        });
+    }
 }
 
 // ===========================================================================

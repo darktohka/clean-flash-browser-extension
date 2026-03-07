@@ -22,14 +22,14 @@ pub unsafe fn register(registry: &mut InterfaceRegistry) {
 }
 
 unsafe extern "C" fn add_ref_resource(resource: PP_Resource) {
-    tracing::trace!("PPB_Core::AddRefResource({})", resource);
+    //tracing::trace!("PPB_Core::AddRefResource({})", resource);
     if let Some(host) = HOST.get() {
         host.resources.add_ref(resource);
     }
 }
 
 unsafe extern "C" fn release_resource(resource: PP_Resource) {
-    tracing::trace!("PPB_Core::ReleaseResource({})", resource);
+    //tracing::trace!("PPB_Core::ReleaseResource({})", resource);
     if let Some(host) = HOST.get() {
         host.resources.release(resource);
     }
@@ -58,8 +58,7 @@ unsafe extern "C" fn call_on_main_thread(
     callback: PP_CompletionCallback,
     result: i32,
 ) {
-    tracing::trace!("PPB_core::call_on_main_thread called");
-    tracing::debug!("PPB_Core::CallOnMainThread(delay={}ms, result={})", delay_in_milliseconds, result);
+    //tracing::debug!("PPB_Core::CallOnMainThread(delay={}ms, result={})", delay_in_milliseconds, result);
     if let Some(host) = HOST.get() {
         if let Some(poster) = &*host.main_loop_poster.lock() {
             poster.post_work(callback, delay_in_milliseconds as i64, result);
@@ -73,6 +72,6 @@ unsafe extern "C" fn is_main_thread() -> PP_Bool {
     let result = HOST.get()
         .map(|host| pp_from_bool(host.threads.is_main_thread()))
         .unwrap_or(PP_FALSE);
-    tracing::trace!("PPB_Core::IsMainThread() -> {}", result);
+    //tracing::trace!("PPB_Core::IsMainThread() -> {}", result);
     result
 }

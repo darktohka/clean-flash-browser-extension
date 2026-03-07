@@ -178,6 +178,29 @@ pub enum HostMessage<'a> {
         url: &'a str,
         target: &'a str,
     },
+    /// Audio: initialise a new stream.
+    AudioInit {
+        stream_id: u32,
+        sample_rate: u32,
+        sample_frame_count: u32,
+    },
+    /// Audio: PCM sample data for a stream.
+    AudioSamples {
+        stream_id: u32,
+        samples: &'a [u8],
+    },
+    /// Audio: start playback on a stream.
+    AudioStart {
+        stream_id: u32,
+    },
+    /// Audio: stop (pause) playback on a stream.
+    AudioStop {
+        stream_id: u32,
+    },
+    /// Audio: close and release a stream.
+    AudioClose {
+        stream_id: u32,
+    },
 }
 
 // Message type tags.
@@ -187,6 +210,11 @@ const TAG_CURSOR: u8 = 0x03;
 const TAG_ERROR: u8 = 0x04;
 const TAG_SCRIPT: u8 = 0x10;
 const TAG_NAVIGATE: u8 = 0x05;
+const TAG_AUDIO_INIT: u8 = 0x20;
+const TAG_AUDIO_SAMPLES: u8 = 0x21;
+const TAG_AUDIO_START: u8 = 0x22;
+const TAG_AUDIO_STOP: u8 = 0x23;
+const TAG_AUDIO_CLOSE: u8 = 0x24;
 
 impl<'a> HostMessage<'a> {
     /// Serialize to a compact binary representation (little-endian).
@@ -246,6 +274,39 @@ impl<'a> HostMessage<'a> {
                 buf.extend_from_slice(url_bytes);
                 buf.extend_from_slice(&(target_bytes.len() as u32).to_le_bytes());
                 buf.extend_from_slice(target_bytes);
+                buf
+            }
+            HostMessage::AudioInit { stream_id, sample_rate, sample_frame_count } => {
+                let mut buf = Vec::with_capacity(1 + 12);
+                buf.push(TAG_AUDIO_INIT);
+                buf.extend_from_slice(&stream_id.to_le_bytes());
+                buf.extend_from_slice(&sample_rate.to_le_bytes());
+                buf.extend_from_slice(&sample_frame_count.to_le_bytes());
+                buf
+            }
+            HostMessage::AudioSamples { stream_id, samples } => {
+                let mut buf = Vec::with_capacity(1 + 4 + samples.len());
+                buf.push(TAG_AUDIO_SAMPLES);
+                buf.extend_from_slice(&stream_id.to_le_bytes());
+                buf.extend_from_slice(samples);
+                buf
+            }
+            HostMessage::AudioStart { stream_id } => {
+                let mut buf = Vec::with_capacity(5);
+                buf.push(TAG_AUDIO_START);
+                buf.extend_from_slice(&stream_id.to_le_bytes());
+                buf
+            }
+            HostMessage::AudioStop { stream_id } => {
+                let mut buf = Vec::with_capacity(5);
+                buf.push(TAG_AUDIO_STOP);
+                buf.extend_from_slice(&stream_id.to_le_bytes());
+                buf
+            }
+            HostMessage::AudioClose { stream_id } => {
+                let mut buf = Vec::with_capacity(5);
+                buf.push(TAG_AUDIO_CLOSE);
+                buf.extend_from_slice(&stream_id.to_le_bytes());
                 buf
             }
         }
