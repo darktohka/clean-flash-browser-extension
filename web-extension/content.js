@@ -99,6 +99,9 @@ let activePort = null;
  */
 const instanceMeta = new Map();
 
+/** True while we are intentionally tearing down (page navigation). */
+let navigatingAway = false;
+
 /**
  * Replace a Flash element with a <canvas> and wire up the native messaging
  * bridge via the background service worker.
@@ -195,7 +198,7 @@ function startInstance(instanceId, meta) {
     // Extension-originated error (e.g. host disconnect).
     if (msg.error) {
       console.error("[Flash Player]", msg.error);
-      showCrashOverlay(instanceId);
+      if (!navigatingAway) showCrashOverlay(instanceId);
       return;
     }
     // Binary message from the host, base64-encoded.
@@ -207,7 +210,7 @@ function startInstance(instanceId, meta) {
 
   port.onDisconnect.addListener(() => {
     console.warn("[Flash Player] Native host disconnected for instance", instanceId);
-    showCrashOverlay(instanceId);
+    if (!navigatingAway) showCrashOverlay(instanceId);
   });
 
   // ---- Wire up input events on the canvas ----
@@ -1142,6 +1145,40 @@ function flashMutationObserver(mutations) {
 // Initialisation
 // ---------------------------------------------------------------------------
 
+/**
+ * Tear down all active Flash instances — disconnects ports so the
+ * background service worker shuts down the native hosts.
+ * Also closes any active Web Audio streams.
+ */
+function destroyAllInstances() {
+  for (const [id, meta] of instanceMeta) {
+    if (meta.port) {
+      try { meta.port.disconnect(); } catch { /* already gone */ }
+      meta.port = null;
+    }
+    // Remove any crash overlay that may be showing.
+    const overlay = meta.container.querySelector(".flash-crash-overlay");
+    if (overlay) overlay.remove();
+  }
+  // Close all audio streams.
+  for (const [streamId] of audioStreams) {
+    audioClose(streamId);
+  }
+  activePort = null;
+}
+
+/**
+ * Restart every known Flash instance from its saved metadata.
+ * Used when the page is restored from bfcache.
+ */
+function restartAllInstances() {
+  for (const [id, meta] of instanceMeta) {
+    // Clear the canvas and reconnect.
+    meta.ctx.clearRect(0, 0, meta.canvas.width, meta.canvas.height);
+    startInstance(id, meta);
+  }
+}
+
 function init() {
   // Set up the ExternalInterface CallFunction bridge (JS → AS).
   initCallFunctionBridge();
@@ -1171,3 +1208,20 @@ if (document.readyState === "loading") {
 } else {
   init();
 }
+
+// ---------------------------------------------------------------------------
+// Page lifecycle: tear down on navigate-away, restart on bfcache restore
+// ---------------------------------------------------------------------------
+
+window.addEventListener("pagehide", () => {
+  navigatingAway = true;
+  destroyAllInstances();
+});
+
+window.addEventListener("pageshow", (e) => {
+  if (e.persisted) {
+    // Page was restored from bfcache — ports are dead, restart everything.
+    navigatingAway = false;
+    restartAllInstances();
+  }
+});
