@@ -135,6 +135,14 @@ fn main() {
         *frame_ready_cb.lock() = true;
     });
 
+    // When Flash requests navigation, send a Navigate message to the extension.
+    player.set_navigate_callback(|url, target| {
+        let _ = protocol::send_host_message(&protocol::HostMessage::Navigate {
+            url,
+            target,
+        });
+    });
+
     // Plugin path from environment.
     #[cfg(windows)]
     let plugin_path =

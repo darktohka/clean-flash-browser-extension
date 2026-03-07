@@ -108,6 +108,12 @@ pub trait HostCallbacks: Send + Sync {
     fn on_cursor_changed(&self, cursor_type: i32) {
         let _ = cursor_type;
     }
+
+    /// Called when the plugin requests navigation to a URL via PPB_Flash::Navigate.
+    /// `url` is the target URL, `target` is the window/frame target (e.g. "_blank", "_self").
+    fn on_navigate(&self, url: &str, target: &str) {
+        let _ = (url, target);
+    }
 }
 
 // ===========================================================================

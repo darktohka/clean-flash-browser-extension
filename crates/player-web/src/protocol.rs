@@ -173,6 +173,11 @@ pub enum HostMessage<'a> {
     /// JavaScript scripting request (host → browser → content script).
     /// The payload is a JSON string that the content script interprets.
     ScriptRequest(&'a str),
+    /// Navigation request — Flash wants to open a URL.
+    Navigate {
+        url: &'a str,
+        target: &'a str,
+    },
 }
 
 // Message type tags.
@@ -181,6 +186,7 @@ const TAG_STATE: u8 = 0x02;
 const TAG_CURSOR: u8 = 0x03;
 const TAG_ERROR: u8 = 0x04;
 const TAG_SCRIPT: u8 = 0x10;
+const TAG_NAVIGATE: u8 = 0x05;
 
 impl<'a> HostMessage<'a> {
     /// Serialize to a compact binary representation (little-endian).
@@ -229,6 +235,17 @@ impl<'a> HostMessage<'a> {
                 buf.push(TAG_SCRIPT);
                 buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
                 buf.extend_from_slice(bytes);
+                buf
+            }
+            HostMessage::Navigate { url, target } => {
+                let url_bytes = url.as_bytes();
+                let target_bytes = target.as_bytes();
+                let mut buf = Vec::with_capacity(1 + 4 + url_bytes.len() + 4 + target_bytes.len());
+                buf.push(TAG_NAVIGATE);
+                buf.extend_from_slice(&(url_bytes.len() as u32).to_le_bytes());
+                buf.extend_from_slice(url_bytes);
+                buf.extend_from_slice(&(target_bytes.len() as u32).to_le_bytes());
+                buf.extend_from_slice(target_bytes);
                 buf
             }
         }

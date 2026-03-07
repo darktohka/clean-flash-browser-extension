@@ -10,6 +10,8 @@ use ppapi_sys::*;
 use std::ffi::{CStr, c_char, c_void};
 use std::sync::Arc;
 
+use crate::interfaces::url_request_info::URLRequestInfoResource;
+
 use super::super::HOST;
 
 // ---------------------------------------------------------------------------
@@ -190,10 +192,39 @@ unsafe extern "C" fn navigate(
     _target: *const c_char,
     _from_user_action: PP_Bool,
 ) -> i32 {
-    let target_debug = if _target.is_null() { std::borrow::Cow::Borrowed("<null>") } else { CStr::from_ptr(_target).to_string_lossy() };
+    let target_str = if _target.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(_target).to_string_lossy().into_owned()
+    };
+
     tracing::debug!("PPB_Flash::Navigate(request_info={}, target={:?}, from_user_action={})",
-        _request_info, target_debug, _from_user_action);
-    // No-op in standalone projector — nowhere to navigate.
+        _request_info, target_str, _from_user_action);
+
+    let host = HOST.get().expect("HOST not initialised");
+
+    // Extract URL from the URLRequestInfo resource.
+    let url = host.resources.with_downcast::<URLRequestInfoResource, _>(_request_info, |req| {
+        req.url.clone().unwrap_or_default()
+    });
+
+    let url = match url {
+        Some(u) if !u.is_empty() => u,
+        _ => {
+            tracing::warn!("PPB_Flash::Navigate: no URL found in request_info {}", _request_info);
+            return PP_ERROR_BADARGUMENT;
+        }
+    };
+
+    tracing::info!("PPB_Flash::Navigate: url={:?}, target={:?}", url, target_str);
+
+    // Forward to the UI layer via HostCallbacks.
+    let callbacks_guard = host.host_callbacks.lock();
+    if let Some(cb) = callbacks_guard.as_ref() {
+        cb.on_navigate(&url, &target_str);
+    }
+    drop(callbacks_guard);
+
     PP_OK
 }
 

@@ -188,6 +188,7 @@ const TAG_STATE  = 0x02;
 const TAG_CURSOR = 0x03;
 const TAG_ERROR  = 0x04;
 const TAG_SCRIPT = 0x10;
+const TAG_NAVIGATE = 0x05;
 
 /**
  * Read a little-endian u32 from a DataView at the given offset.
@@ -301,6 +302,31 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
         handleScriptRequest(req, port);
       } catch (e) {
         console.error("[Flash Player] Bad script request:", e, jsonStr);
+      }
+      break;
+    }
+
+    case TAG_NAVIGATE: {
+      // 1 byte tag + u32 url_len + UTF-8 url + u32 target_len + UTF-8 target
+      const decoder = new TextDecoder();
+      const urlLen = readU32(dv, 1);
+      const url = decoder.decode(bytes.subarray(5, 5 + urlLen));
+      const targetLen = readU32(dv, 5 + urlLen);
+      const target = decoder.decode(bytes.subarray(9 + urlLen, 9 + urlLen + targetLen));
+      console.log("[Flash Player] Navigate:", url, "target:", target);
+      try {
+        if (target === "_blank") {
+          window.open(url, "_blank");
+        } else if (target === "_self" || target === "" || target === "_top") {
+          window.location.href = url;
+        } else if (target === "_parent") {
+          (window.parent || window).location.href = url;
+        } else {
+          // Named target — try window.open with that name.
+          window.open(url, target);
+        }
+      } catch (e) {
+        console.error("[Flash Player] Navigate failed:", e);
       }
       break;
     }

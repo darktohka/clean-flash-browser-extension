@@ -53,6 +53,8 @@ pub struct FlashPlayer {
     file_chooser_provider: Option<Arc<dyn FileChooserProvider>>,
     /// Callback invoked (from any thread) when a new frame is flushed.
     repaint_callback: Arc<Mutex<Option<Box<dyn Fn() + Send + Sync>>>>,
+    /// Callback invoked when Flash requests navigation to a URL.
+    navigate_callback: Arc<Mutex<Option<Box<dyn Fn(&str, &str) + Send + Sync>>>>,
 }
 
 impl FlashPlayer {
@@ -68,6 +70,7 @@ impl FlashPlayer {
             dialog_provider: None,
             file_chooser_provider: None,
             repaint_callback: Arc::new(Mutex::new(None)),
+            navigate_callback: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -77,6 +80,13 @@ impl FlashPlayer {
     /// layer passes a closure that calls `egui::Context::request_repaint`.
     pub fn set_repaint_callback(&mut self, cb: impl Fn() + Send + Sync + 'static) {
         *self.repaint_callback.lock() = Some(Box::new(cb));
+    }
+
+    /// Set a callback that is invoked when Flash requests navigation to a URL.
+    ///
+    /// The callback receives `(url, target)` and may be called from any thread.
+    pub fn set_navigate_callback(&mut self, cb: impl Fn(&str, &str) + Send + Sync + 'static) {
+        *self.navigate_callback.lock() = Some(Box::new(cb));
     }
 
     /// Set the path to the PepperFlash plugin .so.
@@ -153,6 +163,7 @@ impl FlashPlayer {
             cursor_type: self.cursor_type.clone(),
             dialog_provider: dialog,
             repaint_callback: self.repaint_callback.clone(),
+            navigate_callback: self.navigate_callback.clone(),
         }));
 
         // If a plugin path is set, load it.
@@ -759,6 +770,7 @@ struct PlayerHostCallbacks {
     cursor_type: Arc<AtomicI32>,
     dialog_provider: Option<Arc<dyn DialogProvider>>,
     repaint_callback: Arc<Mutex<Option<Box<dyn Fn() + Send + Sync>>>>,
+    navigate_callback: Arc<Mutex<Option<Box<dyn Fn(&str, &str) + Send + Sync>>>>,
 }
 
 /// Wrapper to make `Arc<dyn FileChooserProvider>` implement the trait as a `Box`.
@@ -991,6 +1003,12 @@ impl HostCallbacks for PlayerHostCallbacks {
 
     fn on_cursor_changed(&self, cursor_type: i32) {
         self.cursor_type.store(cursor_type, Ordering::Relaxed);
+    }
+
+    fn on_navigate(&self, url: &str, target: &str) {
+        if let Some(ref cb) = *self.navigate_callback.lock() {
+            cb(url, target);
+        }
     }
 }
 
