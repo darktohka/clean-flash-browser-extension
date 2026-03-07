@@ -17,6 +17,105 @@
 "use strict";
 
 (function () {
+  // ---------------------------------------------------------------------------
+  // Flash plugin spoofing
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Inject a fake "Shockwave Flash" plugin into navigator.plugins and
+   * navigator.mimeTypes so that:
+   *
+   *  1. Pages that feature-detect Flash via the plugin list believe Flash is
+   *     installed and proceed to emit <object>/<embed> elements we intercept.
+   *
+   *  2. The Ruffle extension (if installed) sees a "real" Flash plugin and
+   *     backs off from replacing our content.  Ruffle's two critical checks:
+   *       - installPlugin():        navigator.plugins.namedItem("Shockwave Flash")  → truthy ⇒ skip
+   *       - isFlashEnabledBrowser(): …?.filename !== "ruffle.js"                    → true   ⇒ skip
+   *
+   * We therefore create a Plugin-shaped object whose `.filename` is NOT
+   * "ruffle.js" and patch both `PluginArray.prototype.namedItem` and
+   * `MimeTypeArray.prototype.namedItem` so the fake entries are discoverable
+   * through the standard API.
+   */
+  function ppSpoofFlash() {
+    try {
+      // Bail out if a real Flash plugin (or a previous spoof) already exists.
+      if (navigator.plugins.namedItem("Shockwave Flash")) return;
+
+      // ---- Fake Plugin object ----
+      const flashPlugin = Object.create(Plugin.prototype, {
+        name:        { value: "Shockwave Flash",        configurable: false, enumerable: true, writable: false },
+        description: { value: "Shockwave Flash 34.0 r0", configurable: false, enumerable: true, writable: false },
+        filename:    { value: "pepflashplayer.dll",       configurable: false, enumerable: true, writable: false },
+        length:      { value: 2,                          configurable: false, enumerable: true, writable: false },
+      });
+
+      // ---- Fake MimeType objects ----
+      const swfMime = Object.create(MimeType.prototype, {
+        type:          { value: "application/x-shockwave-flash", configurable: false, enumerable: true, writable: false },
+        description:   { value: "Shockwave Flash",               configurable: false, enumerable: true, writable: false },
+        suffixes:      { value: "swf",                            configurable: false, enumerable: true, writable: false },
+        enabledPlugin: { value: flashPlugin,                      configurable: false, enumerable: true, writable: false },
+      });
+      const futureMime = Object.create(MimeType.prototype, {
+        type:          { value: "application/futuresplash",  configurable: false, enumerable: true, writable: false },
+        description:   { value: "Shockwave Flash",           configurable: false, enumerable: true, writable: false },
+        suffixes:      { value: "spl",                        configurable: false, enumerable: true, writable: false },
+        enabledPlugin: { value: flashPlugin,                  configurable: false, enumerable: true, writable: false },
+      });
+
+      // Make the plugin indexable by position (Plugin[0], Plugin[1]).
+      Object.defineProperties(flashPlugin, {
+        0: { value: swfMime,    configurable: false, enumerable: true, writable: false },
+        1: { value: futureMime, configurable: false, enumerable: true, writable: false },
+      });
+
+      // ---- Patch PluginArray ----
+      // Add the fake plugin at the next index and update length.
+      const pluginIdx = navigator.plugins.length;
+      const pluginProps = {
+        length: { value: pluginIdx + 1, configurable: true, enumerable: true, writable: false },
+      };
+      pluginProps[pluginIdx] = { value: flashPlugin, configurable: false, enumerable: true, writable: false };
+      Object.defineProperties(PluginArray.prototype, pluginProps);
+
+      // Make it accessible by name (navigator.plugins["Shockwave Flash"]).
+      navigator.plugins["Shockwave Flash"] = flashPlugin;
+
+      // Patch namedItem() so Ruffle's namedItem("Shockwave Flash") lookup succeeds.
+      const origPluginNamedItem = PluginArray.prototype.namedItem;
+      PluginArray.prototype.namedItem = function (name) {
+        if (name === "Shockwave Flash") return flashPlugin;
+        return origPluginNamedItem.call(this, name);
+      };
+
+      // ---- Patch MimeTypeArray ----
+      const mimeBase = navigator.mimeTypes.length;
+      const mimeProps = {
+        length: { value: mimeBase + 2, configurable: true, enumerable: true, writable: false },
+      };
+      mimeProps[mimeBase]     = { value: swfMime,    configurable: false, enumerable: true, writable: false };
+      mimeProps[mimeBase + 1] = { value: futureMime, configurable: false, enumerable: true, writable: false };
+      Object.defineProperties(MimeTypeArray.prototype, mimeProps);
+
+      navigator.mimeTypes["application/x-shockwave-flash"] = swfMime;
+      navigator.mimeTypes["application/futuresplash"]       = futureMime;
+
+      const origMimeNamedItem = MimeTypeArray.prototype.namedItem;
+      MimeTypeArray.prototype.namedItem = function (name) {
+        if (name === "application/x-shockwave-flash") return swfMime;
+        if (name === "application/futuresplash")       return futureMime;
+        return origMimeNamedItem.call(this, name);
+      };
+    } catch (e) {
+      console.log("Flash spoofing failed");
+      console.log(e);
+    }
+  }
+
+  ppSpoofFlash();
+
   // Unique element id — must match the one in content.js.
   const COMM_ID = "__flash_player_comm__";
 
