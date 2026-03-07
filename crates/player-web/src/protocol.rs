@@ -11,12 +11,23 @@
 //!
 //! ## Binary message format (little-endian)
 //!
-//! | Tag   | Type   | Payload                                              |
-//! |-------|--------|------------------------------------------------------|
-//! | 0x01  | Frame  | 7×u32 (x y w h frameW frameH stride) + BGRA pixels   |
-//! | 0x02  | State  | u8 state_code + u32 width + u32 height               |
-//! | 0x03  | Cursor | i32 cursor_type                                      |
-//! | 0x04  | Error  | u32 msg_len + UTF-8 bytes                            |
+//! | Tag   | Type            | Payload                                              |
+//! |-------|-----------------|------------------------------------------------------|
+//! | 0x01  | Frame           | 7×u32 (x y w h frameW frameH stride) + BGRA pixels   |
+//! | 0x02  | State           | u8 state_code + u32 width + u32 height               |
+//! | 0x03  | Cursor          | i32 cursor_type                                      |
+//! | 0x04  | Error           | u32 msg_len + UTF-8 bytes                            |
+//! | 0x05  | Navigate        | u32 url_len + URL + u32 target_len + target           |
+//! | 0x10  | Script          | u32 json_len + UTF-8 JSON                            |
+//! | 0x20  | AudioInit       | u32 stream_id + u32 rate + u32 frames                |
+//! | 0x21  | AudioSamples    | u32 stream_id + PCM bytes                            |
+//! | 0x22  | AudioStart      | u32 stream_id                                        |
+//! | 0x23  | AudioStop       | u32 stream_id                                        |
+//! | 0x24  | AudioClose      | u32 stream_id                                        |
+//! | 0x30  | AudioInputOpen  | u32 stream_id + u32 rate + u32 frames                |
+//! | 0x31  | AudioInputStart | u32 stream_id                                        |
+//! | 0x32  | AudioInputStop  | u32 stream_id                                        |
+//! | 0x33  | AudioInputClose | u32 stream_id                                        |
 //!
 //! Because stdout/stderr are redirected to `/dev/null` (Unix) or `NUL`
 //! (Windows) to prevent the Flash plugin from corrupting the native
@@ -201,6 +212,24 @@ pub enum HostMessage<'a> {
     AudioClose {
         stream_id: u32,
     },
+    /// Audio input: open a capture stream.
+    AudioInputOpen {
+        stream_id: u32,
+        sample_rate: u32,
+        sample_frame_count: u32,
+    },
+    /// Audio input: start capturing.
+    AudioInputStart {
+        stream_id: u32,
+    },
+    /// Audio input: stop capturing.
+    AudioInputStop {
+        stream_id: u32,
+    },
+    /// Audio input: close and release a capture stream.
+    AudioInputClose {
+        stream_id: u32,
+    },
 }
 
 // Message type tags.
@@ -215,6 +244,10 @@ const TAG_AUDIO_SAMPLES: u8 = 0x21;
 const TAG_AUDIO_START: u8 = 0x22;
 const TAG_AUDIO_STOP: u8 = 0x23;
 const TAG_AUDIO_CLOSE: u8 = 0x24;
+const TAG_AUDIO_INPUT_OPEN: u8 = 0x30;
+const TAG_AUDIO_INPUT_START: u8 = 0x31;
+const TAG_AUDIO_INPUT_STOP: u8 = 0x32;
+const TAG_AUDIO_INPUT_CLOSE: u8 = 0x33;
 
 impl<'a> HostMessage<'a> {
     /// Serialize to a compact binary representation (little-endian).
@@ -306,6 +339,32 @@ impl<'a> HostMessage<'a> {
             HostMessage::AudioClose { stream_id } => {
                 let mut buf = Vec::with_capacity(5);
                 buf.push(TAG_AUDIO_CLOSE);
+                buf.extend_from_slice(&stream_id.to_le_bytes());
+                buf
+            }
+            HostMessage::AudioInputOpen { stream_id, sample_rate, sample_frame_count } => {
+                let mut buf = Vec::with_capacity(1 + 12);
+                buf.push(TAG_AUDIO_INPUT_OPEN);
+                buf.extend_from_slice(&stream_id.to_le_bytes());
+                buf.extend_from_slice(&sample_rate.to_le_bytes());
+                buf.extend_from_slice(&sample_frame_count.to_le_bytes());
+                buf
+            }
+            HostMessage::AudioInputStart { stream_id } => {
+                let mut buf = Vec::with_capacity(5);
+                buf.push(TAG_AUDIO_INPUT_START);
+                buf.extend_from_slice(&stream_id.to_le_bytes());
+                buf
+            }
+            HostMessage::AudioInputStop { stream_id } => {
+                let mut buf = Vec::with_capacity(5);
+                buf.push(TAG_AUDIO_INPUT_STOP);
+                buf.extend_from_slice(&stream_id.to_le_bytes());
+                buf
+            }
+            HostMessage::AudioInputClose { stream_id } => {
+                let mut buf = Vec::with_capacity(5);
+                buf.push(TAG_AUDIO_INPUT_CLOSE);
                 buf.extend_from_slice(&stream_id.to_le_bytes());
                 buf
             }

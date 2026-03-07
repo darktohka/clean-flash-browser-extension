@@ -299,3 +299,59 @@ pub trait AudioProvider: Send + Sync {
     /// Called when the audio resource is dropped.
     fn close_stream(&self, stream_id: u32);
 }
+
+// ===========================================================================
+// Audio input provider — abstracts audio capture for the PPAPI host
+// ===========================================================================
+
+/// Provides audio input (microphone capture) capabilities.
+///
+/// When set on the PPAPI host, the `PPB_AudioInput` interface will use
+/// this provider to capture audio from a real microphone.  On desktop
+/// players this is implemented via cpal; on browser players it is
+/// forwarded to the browser's MediaStream / Web Audio API.
+///
+/// Audio format is **mono** (1 channel), signed 16-bit little-endian PCM,
+/// matching the PPAPI audio input spec.
+pub trait AudioInputProvider: Send + Sync {
+    /// Enumerate available audio input devices.
+    ///
+    /// Returns a list of `(device_id, display_name)` pairs.
+    /// `device_id` is an opaque string identifying the device.
+    fn enumerate_devices(&self) -> Vec<(String, String)>;
+
+    /// Open a capture stream on the given device (or the default if
+    /// `device_id` is `None`).
+    ///
+    /// - `device_id`: opaque device identifier from [`enumerate_devices`],
+    ///    or `None` for the default input device.
+    /// - `sample_rate`: requested sample rate in Hz.
+    /// - `sample_frame_count`: number of frames per callback buffer.
+    ///
+    /// Returns an opaque stream ID (non-zero on success, 0 on failure).
+    fn open_stream(
+        &self,
+        device_id: Option<&str>,
+        sample_rate: u32,
+        sample_frame_count: u32,
+    ) -> u32;
+
+    /// Start capturing audio on a previously opened stream.
+    fn start_capture(&self, stream_id: u32) -> bool;
+
+    /// Stop capturing audio on a stream (may be restarted later).
+    fn stop_capture(&self, stream_id: u32);
+
+    /// Read captured PCM samples from the stream.
+    ///
+    /// Returns a buffer of `sample_frame_count × 1 channel × 2 bytes`
+    /// of mono signed 16-bit little-endian PCM data.  If no data is
+    /// available yet, returns an empty `Vec`.
+    ///
+    /// This is a non-blocking call; use it from a polling loop or a
+    /// background thread.
+    fn read_samples(&self, stream_id: u32, buffer: &mut [u8]) -> usize;
+
+    /// Close and release a capture stream permanently.
+    fn close_stream(&self, stream_id: u32);
+}

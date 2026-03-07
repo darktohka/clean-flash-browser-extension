@@ -399,6 +399,10 @@ const TAG_AUDIO_SAMPLES = 0x21;
 const TAG_AUDIO_START   = 0x22;
 const TAG_AUDIO_STOP    = 0x23;
 const TAG_AUDIO_CLOSE   = 0x24;
+const TAG_AUDIO_INPUT_OPEN  = 0x30;
+const TAG_AUDIO_INPUT_START = 0x31;
+const TAG_AUDIO_INPUT_STOP  = 0x32;
+const TAG_AUDIO_INPUT_CLOSE = 0x33;
 
 /**
  * Read a little-endian u32 from a DataView at the given offset.
@@ -588,6 +592,182 @@ function audioClose(streamId) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Web Audio input capture — uses getUserMedia + ScriptProcessorNode to
+// capture mono i16 PCM from the microphone and send it back to the host.
+// ---------------------------------------------------------------------------
+
+/**
+ * Active audio input streams.
+ * stream_id -> {
+ *   ctx,           // AudioContext
+ *   mediaStream,   // MediaStream from getUserMedia
+ *   source,        // MediaStreamAudioSourceNode
+ *   processor,     // ScriptProcessorNode
+ *   port,          // native messaging port for sending data back
+ *   sampleRate,
+ *   frameCount,
+ *   capturing,     // boolean
+ *   ready,         // Promise that resolves when the stream is fully set up
+ *   pendingStart,  // true if audioInputStart was called before ready
+ * }
+ */
+const audioInputStreams = new Map();
+
+/**
+ * Open a new audio input capture stream.
+ * This requests microphone permission and sets up the audio graph,
+ * but does not start sending data until audioInputStart() is called.
+ */
+function audioInputOpen(streamId, sampleRate, frameCount, port) {
+  // Close any existing stream with the same id.
+  audioInputClose(streamId);
+
+  // Create a placeholder entry immediately so that audioInputStart()
+  // can find it even before the async setup completes.
+  const streamState = {
+    ctx: null,
+    mediaStream: null,
+    source: null,
+    processor: null,
+    port,
+    sampleRate,
+    frameCount,
+    capturing: false,
+    ready: null,
+    pendingStart: false,
+  };
+
+  // The ready promise tracks the async setup.
+  streamState.ready = (async () => {
+    try {
+      const mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          sampleRate: { ideal: sampleRate },
+          channelCount: { exact: 1 },
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
+      });
+
+      const ctx = new AudioContext({ sampleRate });
+      const source = ctx.createMediaStreamSource(mediaStream);
+
+      // ScriptProcessorNode: captures PCM in buffers of `frameCount` frames.
+      // (AudioWorklet would be preferred but requires a separate module file
+      // and complicates the extension packaging; ScriptProcessorNode works
+      // for the buffer sizes Flash typically requests.)
+      const processor = ctx.createScriptProcessor(frameCount, 1, 1);
+
+      streamState.ctx = ctx;
+      streamState.mediaStream = mediaStream;
+      streamState.source = source;
+      streamState.processor = processor;
+
+      processor.onaudioprocess = (e) => {
+        if (!streamState.capturing) return;
+
+        const input = e.inputBuffer.getChannelData(0);
+        // Convert float32 [-1, 1] to i16 LE bytes.
+        const i16 = new Int16Array(input.length);
+        for (let i = 0; i < input.length; i++) {
+          const s = Math.max(-1, Math.min(1, input[i]));
+          i16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+
+        // Encode as base64 and send to the host.
+        const bytes = new Uint8Array(i16.buffer);
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        const b64 = btoa(binary);
+
+        streamState.port.postMessage({
+          type: "audioInputData",
+          streamId,
+          data: b64,
+        });
+      };
+
+      // Connect the graph: source → processor → destination
+      // (destination connection is required for ScriptProcessorNode to fire)
+      source.connect(processor);
+      processor.connect(ctx.destination);
+
+      // If audioInputStart() was already called while we were setting up,
+      // start capturing immediately.  Otherwise suspend the context.
+      if (streamState.pendingStart) {
+        streamState.capturing = true;
+        streamState.pendingStart = false;
+        console.log("[Flash Player] Audio input stream opened + auto-started:", streamId,
+                    "rate:", sampleRate, "frames:", frameCount);
+      } else {
+        await ctx.suspend();
+        console.log("[Flash Player] Audio input stream opened (suspended):", streamId,
+                    "rate:", sampleRate, "frames:", frameCount);
+      }
+    } catch (e) {
+      console.error("[Flash Player] Failed to open audio input:", e);
+    }
+  })();
+
+  audioInputStreams.set(streamId, streamState);
+}
+
+/**
+ * Start capturing on an audio input stream.
+ */
+function audioInputStart(streamId) {
+  const stream = audioInputStreams.get(streamId);
+  if (!stream) return;
+
+  // If the async setup hasn't completed yet, flag it so that
+  // audioInputOpen's ready handler will auto-start.
+  if (!stream.ctx) {
+    stream.pendingStart = true;
+    console.log("[Flash Player] Audio input start queued (still opening):", streamId);
+    return;
+  }
+
+  stream.capturing = true;
+  if (stream.ctx.state === "suspended") {
+    stream.ctx.resume();
+  }
+  console.log("[Flash Player] Audio input capture started:", streamId);
+}
+
+/**
+ * Stop capturing on an audio input stream.
+ */
+function audioInputStop(streamId) {
+  const stream = audioInputStreams.get(streamId);
+  if (!stream) return;
+  stream.capturing = false;
+  stream.pendingStart = false;
+  if (stream.ctx) {
+    stream.ctx.suspend();
+  }
+  console.log("[Flash Player] Audio input capture stopped:", streamId);
+}
+
+/**
+ * Close and release an audio input stream.
+ */
+function audioInputClose(streamId) {
+  const stream = audioInputStreams.get(streamId);
+  if (!stream) return;
+  stream.capturing = false;
+  stream.pendingStart = false;
+  if (stream.processor) stream.processor.disconnect();
+  if (stream.source) stream.source.disconnect();
+  if (stream.mediaStream) stream.mediaStream.getTracks().forEach(t => t.stop());
+  if (stream.ctx) stream.ctx.close().catch(() => {});
+  audioInputStreams.delete(streamId);
+  console.log("[Flash Player] Audio input stream closed:", streamId);
+}
+
 /**
  * Handle a fully reassembled binary message (as a base64 string).
  */
@@ -736,6 +916,35 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
     case TAG_AUDIO_CLOSE: {
       const streamId = readU32(dv, 1);
       audioClose(streamId);
+      break;
+    }
+
+    // ---- Audio input messages ----
+
+    case TAG_AUDIO_INPUT_OPEN: {
+      // 1 byte tag + u32 stream_id + u32 sample_rate + u32 frame_count
+      const streamId   = readU32(dv, 1);
+      const sampleRate = readU32(dv, 5);
+      const frameCount = readU32(dv, 9);
+      audioInputOpen(streamId, sampleRate, frameCount, port);
+      break;
+    }
+
+    case TAG_AUDIO_INPUT_START: {
+      const streamId = readU32(dv, 1);
+      audioInputStart(streamId);
+      break;
+    }
+
+    case TAG_AUDIO_INPUT_STOP: {
+      const streamId = readU32(dv, 1);
+      audioInputStop(streamId);
+      break;
+    }
+
+    case TAG_AUDIO_INPUT_CLOSE: {
+      const streamId = readU32(dv, 1);
+      audioInputClose(streamId);
       break;
     }
 

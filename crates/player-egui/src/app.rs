@@ -159,6 +159,13 @@ impl FlashPlayerApp {
             match self.player.init_host() {
                 Ok(()) => {
                     self.status_message = "Plugin loaded.".into();
+
+                    // Set up the cpal-based audio input provider for
+                    // microphone capture (PPB_AudioInput).
+                    let host = ppapi_host::HOST.get().expect("HOST not initialised");
+                    host.set_audio_input_provider(Box::new(
+                        ppapi_host::audio_input_cpal::CpalAudioInputProvider::new(),
+                    ));
                 }
                 Err(e) => {
                     self.status_message = format!("Error: {}", e);

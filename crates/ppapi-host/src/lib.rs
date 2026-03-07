@@ -7,6 +7,10 @@ pub mod callback;
 pub mod browser_object;
 pub mod filesystem;
 pub mod font_rasterizer;
+
+#[cfg(feature = "audio-cpal")]
+pub mod audio_input_cpal;
+
 pub mod instance;
 pub mod interface_registry;
 pub mod interfaces;
@@ -150,6 +154,9 @@ pub struct HostState {
     /// Audio playback provider for browser-hosted players.
     /// When set, PPB_Audio and PPB_AudioOutput use this instead of cpal.
     pub audio_provider: Mutex<Option<Arc<dyn player_ui_traits::AudioProvider>>>,
+    /// Audio input (capture) provider.
+    /// When set, PPB_AudioInput uses this to capture from a real microphone.
+    pub audio_input_provider: Mutex<Option<Arc<dyn player_ui_traits::AudioInputProvider>>>,
     /// The plugin's main scriptable object, obtained via
     /// `PPP_Instance_Private::GetInstanceObject`.  Used to route incoming
     /// `CallFunction` invocations (ExternalInterface JS→AS direction)
@@ -191,6 +198,7 @@ impl HostState {
                 file_chooser_provider: Mutex::new(None),
                 script_provider: Mutex::new(None),
                 audio_provider: Mutex::new(None),
+                audio_input_provider: Mutex::new(None),
                 instance_object: Mutex::new(None),
             }
         })
@@ -219,6 +227,16 @@ impl HostState {
     /// Get a cloned `Arc` handle to the audio provider, if set.
     pub fn get_audio_provider(&self) -> Option<Arc<dyn player_ui_traits::AudioProvider>> {
         self.audio_provider.lock().clone()
+    }
+
+    /// Set the audio input (capture) provider.
+    pub fn set_audio_input_provider(&self, provider: Box<dyn player_ui_traits::AudioInputProvider>) {
+        *self.audio_input_provider.lock() = Some(Arc::from(provider));
+    }
+
+    /// Get a cloned `Arc` handle to the audio input provider, if set.
+    pub fn get_audio_input_provider(&self) -> Option<Arc<dyn player_ui_traits::AudioInputProvider>> {
+        self.audio_input_provider.lock().clone()
     }
 
     /// Get a cloned `Arc` handle to the scripting provider, if set.

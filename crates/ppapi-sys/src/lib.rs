@@ -2264,6 +2264,15 @@ pub type PPB_AudioInput_Callback = Option<
     ),
 >;
 
+/// Audio input callback for the 0.3 interface (no latency parameter).
+pub type PPB_AudioInput_Callback_0_3 = Option<
+    unsafe extern "C" fn(
+        sample_buffer: *const c_void,
+        buffer_size_in_bytes: u32,
+        user_data: *mut c_void,
+    ),
+>;
+
 #[repr(C)]
 pub struct PPB_AudioInput_Dev_0_4 {
     pub Create: Option<unsafe extern "C" fn(instance: PP_Instance) -> PP_Resource>,
@@ -2300,6 +2309,45 @@ pub struct PPB_AudioInput_Dev_0_4 {
 
 unsafe impl Send for PPB_AudioInput_Dev_0_4 {}
 unsafe impl Sync for PPB_AudioInput_Dev_0_4 {}
+
+/// VTable for `PPB_AudioInput(Dev);0.3` — identical layout to 0.4 but the
+/// `Open` callback parameter is `PPB_AudioInput_Callback_0_3` (no latency).
+#[repr(C)]
+pub struct PPB_AudioInput_Dev_0_3 {
+    pub Create: Option<unsafe extern "C" fn(instance: PP_Instance) -> PP_Resource>,
+    pub IsAudioInput: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub EnumerateDevices: Option<
+        unsafe extern "C" fn(
+            audio_input: PP_Resource,
+            output: PP_ArrayOutput,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub MonitorDeviceChange: Option<
+        unsafe extern "C" fn(
+            audio_input: PP_Resource,
+            callback: PP_MonitorDeviceChangeCallback,
+            user_data: *mut c_void,
+        ) -> i32,
+    >,
+    pub Open: Option<
+        unsafe extern "C" fn(
+            audio_input: PP_Resource,
+            device_ref: PP_Resource,
+            config: PP_Resource,
+            audio_input_callback: PPB_AudioInput_Callback_0_3,
+            user_data: *mut c_void,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub GetCurrentConfig: Option<unsafe extern "C" fn(audio_input: PP_Resource) -> PP_Resource>,
+    pub StartCapture: Option<unsafe extern "C" fn(audio_input: PP_Resource) -> PP_Bool>,
+    pub StopCapture: Option<unsafe extern "C" fn(audio_input: PP_Resource) -> PP_Bool>,
+    pub Close: Option<unsafe extern "C" fn(audio_input: PP_Resource)>,
+}
+
+unsafe impl Send for PPB_AudioInput_Dev_0_3 {}
+unsafe impl Sync for PPB_AudioInput_Dev_0_3 {}
 
 // ===========================================================================
 // PPB_AudioOutput(Dev);0.1

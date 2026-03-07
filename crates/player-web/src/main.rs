@@ -181,6 +181,15 @@ fn main() {
         // Set up the audio provider so that Flash audio is forwarded to
         // the browser's Web Audio API instead of playing via cpal.
         host.set_audio_provider(Box::new(WebAudioProvider::new()));
+
+        // Set up the audio input provider so that Flash can capture from
+        // the browser's microphone via MediaStream / getUserMedia.
+        let audio_input = Arc::new(WebAudioInputProvider::new());
+        WEB_AUDIO_INPUT
+            .set(audio_input.clone())
+            .ok()
+            .expect("WEB_AUDIO_INPUT already initialised");
+        host.set_audio_input_provider(Box::new(WebAudioInputProviderWrapper(audio_input)));
     }
 
     tracing::info!("Host initialized successfully, entering main loop");
@@ -260,6 +269,7 @@ fn try_read_command() -> Option<serde_json::Value> {
     let rx = RX.get_or_init(|| {
         let (tx, rx) = mpsc::channel();
         let bridge = SCRIPT_BRIDGE.get().cloned();
+        let audio_input = WEB_AUDIO_INPUT.get().cloned();
         std::thread::Builder::new()
             .name("stdin-reader".into())
             .spawn(move || {
@@ -271,6 +281,14 @@ fn try_read_command() -> Option<serde_json::Value> {
                             if msg.get("type").and_then(|v| v.as_str()) == Some("jsResponse") {
                                 if let Some(ref b) = bridge {
                                     b.handle_response(&msg);
+                                }
+                                continue;
+                            }
+                            // Route audioInputData messages to the audio
+                            // input provider's ring buffer.
+                            if msg.get("type").and_then(|v| v.as_str()) == Some("audioInputData") {
+                                if let Some(ref ai) = audio_input {
+                                    ai.handle_audio_data(&msg);
                                 }
                                 continue;
                             }
@@ -618,6 +636,216 @@ impl player_ui_traits::AudioProvider for WebAudioProvider {
         let _ = protocol::send_host_message(&protocol::HostMessage::AudioClose {
             stream_id,
         });
+    }
+}
+
+// ===========================================================================
+// Audio input provider — captures audio from the browser's microphone
+// via native messaging.
+//
+// The host sends AudioInputOpen/Start/Stop/Close commands to the browser.
+// The browser calls navigator.mediaDevices.getUserMedia() and sends
+// captured PCM data back as JSON messages of type "audioInputData".
+// ===========================================================================
+
+/// Global audio input provider for routing captured samples from the
+/// stdin reader thread.
+static WEB_AUDIO_INPUT: OnceLock<Arc<WebAudioInputProvider>> = OnceLock::new();
+
+/// Audio input provider that requests microphone capture from the browser
+/// and receives PCM samples over the native messaging channel.
+struct WebAudioInputProvider {
+    next_stream_id: AtomicU32,
+    /// Per-stream ring buffers for captured samples.
+    streams: parking_lot::Mutex<std::collections::HashMap<u32, WebAudioInputStreamState>>,
+}
+
+struct WebAudioInputStreamState {
+    /// Ring buffer of captured bytes (mono i16 LE PCM).
+    ring: RingBuf,
+    #[allow(dead_code)]
+    sample_rate: u32,
+    #[allow(dead_code)]
+    sample_frame_count: u32,
+}
+
+/// Simple ring buffer for captured audio bytes.
+struct RingBuf {
+    data: Vec<u8>,
+    write_pos: usize,
+    read_pos: usize,
+    capacity: usize,
+}
+
+impl RingBuf {
+    fn new(capacity: usize) -> Self {
+        Self {
+            data: vec![0u8; capacity],
+            write_pos: 0,
+            read_pos: 0,
+            capacity,
+        }
+    }
+
+    fn available(&self) -> usize {
+        self.write_pos.wrapping_sub(self.read_pos)
+    }
+
+    fn write(&mut self, src: &[u8]) {
+        for &b in src {
+            let idx = self.write_pos % self.capacity;
+            self.data[idx] = b;
+            self.write_pos = self.write_pos.wrapping_add(1);
+        }
+        if self.available() > self.capacity {
+            self.read_pos = self.write_pos.wrapping_sub(self.capacity);
+        }
+    }
+
+    fn read(&mut self, dst: &mut [u8]) -> usize {
+        let avail = self.available();
+        let to_read = dst.len().min(avail);
+        for i in 0..to_read {
+            let idx = self.read_pos % self.capacity;
+            dst[i] = self.data[idx];
+            self.read_pos = self.read_pos.wrapping_add(1);
+        }
+        to_read
+    }
+}
+
+impl WebAudioInputProvider {
+    fn new() -> Self {
+        Self {
+            next_stream_id: AtomicU32::new(1),
+            streams: parking_lot::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// Called by the stdin reader thread when an `audioInputData` message
+    /// arrives from the browser extension.
+    fn handle_audio_data(&self, msg: &serde_json::Value) {
+        let stream_id = msg["streamId"].as_u64().unwrap_or(0) as u32;
+        let data_b64 = msg["data"].as_str().unwrap_or("");
+
+        if stream_id == 0 || data_b64.is_empty() {
+            return;
+        }
+
+        // Decode base64 PCM data.
+        use base64::Engine;
+        let pcm = match base64::engine::general_purpose::STANDARD.decode(data_b64) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!(
+                    "WebAudioInputProvider: bad base64 in audioInputData: {}",
+                    e
+                );
+                return;
+            }
+        };
+
+        let mut streams = self.streams.lock();
+        if let Some(state) = streams.get_mut(&stream_id) {
+            state.ring.write(&pcm);
+        }
+    }
+}
+
+impl player_ui_traits::AudioInputProvider for WebAudioInputProvider {
+    fn enumerate_devices(&self) -> Vec<(String, String)> {
+        // On the browser side, we always report one "default" device.
+        // Actual device enumeration would require a synchronous round-trip
+        // to the browser which isn't worth the complexity — Flash typically
+        // just asks for the default microphone.
+        vec![("browser:default".into(), "Microphone".into())]
+    }
+
+    fn open_stream(
+        &self,
+        _device_id: Option<&str>,
+        sample_rate: u32,
+        sample_frame_count: u32,
+    ) -> u32 {
+        let id = self.next_stream_id.fetch_add(1, Ordering::Relaxed);
+        tracing::info!(
+            "WebAudioInputProvider: open_stream id={}, rate={}, frames={}",
+            id, sample_rate, sample_frame_count,
+        );
+
+        // Ring buffer: hold ~4 buffers worth of audio data.
+        let ring_capacity = (sample_frame_count as usize) * 2 * 4;
+
+        self.streams.lock().insert(id, WebAudioInputStreamState {
+            ring: RingBuf::new(ring_capacity),
+            sample_rate,
+            sample_frame_count,
+        });
+
+        let _ = protocol::send_host_message(&protocol::HostMessage::AudioInputOpen {
+            stream_id: id,
+            sample_rate,
+            sample_frame_count,
+        });
+
+        id
+    }
+
+    fn start_capture(&self, stream_id: u32) -> bool {
+        tracing::debug!("WebAudioInputProvider: start_capture {}", stream_id);
+        let _ = protocol::send_host_message(&protocol::HostMessage::AudioInputStart {
+            stream_id,
+        });
+        true
+    }
+
+    fn stop_capture(&self, stream_id: u32) {
+        tracing::debug!("WebAudioInputProvider: stop_capture {}", stream_id);
+        let _ = protocol::send_host_message(&protocol::HostMessage::AudioInputStop {
+            stream_id,
+        });
+    }
+
+    fn read_samples(&self, stream_id: u32, buffer: &mut [u8]) -> usize {
+        let mut streams = self.streams.lock();
+        if let Some(state) = streams.get_mut(&stream_id) {
+            state.ring.read(buffer)
+        } else {
+            0
+        }
+    }
+
+    fn close_stream(&self, stream_id: u32) {
+        tracing::debug!("WebAudioInputProvider: close_stream {}", stream_id);
+        self.streams.lock().remove(&stream_id);
+        let _ = protocol::send_host_message(&protocol::HostMessage::AudioInputClose {
+            stream_id,
+        });
+    }
+}
+
+/// Thin wrapper so we can pass `Arc<WebAudioInputProvider>` as a
+/// `Box<dyn AudioInputProvider>` to the host (delegates all calls).
+struct WebAudioInputProviderWrapper(Arc<WebAudioInputProvider>);
+
+impl player_ui_traits::AudioInputProvider for WebAudioInputProviderWrapper {
+    fn enumerate_devices(&self) -> Vec<(String, String)> {
+        self.0.enumerate_devices()
+    }
+    fn open_stream(&self, device_id: Option<&str>, sample_rate: u32, sample_frame_count: u32) -> u32 {
+        self.0.open_stream(device_id, sample_rate, sample_frame_count)
+    }
+    fn start_capture(&self, stream_id: u32) -> bool {
+        self.0.start_capture(stream_id)
+    }
+    fn stop_capture(&self, stream_id: u32) {
+        self.0.stop_capture(stream_id)
+    }
+    fn read_samples(&self, stream_id: u32, buffer: &mut [u8]) -> usize {
+        self.0.read_samples(stream_id, buffer)
+    }
+    fn close_stream(&self, stream_id: u32) {
+        self.0.close_stream(stream_id)
     }
 }
 
