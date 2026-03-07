@@ -532,12 +532,47 @@ function bindInputEvents(canvas, port) {
 
   canvas.addEventListener("keydown", (e) => {
     e.preventDefault();
+    // Send RAWKEYDOWN — matches Chrome's PPAPI behaviour.
+    // PepperFlash expects RAWKEYDOWN (type 6), not KEYDOWN (type 7).
     port.postMessage({
-      type: "keydown",
+      type: "rawkeydown",
       keyCode: e.keyCode,
       code: e.code,
       modifiers: getModifiers(e),
     });
+
+    // Synthesize a CHAR event for character-producing keys.
+    // This replaces the deprecated 'keypress' event and is more reliable
+    // across browsers.  Ctrl/Meta combos are shortcuts, not characters.
+    if (!e.ctrlKey && !e.metaKey) {
+      if (e.key.length === 1) {
+        // Printable character (letters, digits, symbols, space).
+        port.postMessage({
+          type: "char",
+          keyCode: e.key.charCodeAt(0),
+          text: e.key,
+          code: e.code,
+          modifiers: getModifiers(e),
+        });
+      } else if (!e.altKey) {
+        // Special keys that produce character events in PPAPI.
+        let charCode = 0, charText = "";
+        switch (e.key) {
+          case "Enter":     charCode = 13; charText = "\r"; break;
+          case "Tab":       charCode = 9;  charText = "\t"; break;
+          case "Backspace": charCode = 8;  charText = "";   break;
+        }
+        if (charCode) {
+          port.postMessage({
+            type: "char",
+            keyCode: charCode,
+            text: charText,
+            code: e.code,
+            modifiers: getModifiers(e),
+          });
+        }
+      }
+    }
   });
 
   canvas.addEventListener("keyup", (e) => {
@@ -550,14 +585,25 @@ function bindInputEvents(canvas, port) {
     });
   });
 
-  canvas.addEventListener("keypress", (e) => {
-    e.preventDefault();
+  // --- IME composition events ---
+  // These fire on any focused element when an Input Method Editor is active
+  // (e.g. CJK input, dead-key sequences on European keyboards).
+
+  canvas.addEventListener("compositionstart", (e) => {
+    port.postMessage({ type: "compositionstart" });
+  });
+
+  canvas.addEventListener("compositionupdate", (e) => {
     port.postMessage({
-      type: "char",
-      keyCode: e.charCode || e.keyCode,
-      text: e.key.length === 1 ? e.key : "",
-      code: e.code,
-      modifiers: getModifiers(e),
+      type: "compositionupdate",
+      text: e.data || "",
+    });
+  });
+
+  canvas.addEventListener("compositionend", (e) => {
+    port.postMessage({
+      type: "compositionend",
+      text: e.data || "",
     });
   });
 

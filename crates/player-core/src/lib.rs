@@ -626,6 +626,50 @@ impl FlashPlayer {
         host.resources.release(resource_id);
     }
 
+    /// Send an IME composition event to the plugin.
+    ///
+    /// `event_type` should be one of `PP_INPUTEVENT_TYPE_IME_COMPOSITION_START`,
+    /// `_UPDATE`, `_END`, or `PP_INPUTEVENT_TYPE_IME_TEXT`.
+    pub fn send_ime_event(
+        &self,
+        event_type: PP_InputEvent_Type,
+        text: &str,
+        segment_offsets: &[u32],
+        target_segment: i32,
+        selection_start: u32,
+        selection_end: u32,
+    ) {
+        let Some(instance_id) = self.instance_id else {
+            return;
+        };
+        let Some(host) = ppapi_host::HOST.get() else {
+            return;
+        };
+
+        let timestamp = Self::current_time_ticks();
+        let text_var = host.vars.var_from_str(text);
+
+        let _segment_number = if segment_offsets.is_empty() {
+            0
+        } else {
+            (segment_offsets.len() - 1) as u32
+        };
+
+        let res = ppapi_host::interfaces::ime_input_event::IMEInputEventResource {
+            instance: instance_id,
+            event_type,
+            time_stamp: timestamp,
+            text: text_var,
+            segment_offsets: segment_offsets.to_vec(),
+            target_segment,
+            selection_start,
+            selection_end,
+        };
+        let resource_id = host.resources.insert(instance_id, Box::new(res));
+        self.send_input_event(resource_id);
+        host.resources.release(resource_id);
+    }
+
     /// Send a wheel/scroll event to the plugin.
     pub fn send_wheel_event(
         &self,

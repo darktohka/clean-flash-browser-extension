@@ -1362,6 +1362,42 @@ unsafe impl Send for PPB_TextInput_Dev_0_1 {}
 unsafe impl Sync for PPB_TextInput_Dev_0_1 {}
 
 // ===========================================================================
+// PPB_TextInputController;1.0 (stable — replaces the Dev variants above)
+// ===========================================================================
+
+pub const PPB_TEXTINPUTCONTROLLER_INTERFACE_1_0: &str = "PPB_TextInputController;1.0\0";
+
+/// Stable text-input type enum (same values as the Dev variant).
+pub type PP_TextInput_Type = i32;
+pub const PP_TEXTINPUT_TYPE_NONE: PP_TextInput_Type = 0;
+pub const PP_TEXTINPUT_TYPE_TEXT: PP_TextInput_Type = 1;
+pub const PP_TEXTINPUT_TYPE_PASSWORD: PP_TextInput_Type = 2;
+pub const PP_TEXTINPUT_TYPE_SEARCH: PP_TextInput_Type = 3;
+pub const PP_TEXTINPUT_TYPE_EMAIL: PP_TextInput_Type = 4;
+pub const PP_TEXTINPUT_TYPE_NUMBER: PP_TextInput_Type = 5;
+pub const PP_TEXTINPUT_TYPE_TELEPHONE: PP_TextInput_Type = 6;
+pub const PP_TEXTINPUT_TYPE_URL: PP_TextInput_Type = 7;
+
+#[repr(C)]
+pub struct PPB_TextInputController_1_0 {
+    pub SetTextInputType: Option<
+        unsafe extern "C" fn(instance: PP_Instance, type_: PP_TextInput_Type),
+    >,
+    /// Note: stable version takes only one rect (no bounding_box).
+    pub UpdateCaretPosition: Option<
+        unsafe extern "C" fn(instance: PP_Instance, caret: *const PP_Rect),
+    >,
+    pub CancelCompositionText: Option<unsafe extern "C" fn(instance: PP_Instance)>,
+    /// Note: stable version takes PP_Var text (not *const c_char).
+    pub UpdateSurroundingText: Option<
+        unsafe extern "C" fn(instance: PP_Instance, text: PP_Var, caret: u32, anchor: u32),
+    >,
+}
+
+unsafe impl Send for PPB_TextInputController_1_0 {}
+unsafe impl Sync for PPB_TextInputController_1_0 {}
+
+// ===========================================================================
 // PPB_URLLoader;1.0
 // ===========================================================================
 

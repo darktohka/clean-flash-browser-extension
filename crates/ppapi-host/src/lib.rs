@@ -6,6 +6,7 @@
 pub mod callback;
 pub mod browser_object;
 pub mod filesystem;
+pub mod font_rasterizer;
 pub mod instance;
 pub mod interface_registry;
 pub mod interfaces;

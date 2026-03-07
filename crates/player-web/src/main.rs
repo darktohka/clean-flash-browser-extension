@@ -374,20 +374,71 @@ fn handle_command(player: &mut FlashPlayer, cmd: &serde_json::Value) -> bool {
             );
         }
 
-        "keydown" | "keyup" | "char" => {
+        "keydown" | "rawkeydown" | "keyup" | "char" => {
             let key_code = cmd["keyCode"].as_u64().unwrap_or(0) as u32;
             let modifiers = cmd["modifiers"].as_u64().unwrap_or(0) as u32;
             let text = cmd["text"].as_str().unwrap_or("");
             let code = cmd["code"].as_str().unwrap_or("");
 
             let event_type = match msg_type {
-                "keydown" => PP_INPUTEVENT_TYPE_KEYDOWN,
+                // Chrome PPAPI sends RAWKEYDOWN for physical key presses;
+                // PepperFlash expects this type for text field handling.
+                "keydown" | "rawkeydown" => PP_INPUTEVENT_TYPE_RAWKEYDOWN,
                 "keyup" => PP_INPUTEVENT_TYPE_KEYUP,
                 "char" => PP_INPUTEVENT_TYPE_CHAR,
                 _ => unreachable!(),
             };
 
             player.send_keyboard_event(event_type, key_code, text, code, modifiers);
+        }
+
+        "compositionstart" => {
+            player.send_ime_event(
+                PP_INPUTEVENT_TYPE_IME_COMPOSITION_START,
+                "",
+                &[],
+                -1,
+                0,
+                0,
+            );
+        }
+
+        "compositionupdate" => {
+            let text = cmd["text"].as_str().unwrap_or("");
+            let text_len = text.len() as u32;
+            // Single segment spanning the whole composition string.
+            let segment_offsets = [0u32, text_len];
+            player.send_ime_event(
+                PP_INPUTEVENT_TYPE_IME_COMPOSITION_UPDATE,
+                text,
+                &segment_offsets,
+                0,
+                0,
+                text_len,
+            );
+        }
+
+        "compositionend" => {
+            let text = cmd["text"].as_str().unwrap_or("");
+            let text_len = text.len() as u32;
+            let segment_offsets = [0u32, text_len];
+            player.send_ime_event(
+                PP_INPUTEVENT_TYPE_IME_COMPOSITION_END,
+                text,
+                &segment_offsets,
+                -1,
+                0,
+                text_len,
+            );
+            // Also send IME_TEXT so Flash commits the composed text.
+            player.send_ime_event(
+                PP_INPUTEVENT_TYPE_IME_TEXT,
+                text,
+                &segment_offsets,
+                -1,
+                0,
+                text_len,
+            );
         }
 
         "wheel" => {

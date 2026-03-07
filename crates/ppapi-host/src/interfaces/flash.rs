@@ -1,11 +1,14 @@
 //! PPB_Flash;12.6 and PPB_Flash;13.0 implementation.
 //!
 //! Provides Flash-specific utilities: settings, timezone, crash data, etc.
-//! DrawGlyphs is a no-op stub (text rendering via Cairo is not implemented).
+//! DrawGlyphs renders text glyphs into an image data buffer using `ab_glyph`.
 
+use crate::font_rasterizer;
 use crate::interface_registry::InterfaceRegistry;
+use crate::interfaces::image_data::ImageDataResource;
 use ppapi_sys::*;
 use std::ffi::{CStr, c_char, c_void};
+use std::sync::Arc;
 
 use super::super::HOST;
 
@@ -75,21 +78,98 @@ unsafe extern "C" fn set_instance_always_on_top(_instance: PP_Instance, _on_top:
 
 unsafe extern "C" fn draw_glyphs(
     _instance: PP_Instance,
-    _image_data: PP_Resource,
-    _font_desc: *const c_void,
-    _color: u32,
-    _position: *const PP_Point,
-    _clip: *const PP_Rect,
+    image_data: PP_Resource,
+    font_desc: *const c_void,
+    color: u32,
+    position: *const PP_Point,
+    clip: *const PP_Rect,
     _transformation: *const [f32; 9],
     _allow_subpixel_aa: PP_Bool,
-    _glyph_count: u32,
-    _glyph_indices: *const u16,
-    _glyph_advances: *const PP_Point,
+    glyph_count: u32,
+    glyph_indices: *const u16,
+    glyph_advances: *const PP_Point,
 ) -> PP_Bool {
-    // TODO: Implement font rendering (would need a font rasterizer).
-    tracing::trace!("PPB_Flash::DrawGlyphs called (stub)");
+    let Some(host) = HOST.get() else {
+        return PP_FALSE;
+    };
+
+    if font_desc.is_null() || position.is_null() || glyph_count == 0
+        || glyph_indices.is_null() || glyph_advances.is_null()
+    {
+        return PP_TRUE;
+    }
+
+    let desc = unsafe { &*(font_desc as *const PP_BrowserFont_Trusted_Description) };
+    let pos = unsafe { &*position };
+
+    let clip_rect = if !clip.is_null() {
+        let c = unsafe { &*clip };
+        Some((c.point.x, c.point.y, c.size.width, c.size.height))
+    } else {
+        None
+    };
+
+    let indices = unsafe {
+        std::slice::from_raw_parts(glyph_indices, glyph_count as usize)
+    };
+    let advances = unsafe {
+        std::slice::from_raw_parts(glyph_advances, glyph_count as usize)
+    };
+
+    // Resolve the font.  Try to find it via the same FlashFontFile our host
+    // already loaded (by description), otherwise fall back to system font
+    // resolution or the embedded fallback.
+    let family_name = host.vars.get_string(desc.face);
+    let bold = desc.weight >= PP_BROWSERFONT_TRUSTED_WEIGHT_BOLD;
+    let italic = pp_to_bool(desc.italic);
+
+    let font: Arc<ab_glyph::FontVec> =
+        if let Some(path) = font_rasterizer::resolve_system_font(
+            family_name.as_deref(), desc.family, bold, italic,
+        ) {
+            font_rasterizer::get_font(&path)
+        } else {
+            font_rasterizer::get_fallback_font()
+        };
+
+    let px_size = if desc.size == 0 { 16.0 } else { desc.size as f32 };
+
+    tracing::trace!(
+        "PPB_Flash::DrawGlyphs(image_data={}, glyphs={}, size={}, color={:#010x}, pos=({},{}))",
+        image_data, glyph_count, px_size, color, pos.x, pos.y
+    );
+
+    // Draw each glyph into the image data buffer.
+    host.resources.with_downcast_mut::<ImageDataResource, _>(image_data, |img| {
+        let mut cursor_x = pos.x as f32;
+        let cursor_y = pos.y as f32;
+
+        for i in 0..(glyph_count as usize) {
+            let glyph_id = ab_glyph::GlyphId(indices[i]);
+
+            font_rasterizer::draw_glyph_to_bgra(
+                &mut img.pixels,
+                img.stride,
+                img.size.width,
+                img.size.height,
+                &font,
+                glyph_id,
+                px_size,
+                cursor_x,
+                cursor_y,
+                color,
+                clip_rect,
+            );
+
+            // Advance cursor by the per-glyph advance.
+            cursor_x += advances[i].x as f32;
+            // Vertical advances are rare but possible.
+            // cursor_y += advances[i].y as f32;
+        }
+    });
+
     PP_TRUE
-}
+}   
 
 unsafe extern "C" fn get_proxy_for_url(
     _instance: PP_Instance,
