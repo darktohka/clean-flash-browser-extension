@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Flash Player",
+  "version": "1.0.0",
+  "description": "Replaces Flash content with a native Flash Player via Native Messaging",
+  "permissions": [
+    "nativeMessaging"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "icons": {
+    "48": "icons/flash-48.png",
+    "128": "icons/flash-128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "flash-player@nickvision.org",
+      "strict_min_version": "109.0"
+    }
+  }
+}

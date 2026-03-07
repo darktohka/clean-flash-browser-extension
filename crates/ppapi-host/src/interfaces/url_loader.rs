@@ -264,15 +264,27 @@ unsafe extern "C" fn open(
     let host_cbs: Option<std::sync::Arc<dyn crate::HostCallbacks>> =
         host.host_callbacks.lock().clone();
 
-    // --- Spawn background I/O thread -------------------------------------
+    // --- Blocking vs async Open ------------------------------------------
+    // PP_BlockUntilComplete (null callback) means "run synchronously and
+    // return the result directly".  For non-null callbacks we spawn a
+    // background I/O thread as before.
+    let is_blocking = callback.is_null();
     let cb = callback;
     let resource_id = loader;
     let instance_id = loader_instance;
 
-    std::thread::spawn(move || {
-        let Some(host) = HOST.get() else { return };
+    // Shared logic that performs the HTTP request and sets up response info.
+    // Returns Ok(response) on success, Err(error_code) on failure.
+    // The inner state and response info resource are populated before returning.
+    let do_open = move |inner_arc: Arc<Mutex<URLLoaderInner>>,
+                        host_cbs: Option<std::sync::Arc<dyn crate::HostCallbacks>>,
+                        url: String,
+                        method: String,
+                        headers: String,
+                        body: Option<Vec<u8>>|
+          -> Result<crate::UrlLoadResponse, i32> {
+        let host = HOST.get().ok_or(PP_ERROR_FAILED)?;
 
-        // Call the host's on_url_open (may block for HTTP / file I/O).
         let result = if let Some(ref hcb) = host_cbs {
             hcb.on_url_open(&url, &method, &headers, body.as_deref())
         } else {
@@ -280,18 +292,14 @@ unsafe extern "C" fn open(
         };
 
         match result {
-            Ok(mut response) => {
-                // ------ Headers received —— populate metadata ------
+            Ok(response) => {
                 {
                     let mut inner = inner_arc.lock();
                     inner.open_complete = true;
                     inner.total_bytes = response.content_length.unwrap_or(-1);
-                    // Upload is delivered atomically via the request body,
-                    // so mark it fully sent once headers come back.
                     inner.bytes_sent = inner.total_bytes_to_send;
                 }
 
-                // Create the URLResponseInfo resource.
                 let ri = super::url_response_info::URLResponseInfoResource {
                     url: url.clone(),
                     status_code: response.status_code as i32,
@@ -314,92 +322,9 @@ unsafe extern "C" fn open(
                     ri_id
                 );
 
-                // Fire the Open completion callback (headers ready).
-                if let Some(ref p) = poster {
-                    p.post_work(cb, 0, PP_OK);
-                } else {
-                    unsafe { cb.run(PP_OK) };
-                }
-
-                // ------ Stream the response body in chunks ------
-                let mut chunk_buf = vec![0u8; STREAM_CHUNK_SIZE];
-                loop {
-                    let n = match response.body.read(&mut chunk_buf) {
-                        Ok(0) => {
-                            // --- EOF ---
-                            let mut inner = inner_arc.lock();
-                            inner.finished = true;
-                            tracing::debug!(
-                                "PPB_URLLoader: loader={} download complete, total {} bytes",
-                                resource_id,
-                                inner.bytes_received
-                            );
-                            // Satisfy any pending ReadResponseBody with 0 (EOF).
-                            if let Some(pending) = inner.pending_read.take() {
-                                drop(inner);
-                                if let Some(ref p) = poster {
-                                    p.post_work(pending.callback, 0, 0);
-                                } else {
-                                    unsafe { pending.callback.run(0) };
-                                }
-                            }
-                            break;
-                        }
-                        Ok(n) => n,
-                        Err(e) => {
-                            tracing::warn!(
-                                "PPB_URLLoader: loader={} read error: {}",
-                                resource_id,
-                                e
-                            );
-                            let mut inner = inner_arc.lock();
-                            inner.finished = true;
-                            inner.error = Some(PP_ERROR_FAILED);
-                            if let Some(pending) = inner.pending_read.take() {
-                                drop(inner);
-                                if let Some(ref p) = poster {
-                                    p.post_work(pending.callback, 0, PP_ERROR_FAILED);
-                                } else {
-                                    unsafe { pending.callback.run(PP_ERROR_FAILED) };
-                                }
-                            }
-                            break;
-                        }
-                    };
-
-                    // We got `n` bytes — deliver them.
-                    let mut inner = inner_arc.lock();
-                    inner.bytes_received += n as i64;
-
-                    if let Some(pending) = inner.pending_read.take() {
-                        // A ReadResponseBody is waiting — serve directly into
-                        // the plugin's buffer, bypassing the VecDeque.
-                        let to_copy = n.min(pending.bytes_to_read);
-                        unsafe {
-                            std::ptr::copy_nonoverlapping(
-                                chunk_buf.as_ptr(),
-                                pending.buffer,
-                                to_copy,
-                            );
-                        }
-                        // Buffer any leftover bytes.
-                        if n > to_copy {
-                            inner.buffer.extend(&chunk_buf[to_copy..n]);
-                        }
-                        drop(inner);
-                        if let Some(ref p) = poster {
-                            p.post_work(pending.callback, 0, to_copy as i32);
-                        } else {
-                            unsafe { pending.callback.run(to_copy as i32) };
-                        }
-                    } else {
-                        // No pending read — accumulate in the buffer.
-                        inner.buffer.extend(&chunk_buf[..n]);
-                    }
-                }
+                Ok(response)
             }
             Err(error_code) => {
-                // ------- Request failed -------
                 {
                     let mut inner = inner_arc.lock();
                     inner.open_complete = true;
@@ -412,8 +337,6 @@ unsafe extern "C" fn open(
                     error_code
                 );
 
-                // Create a minimal response-info so GetResponseInfo
-                // doesn't return 0 (which confuses Flash).
                 let ri = super::url_response_info::URLResponseInfoResource {
                     url: url.clone(),
                     status_code: 0,
@@ -427,17 +350,129 @@ unsafe extern "C" fn open(
                         l.response_info_id = Some(ri_id);
                     });
 
-                // Fire Open callback with the error code.
-                if let Some(ref p) = poster {
-                    p.post_work(cb, 0, error_code);
-                } else {
-                    unsafe { cb.run(error_code) };
-                }
+                Err(error_code)
             }
         }
-    });
+    };
 
-    PP_OK_COMPLETIONPENDING
+    // Helper: stream the response body in chunks into the inner buffer.
+    fn stream_body(
+        mut response: crate::UrlLoadResponse,
+        inner_arc: Arc<Mutex<URLLoaderInner>>,
+        poster: Option<crate::message_loop::MessageLoopPoster>,
+        resource_id: PP_Resource,
+    ) {
+        let mut chunk_buf = vec![0u8; STREAM_CHUNK_SIZE];
+        loop {
+            let n = match response.body.read(&mut chunk_buf) {
+                Ok(0) => {
+                    let mut inner = inner_arc.lock();
+                    inner.finished = true;
+                    tracing::debug!(
+                        "PPB_URLLoader: loader={} download complete, total {} bytes",
+                        resource_id,
+                        inner.bytes_received
+                    );
+                    if let Some(pending) = inner.pending_read.take() {
+                        drop(inner);
+                        if let Some(ref p) = poster {
+                            p.post_work(pending.callback, 0, 0);
+                        } else {
+                            unsafe { pending.callback.run(0) };
+                        }
+                    }
+                    break;
+                }
+                Ok(n) => n,
+                Err(e) => {
+                    tracing::warn!(
+                        "PPB_URLLoader: loader={} read error: {}",
+                        resource_id,
+                        e
+                    );
+                    let mut inner = inner_arc.lock();
+                    inner.finished = true;
+                    inner.error = Some(PP_ERROR_FAILED);
+                    if let Some(pending) = inner.pending_read.take() {
+                        drop(inner);
+                        if let Some(ref p) = poster {
+                            p.post_work(pending.callback, 0, PP_ERROR_FAILED);
+                        } else {
+                            unsafe { pending.callback.run(PP_ERROR_FAILED) };
+                        }
+                    }
+                    break;
+                }
+            };
+
+            let mut inner = inner_arc.lock();
+            inner.bytes_received += n as i64;
+
+            if let Some(pending) = inner.pending_read.take() {
+                let to_copy = n.min(pending.bytes_to_read);
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        chunk_buf.as_ptr(),
+                        pending.buffer,
+                        to_copy,
+                    );
+                }
+                if n > to_copy {
+                    inner.buffer.extend(&chunk_buf[to_copy..n]);
+                }
+                drop(inner);
+                if let Some(ref p) = poster {
+                    p.post_work(pending.callback, 0, to_copy as i32);
+                } else {
+                    unsafe { pending.callback.run(to_copy as i32) };
+                }
+            } else {
+                inner.buffer.extend(&chunk_buf[..n]);
+            }
+        }
+    }
+
+    if is_blocking {
+        // ----- Blocking (synchronous) Open -----
+        // Perform the HTTP request on the calling thread so that when we
+        // return, the response info is already populated.
+        match do_open(inner_arc.clone(), host_cbs, url, method, headers, body) {
+            Ok(response) => {
+                // Stream body data on a background thread.
+                let inner_for_stream = inner_arc.clone();
+                std::thread::spawn(move || {
+                    stream_body(response, inner_for_stream, poster, resource_id);
+                });
+                PP_OK
+            }
+            Err(error_code) => error_code,
+        }
+    } else {
+        // ----- Async Open (spawn background I/O thread) -----
+        std::thread::spawn(move || {
+            match do_open(inner_arc.clone(), host_cbs, url, method, headers, body) {
+                Ok(response) => {
+                    // Fire the Open completion callback (headers ready).
+                    if let Some(ref p) = poster {
+                        p.post_work(cb, 0, PP_OK);
+                    } else {
+                        unsafe { cb.run(PP_OK) };
+                    }
+                    // Stream the response body.
+                    stream_body(response, inner_arc, poster, resource_id);
+                }
+                Err(error_code) => {
+                    if let Some(ref p) = poster {
+                        p.post_work(cb, 0, error_code);
+                    } else {
+                        unsafe { cb.run(error_code) };
+                    }
+                }
+            }
+        });
+
+        PP_OK_COMPLETIONPENDING
+    }
 }
 
 // ---------------------------------------------------------------------------

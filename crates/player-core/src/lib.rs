@@ -254,21 +254,21 @@ impl FlashPlayer {
         tracing::info!("DidCreate arguments: instance={}, argc=0, argn=nullptr, argv=nullptr", instance_id);
         tracing::info!("Did_create value: instance={}, argc=0, argn=nullptr, argv=nullptr", instance_id);
 
-        // Pass type attribute for the MIME type. We'll deliver the actual  
+        // Pass type attribute for the MIME type. We'll deliver the actual
         // SWF data through HandleDocumentLoad.
-        let type_key = std::ffi::CString::new("type").unwrap();
-        let type_val = std::ffi::CString::new("application/x-shockwave-flash").unwrap();
-        let url_key = std::ffi::CString::new("src").unwrap();
-        let url_val = std::ffi::CString::new(instance_url.clone()).unwrap();
-        let movie_key = std::ffi::CString::new("movie").unwrap();
-        let movie_val = std::ffi::CString::new(instance_url.clone()).unwrap();
-        let data_key = std::ffi::CString::new("data").unwrap();
-        let data_val = std::ffi::CString::new(instance_url.clone()).unwrap();
+        //let type_key = std::ffi::CString::new("type").unwrap();
+        //let type_val = std::ffi::CString::new("application/x-shockwave-flash").unwrap();
+        //let url_key = std::ffi::CString::new("src").unwrap();
+        //let url_val = std::ffi::CString::new(instance_url.clone()).unwrap();
+        //let movie_key = std::ffi::CString::new("movie").unwrap();
+        //let movie_val = std::ffi::CString::new(instance_url.clone()).unwrap();
+        //let data_key = std::ffi::CString::new("data").unwrap();
+        //let data_val = std::ffi::CString::new(instance_url.clone()).unwrap();
 
-        let argn = [type_key.as_ptr(), url_key.as_ptr(), movie_key.as_ptr(), data_key.as_ptr()];
-        let argv = [type_val.as_ptr(), url_val.as_ptr(), movie_val.as_ptr(), data_val.as_ptr()];
-        //let argn = [];
-        //let argv = [];
+        //let argn = [type_key.as_ptr(), url_key.as_ptr(), movie_key.as_ptr(), data_key.as_ptr()];
+        //let argv = [type_val.as_ptr(), url_val.as_ptr(), movie_val.as_ptr(), data_val.as_ptr()];
+        let argn = [];
+        let argv = [];
         let argc = argn.len() as u32;
 
         let result = unsafe { did_create(instance_id, argc, argn.as_ptr(), argv.as_ptr()) };
@@ -301,7 +301,7 @@ impl FlashPlayer {
                 // We don't use the returned PP_Var (scripting bridge) in
                 // our standalone player, but Flash may rely on this call
                 // happening before HandleDocumentLoad.
-            }   
+            }
         } else {
             tracing::debug!("open_swf: PPP_Instance_Private;0.1 not available");
         }
@@ -314,10 +314,6 @@ impl FlashPlayer {
             tracing::info!(
                 "open_swf: calling HandleDocumentLoad for instance {}",
                 instance_id
-            );
-            println!(
-                "Calling HandleDocumentLoad with a URLLoader containing the SWF data... {}",
-                instance_url
             );
 
             let loader_res = crate::create_document_url_loader(instance_id, host, &instance_url);
@@ -834,7 +830,7 @@ impl HostCallbacks for PlayerHostCallbacks {
             });
         }
 
-        // ----- http:// / https:// → ureq ----- 
+        // ----- http:// / https:// → ureq -----
         if url.starts_with("http://") || url.starts_with("https://") {
             let agent = ureq::AgentBuilder::new()
                 .timeout_connect(std::time::Duration::from_secs(30))

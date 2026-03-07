@@ -197,7 +197,7 @@ unsafe extern "C" fn get_document_url(
     instance: PP_Instance,
     components: *mut PP_URLComponents_Dev,
 ) -> PP_Var {
-    tracing::debug!("PPB_URLUtil::GetDocumentURL called with instance={}", instance);
+    tracing::info!("PPB_URLUtil::GetDocumentURL called with instance={}", instance);
     let Some(host) = HOST.get() else {
         return PP_Var::undefined();
     };
@@ -210,7 +210,7 @@ unsafe extern "C" fn get_document_url(
         .unwrap_or_else(|| "file:///".to_string());
 
     parse_components(&url, components);
-    println!("Document URL for instance {}: {}", instance, url);
+    tracing::info!("Document URL for instance {}: {}", instance, url);
     host.vars.var_from_str(&url)
 }
 
@@ -218,7 +218,7 @@ unsafe extern "C" fn get_plugin_instance_url(
     instance: PP_Instance,
     components: *mut PP_URLComponents_Dev,
 ) -> PP_Var {
-    tracing::debug!("PPB_URLUtil::GetPluginInstanceURL called with instance={}", instance);
+    tracing::info!("PPB_URLUtil::GetPluginInstanceURL called with instance={}", instance);
     // Same as document URL in our standalone projector.
     get_document_url(instance, components)
 }
@@ -227,7 +227,7 @@ unsafe extern "C" fn get_plugin_referrer_url(
     _instance: PP_Instance,
     _components: *mut PP_URLComponents_Dev,
 ) -> PP_Var {
-    tracing::debug!("PPB_URLUtil::GetPluginReferrerURL called");
+    tracing::info!("PPB_URLUtil::GetPluginReferrerURL called");
     // No referrer in standalone mode.
     let Some(host) = HOST.get() else {
         return PP_Var::undefined();

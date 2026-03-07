@@ -182,7 +182,7 @@ unsafe extern "C" fn get_property(object: PP_Var, name: PP_Var, exception: *mut 
         Some((class, data)) => unsafe {
             if let Some(gp) = (*class).GetProperty {
                 let result = gp(data, name, exception);
-                println!("PPB_Var_Deprecated::GetProperty result: {:?}", result);
+                tracing::info!("PPB_Var_Deprecated::GetProperty result: {:?}", result);
                 result
             } else {
                 PP_Var::undefined()

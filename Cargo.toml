@@ -5,6 +5,7 @@ members = [
     "crates/player-core",
     "crates/player-ui-traits",
     "crates/player-egui",
+    "crates/player-web",
 ]
 exclude = ["v86"]
 resolver = "2"
