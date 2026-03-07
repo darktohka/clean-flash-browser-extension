@@ -12,7 +12,7 @@ path = "src/main.rs"
 [dependencies]
 player-core = { workspace = true }
 player-ui-traits = { workspace = true }
-ppapi-host = { workspace = true }
+ppapi-host = { workspace = true, features = ["fs-os"] }
 ppapi-sys = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

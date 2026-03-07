@@ -23,6 +23,7 @@ use super::super::HOST;
 #[allow(dead_code)] // variants hold values kept alive for their Drop impl
 pub(crate) enum AudioStreamHandle {
     /// Native audio via cpal (used by desktop players).
+    #[cfg(feature = "audio-cpal")]
     Cpal(cpal::Stream),
     /// Provider-based audio (used by browser-hosted players).
     Provider(ProviderStreamHandle),
@@ -118,12 +119,14 @@ pub unsafe fn register(registry: &mut InterfaceRegistry) {
 }
 
 // ---------------------------------------------------------------------------
-// Audio stream helpers
+// Audio stream helpers (cpal — native OS audio)
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "audio-cpal")]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 /// Playback callback context — passed to the cpal audio thread.
+#[cfg(feature = "audio-cpal")]
 struct PlaybackContext {
     callback_1_0: PPB_Audio_Callback_1_0,
     callback_1_1: PPB_Audio_Callback,
@@ -133,8 +136,10 @@ struct PlaybackContext {
 }
 
 // SAFETY: user_data is plugin-managed and expected to be thread-safe for audio callbacks.
+#[cfg(feature = "audio-cpal")]
 unsafe impl Send for PlaybackContext {}
 
+#[cfg(feature = "audio-cpal")]
 impl PlaybackContext {
     /// Invoke the plugin's audio callback to fill a buffer, then copy to output.
     unsafe fn fill_buffer(&self, output: &mut [i16]) {
@@ -180,6 +185,7 @@ impl PlaybackContext {
 }
 
 /// Start a cpal output stream that calls the plugin's audio callback.
+#[cfg(feature = "audio-cpal")]
 fn start_cpal_stream(
     sample_rate: u32,
     sample_frame_count: u32,
@@ -526,37 +532,46 @@ unsafe extern "C" fn start_playback(audio: PP_Resource) -> PP_Bool {
             }
 
             // Fall back to native cpal audio.
-            let stream = start_cpal_stream(
-                a.sample_rate,
-                a.sample_frame_count,
-                a.callback_1_0,
-                a.callback_1_1,
-                a.user_data,
-                a.playing.clone(),
-            );
+            #[cfg(feature = "audio-cpal")]
+            {
+                let stream = start_cpal_stream(
+                    a.sample_rate,
+                    a.sample_frame_count,
+                    a.callback_1_0,
+                    a.callback_1_1,
+                    a.user_data,
+                    a.playing.clone(),
+                );
 
-            match stream {
-                Some(s) => {
-                    if let Err(e) = s.play() {
-                        tracing::error!(
-                            "ppb_audio_start_playback: failed to start stream: {}",
-                            e
+                match stream {
+                    Some(s) => {
+                        if let Err(e) = s.play() {
+                            tracing::error!(
+                                "ppb_audio_start_playback: failed to start stream: {}",
+                                e
+                            );
+                            return PP_FALSE;
+                        }
+                        a.playing.store(true, Ordering::SeqCst);
+                        *a.stream.lock() = Some(AudioStreamHandle::Cpal(s));
+                        tracing::info!(
+                            "ppb_audio_start_playback: started via cpal (rate={}, frames={})",
+                            a.sample_rate,
+                            a.sample_frame_count
                         );
+                        return PP_TRUE;
+                    }
+                    None => {
+                        tracing::error!("ppb_audio_start_playback: failed to create stream");
                         return PP_FALSE;
                     }
-                    a.playing.store(true, Ordering::SeqCst);
-                    *a.stream.lock() = Some(AudioStreamHandle::Cpal(s));
-                    tracing::info!(
-                        "ppb_audio_start_playback: started via cpal (rate={}, frames={})",
-                        a.sample_rate,
-                        a.sample_frame_count
-                    );
-                    PP_TRUE
                 }
-                None => {
-                    tracing::error!("ppb_audio_start_playback: failed to create stream");
-                    PP_FALSE
-                }
+            }
+
+            #[cfg(not(feature = "audio-cpal"))]
+            {
+                tracing::error!("ppb_audio_start_playback: no audio backend available");
+                PP_FALSE
             }
         });
 

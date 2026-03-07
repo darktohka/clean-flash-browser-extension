@@ -16,7 +16,7 @@ license = "MIT"
 
 [workspace.dependencies]
 ppapi-sys = { path = "crates/ppapi-sys" }
-ppapi-host = { path = "crates/ppapi-host" }
+ppapi-host = { path = "crates/ppapi-host", default-features = false }
 player-core = { path = "crates/player-core" }
 player-ui-traits = { path = "crates/player-ui-traits" }
 

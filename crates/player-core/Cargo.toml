@@ -7,7 +7,7 @@ description = "Core Flash player logic — SWF loading, instance lifecycle"
 
 [dependencies]
 ppapi-sys = { workspace = true }
-ppapi-host = { workspace = true }
+ppapi-host = { workspace = true, features = ["fs-os"] }
 player-ui-traits = { workspace = true }
 tracing = { workspace = true }
 parking_lot = "0.12"
