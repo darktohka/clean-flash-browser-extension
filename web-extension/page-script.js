@@ -109,8 +109,6 @@
         return origMimeNamedItem.call(this, name);
       };
     } catch (e) {
-      console.log("Flash spoofing failed");
-      console.log(e);
     }
   }
 
@@ -143,7 +141,6 @@
     }
     const id = nextJsObjectId++;
     jsObjects.set(id, obj);
-    console.log("[flash] registerJsObject: id=%d, type=%s", id, typeof obj);
     return id;
   }
 
@@ -152,7 +149,6 @@
   // -----------------------------------------------------------------
 
   function encodeJsValue(val) {
-    console.log("[flash] encodeJsValue: typeof=%s, val=%o", typeof val, val);
     if (val === undefined) return { type: "undefined" };
     if (val === null) return { type: "null" };
     switch (typeof val) {
@@ -174,7 +170,6 @@
   }
 
   function decodeJsValue(encoded) {
-    console.log("[flash] decodeJsValue: %o", encoded);
     if (!encoded || !encoded.type) return undefined;
     switch (encoded.type) {
       case "undefined":
@@ -212,13 +207,10 @@
    * it directly still works (fire-and-forget, returns undefined).
    */
   function setupCallFunction(elem) {
-    console.log("[flash] setupCallFunction: elem=%o", elem);
     if (typeof elem.CallFunction === "function") {
-      console.log("[flash] setupCallFunction: CallFunction already present, skipping");
       return;
     }
     elem.CallFunction = function (xml) {
-      console.log("[flash] elem.CallFunction called: xml=%s", xml);
       sendCallFunctionAsync(xml);
       // Cannot return synchronously via native messaging.
       return undefined;
@@ -230,7 +222,6 @@
    * via the content script.
    */
   function sendCallFunctionAsync(xml) {
-    console.log("[flash] sendCallFunctionAsync: xml=%s", xml);
     comm.setAttribute("data-callfn", xml);
     comm.dispatchEvent(new CustomEvent("__flash_callfn"));
   }
@@ -258,11 +249,6 @@
    */
   function makeExternalInterfaceStub(name) {
     return function () {
-      console.log(
-        "[flash] Proxy: calling '%s' via ExternalInterface with %d arg(s)",
-        name,
-        arguments.length
-      );
       const argsXml =
         typeof __flash__argumentsToXML === "function"
           ? __flash__argumentsToXML(arguments, 0)
@@ -330,11 +316,6 @@
       return container;
     }
 
-    console.log("[flash] proxyFlashElement: patching prototype of %s#%s",
-      container.tagName,
-      container.getAttribute("id") || container.getAttribute("name") || ""
-    );
-
     const origProto = Object.getPrototypeOf(container);
     const proxyProto = new Proxy(origProto, {
       get(target, prop, receiver) {
@@ -349,11 +330,6 @@
         if (prop === "then" || prop === "toJSON") return undefined;
 
         // Unknown property — return an ExternalInterface stub.
-        console.log(
-          "[flash] Proxy proto: unknown property '%s' accessed on %s, creating ExternalInterface stub",
-          prop,
-          receiver.tagName || "element"
-        );
         return makeExternalInterfaceStub(prop);
       },
 
@@ -391,7 +367,6 @@
       patchedElements.add(container);
       return;
     }
-    console.log("[flash] patchFlashElement: patching %s", container.tagName);
     setupCallFunction(container);
     proxyFlashElement(container);
   }
@@ -402,20 +377,16 @@
    * them with our async-bridge-aware versions.
    */
   function patchFlashCallbacks() {
-    console.log("[flash] patchFlashCallbacks: checking for __flash__addCallback/__flash__removeCallback");
     if (
       typeof window.__flash__addCallback === "function" &&
       !window.__flash__addCallback.__patched
     ) {
-      console.log("[flash] patchFlashCallbacks: patching __flash__addCallback");
       window.__flash__addCallback = function (instance, name) {
-        console.log("[flash] __flash__addCallback called: instance=%o, name=%s", instance, name);
         // Also set up CallFunction on the element as a fallback.
         if (instance && typeof instance === "object") {
           setupCallFunction(instance);
         }
         instance[name] = function () {
-          console.log("[flash] ExternalInterface callback %s() called with %d arg(s)", name, arguments.length);
           // Build the invoke XML using Flash's own helper (defined in the
           // same script block).
           const argsXml =
@@ -428,7 +399,6 @@
             '" returntype="javascript">' +
             argsXml +
             "</invoke>";
-          console.log("[flash] ExternalInterface callback %s invokeXml=%s", name, invokeXml);
           sendCallFunctionAsync(invokeXml);
           // Fire-and-forget — returning undefined for now.
           return undefined;
@@ -441,9 +411,7 @@
       typeof window.__flash__removeCallback === "function" &&
       !window.__flash__removeCallback.__patched
     ) {
-      console.log("[flash] patchFlashCallbacks: patching __flash__removeCallback");
       window.__flash__removeCallback = function (instance, name) {
-        console.log("[flash] __flash__removeCallback called: instance=%o, name=%s", instance, name);
         instance[name] = null;
       };
       window.__flash__removeCallback.__patched = true;
@@ -459,11 +427,9 @@
 
     switch (op) {
       case "getWindow":
-        console.log("[flash] op=getWindow");
         return { value: encodeJsValue(window) };
 
       case "getOwnerElement": {
-        console.log("[flash] op=getOwnerElement");
         // Find the Flash <object> or <embed> element annotated by
         // content.js (it carries the data-flash-player attribute).
         // Prefer the actual <object>/<embed> over a <canvas>.
@@ -472,11 +438,9 @@
         );
         if (!elem) elem = document.querySelector("[data-flash-player]");
         if (!elem) {
-          console.log("[flash] getOwnerElement: no [data-flash-player] element found");
           return { value: { type: "undefined" } };
         }
         const container = resolveFlashContainer(elem);
-        console.log("[flash] getOwnerElement: found container=%o", container);
         // Ensure CallFunction is available and prototype is patched.
         patchFlashElement(container);
         return { value: encodeJsValue(container) };
@@ -485,7 +449,6 @@
       case "hasProperty": {
         const obj = jsObjects.get(req.obj);
         const result = obj != null && req.name in Object(obj);
-        console.log("[flash] op=hasProperty obj=%d name=%s -> %s", req.obj, req.name, result);
         return { value: { type: "bool", v: result } };
       }
 
@@ -493,24 +456,20 @@
         const obj = jsObjects.get(req.obj);
         const result =
           obj != null && typeof Object(obj)[req.name] === "function";
-        console.log("[flash] op=hasMethod obj=%d name=%s -> %s", req.obj, req.name, result);
         return { value: { type: "bool", v: result } };
       }
 
       case "getProperty": {
         const obj = jsObjects.get(req.obj);
         if (obj == null) {
-          console.log("[flash] op=getProperty obj=%d name=%s -> object not found", req.obj, req.name);
           return { value: { type: "undefined" } };
         }
         const val = Object(obj)[req.name];
-        console.log("[flash] op=getProperty obj=%d name=%s -> %o", req.obj, req.name, val);
         return { value: encodeJsValue(val) };
       }
 
       case "setProperty": {
         const obj = jsObjects.get(req.obj);
-        console.log("[flash] op=setProperty obj=%d name=%s value=%o", req.obj, req.name, req.value);
         if (obj != null) {
           Object(obj)[req.name] = decodeJsValue(req.value);
         }
@@ -518,7 +477,6 @@
       }
 
       case "removeProperty": {
-        console.log("[flash] op=removeProperty obj=%d name=%s", req.obj, req.name);
         const obj = jsObjects.get(req.obj);
         if (obj != null) delete Object(obj)[req.name];
         return { value: { type: "undefined" } };
@@ -527,12 +485,10 @@
       case "getAllPropertyNames": {
         const obj = jsObjects.get(req.obj);
         const names = obj != null ? Object.keys(Object(obj)) : [];
-        console.log("[flash] op=getAllPropertyNames obj=%d -> [%s]", req.obj, names.join(", "));
         return { names };
       }
 
       case "callMethod": {
-        console.log("[flash] op=callMethod obj=%d method=%s argc=%d", req.obj, req.method, (req.args || []).length);
         const obj = jsObjects.get(req.obj);
         if (obj == null) return { error: "object not found" };
         const fn_ = Object(obj)[req.method];
@@ -540,37 +496,30 @@
           return { error: `${req.method} is not a function` };
         const args = (req.args || []).map(decodeJsValue);
         const result = fn_.apply(obj, args);
-        console.log("[flash] callMethod %s -> %o", req.method, result);
         return { value: encodeJsValue(result) };
       }
 
       case "call": {
-        console.log("[flash] op=call obj=%d argc=%d", req.obj, (req.args || []).length);
         const fn_ = jsObjects.get(req.obj);
         if (typeof fn_ !== "function")
           return { error: "object is not callable" };
         const args = (req.args || []).map(decodeJsValue);
         const result = fn_(...args);
-        console.log("[flash] call obj=%d -> %o", req.obj, result);
         return { value: encodeJsValue(result) };
       }
 
       case "construct": {
-        console.log("[flash] op=construct obj=%d argc=%d", req.obj, (req.args || []).length);
         const ctor = jsObjects.get(req.obj);
         if (typeof ctor !== "function")
           return { error: "object is not a constructor" };
         const args = (req.args || []).map(decodeJsValue);
         const result = new ctor(...args);
-        console.log("[flash] construct obj=%d -> %o", req.obj, result);
         return { value: encodeJsValue(result) };
       }
 
       case "executeScript": {
-        console.log("[flash] op=executeScript script=%s", req.script);
         // Indirect eval → runs in global scope of the page.
         const result = (0, eval)(req.script);
-        console.log("[flash] executeScript -> %o", result);
         // Check whether Flash just defined its ExternalInterface helpers
         // and override them with our async-bridge-aware versions.
         patchFlashCallbacks();
@@ -578,7 +527,6 @@
       }
 
       case "release": {
-        console.log("[flash] op=release obj=%d", req.obj);
         if (req.obj !== 0) jsObjects.delete(req.obj);
         return null; // no response needed
       }
@@ -596,8 +544,6 @@
   comm.addEventListener("__flash_req", () => {
     const reqJson = comm.getAttribute("data-req");
     if (!reqJson) return;
-    console.log("[flash] __flash_req received: %s", reqJson);
-
     let resp;
     try {
       const req = JSON.parse(reqJson);
@@ -606,21 +552,15 @@
       console.error("[flash] handleRequest threw: %o", e);
       resp = { error: String(e) };
     }
-    console.log("[flash] __flash_req response: %s", resp ? JSON.stringify(resp) : "(null)");
-
     // Write response back (null means fire-and-forget, e.g. "release").
     comm.setAttribute("data-resp", resp ? JSON.stringify(resp) : "");
   });
-
-  console.log("[flash] page-script.js ready");
-
   // Proactively proxy all Flash elements that already exist in the DOM
   // so that page JS can call methods (e.g. game.startup) even before
   // the native host calls getOwnerElement.
   //
   // 1) Elements already annotated by content.js:
   document.querySelectorAll("[data-flash-player]").forEach((el) => {
-    console.log("[flash] proactive patch for existing [data-flash-player]: %o", el);
     patchFlashElement(el);
   });
   //
@@ -632,7 +572,6 @@
     'embed[type="application/x-shockwave-flash"]'
   ).forEach((el) => {
     if (!patchedElements.has(el)) {
-      console.log("[flash] proactive patch for Flash %s: %o", el.tagName, el);
       patchFlashElement(el);
     }
   });
@@ -645,13 +584,11 @@
       for (const node of mut.addedNodes) {
         if (node.nodeType !== Node.ELEMENT_NODE) continue;
         if (node.hasAttribute && node.hasAttribute("data-flash-player")) {
-          console.log("[flash] MutationObserver: new [data-flash-player] node: %o", node);
           patchFlashElement(node);
         }
         // Also check children (e.g. <object> with a <canvas> child inserted).
         if (node.querySelectorAll) {
           node.querySelectorAll("[data-flash-player]").forEach((child) => {
-            console.log("[flash] MutationObserver: new [data-flash-player] descendant: %o", child);
             patchFlashElement(child);
           });
         }
@@ -663,7 +600,6 @@
         mut.attributeName === "data-flash-player" &&
         mut.target.hasAttribute("data-flash-player")
       ) {
-        console.log("[flash] MutationObserver: data-flash-player attribute set on: %o", mut.target);
         patchFlashElement(mut.target);
       }
     }

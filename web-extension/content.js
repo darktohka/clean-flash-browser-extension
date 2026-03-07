@@ -11,6 +11,11 @@
 "use strict";
 
 // ---------------------------------------------------------------------------
+// Debug mode — set to true to show a live statistics panel below each canvas.
+// ---------------------------------------------------------------------------
+const FLASH_DEBUG = true;
+
+// ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
 
@@ -102,6 +107,270 @@ const instanceMeta = new Map();
 /** True while we are intentionally tearing down (page navigation). */
 let navigatingAway = false;
 
+// ---------------------------------------------------------------------------
+// Debug statistics
+// ---------------------------------------------------------------------------
+
+/** Human-readable tag names for debug display. */
+const TAG_NAMES = {
+  [0x01]: "FRAME",
+  [0x02]: "STATE",
+  [0x03]: "CURSOR",
+  [0x04]: "ERROR",
+  [0x05]: "NAVIGATE",
+  [0x10]: "SCRIPT",
+  [0x20]: "AUDIO_INIT",
+  [0x21]: "AUDIO_SAMPLES",
+  [0x22]: "AUDIO_START",
+  [0x23]: "AUDIO_STOP",
+  [0x24]: "AUDIO_CLOSE",
+  [0x30]: "AINPUT_OPEN",
+  [0x31]: "AINPUT_START",
+  [0x32]: "AINPUT_STOP",
+  [0x33]: "AINPUT_CLOSE",
+};
+
+/**
+ * Per-instance debug statistics collector.
+ *
+ * Tracks rolling 1-second windows of message counts, byte volumes,
+ * per-type breakdowns, largest messages, decode/render timing, and
+ * congestion (queue depth) information.
+ */
+class DebugStats {
+  constructor() {
+    // ---- Current window accumulators (reset every flush) ----
+    this.msgCount = 0;          // messages received this window
+    this.byteCount = 0;         // total decoded bytes this window
+    this.b64ByteCount = 0;      // total base64 bytes this window
+    /** Per-tag counters: tag -> { count, bytes } */
+    this.tagCounters = new Map();
+    /** Top-N largest messages this window: [{ tag, bytes }] */
+    this.bigMessages = [];      // kept sorted, max 5
+    this.decodeTimeSum = 0;     // ms spent in b64ToUint8
+    this.renderTimeSum = 0;     // ms spent in putImageData (TAG_FRAME only)
+    this.frameCount = 0;        // TAG_FRAME count this window
+
+    // ---- Congestion tracking ----
+    this.lastMsgTime = 0;       // performance.now() of last message
+    this.interArrivalSum = 0;   // sum of inter-arrival gaps (ms)
+    this.interArrivalCount = 0;
+    this.minInterArrival = Infinity;
+    this.pendingMessages = 0;   // incremented on receive, decremented after processing
+    this.maxPending = 0;
+
+    // ---- Snapshot (last flushed values for display) ----
+    this.snap = {
+      msgPerSec: 0, bytesPerSec: 0, b64BytesPerSec: 0,
+      tags: [],           // [{ name, count, bytes }] sorted by bytes desc
+      biggest: [],        // [{ name, bytes }]
+      avgDecodeMs: 0, avgRenderMs: 0, fps: 0,
+      avgInterArrivalMs: 0, minInterArrivalMs: 0,
+      maxPending: 0,
+      congested: false,
+    };
+
+    this._flushInterval = null;
+    this._lastFlush = performance.now();
+  }
+
+  /** Record an incoming message before processing. */
+  recordMessage(b64Len, decodedLen, tag, decodeMs) {
+    this.msgCount++;
+    this.byteCount += decodedLen;
+    this.b64ByteCount += b64Len;
+    this.decodeTimeSum += decodeMs;
+
+    const name = TAG_NAMES[tag] || `0x${tag.toString(16).padStart(2, "0")}`;
+    let tc = this.tagCounters.get(tag);
+    if (!tc) { tc = { name, count: 0, bytes: 0 }; this.tagCounters.set(tag, tc); }
+    tc.count++;
+    tc.bytes += decodedLen;
+
+    // Track top-5 biggest messages.
+    if (this.bigMessages.length < 5 || decodedLen > this.bigMessages[this.bigMessages.length - 1].bytes) {
+      this.bigMessages.push({ name, bytes: decodedLen });
+      this.bigMessages.sort((a, b) => b.bytes - a.bytes);
+      if (this.bigMessages.length > 5) this.bigMessages.length = 5;
+    }
+
+    // Inter-arrival timing.
+    const now = performance.now();
+    if (this.lastMsgTime > 0) {
+      const gap = now - this.lastMsgTime;
+      this.interArrivalSum += gap;
+      this.interArrivalCount++;
+      if (gap < this.minInterArrival) this.minInterArrival = gap;
+    }
+    this.lastMsgTime = now;
+  }
+
+  /** Record time spent in putImageData for a frame. */
+  recordFrameRender(renderMs) {
+    this.frameCount++;
+    this.renderTimeSum += renderMs;
+  }
+
+  /** Call when a message starts processing (for congestion). */
+  markProcessingStart() {
+    this.pendingMessages++;
+    if (this.pendingMessages > this.maxPending) this.maxPending = this.pendingMessages;
+  }
+
+  /** Call when a message finishes processing. */
+  markProcessingEnd() {
+    this.pendingMessages--;
+  }
+
+  /** Flush accumulators into a snapshot for display, then reset. */
+  flush() {
+    const now = performance.now();
+    const elapsed = (now - this._lastFlush) / 1000; // seconds
+    const s = this.snap;
+
+    s.msgPerSec = elapsed > 0 ? Math.round(this.msgCount / elapsed) : 0;
+    s.bytesPerSec = elapsed > 0 ? Math.round(this.byteCount / elapsed) : 0;
+    s.b64BytesPerSec = elapsed > 0 ? Math.round(this.b64ByteCount / elapsed) : 0;
+    s.fps = elapsed > 0 ? Math.round(this.frameCount / elapsed) : 0;
+    s.avgDecodeMs = this.msgCount > 0 ? (this.decodeTimeSum / this.msgCount) : 0;
+    s.avgRenderMs = this.frameCount > 0 ? (this.renderTimeSum / this.frameCount) : 0;
+    s.avgInterArrivalMs = this.interArrivalCount > 0 ? (this.interArrivalSum / this.interArrivalCount) : 0;
+    s.minInterArrivalMs = this.minInterArrival === Infinity ? 0 : this.minInterArrival;
+    s.maxPending = this.maxPending;
+    s.congested = this.maxPending > 3;
+
+    // Per-tag breakdown sorted by bytes.
+    s.tags = [];
+    for (const [, tc] of this.tagCounters) {
+      s.tags.push({ name: tc.name, count: tc.count, bytes: tc.bytes });
+    }
+    s.tags.sort((a, b) => b.bytes - a.bytes);
+
+    // Biggest messages.
+    s.biggest = this.bigMessages.slice();
+
+    // Reset accumulators.
+    this.msgCount = 0;
+    this.byteCount = 0;
+    this.b64ByteCount = 0;
+    this.tagCounters.clear();
+    this.bigMessages = [];
+    this.decodeTimeSum = 0;
+    this.renderTimeSum = 0;
+    this.frameCount = 0;
+    this.interArrivalSum = 0;
+    this.interArrivalCount = 0;
+    this.minInterArrival = Infinity;
+    this.maxPending = 0;
+    this._lastFlush = now;
+  }
+
+  /** Start periodic flushing and DOM updates. */
+  start(panelEl) {
+    this._panel = panelEl;
+    this._flushInterval = setInterval(() => {
+      this.flush();
+      this._render();
+    }, 500);
+  }
+
+  /** Stop the update loop. */
+  stop() {
+    if (this._flushInterval) { clearInterval(this._flushInterval); this._flushInterval = null; }
+  }
+
+  /** Format bytes into a human-readable string. */
+  static fmtBytes(n) {
+    if (n < 1024) return n + " B";
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+    return (n / (1024 * 1024)).toFixed(2) + " MB";
+  }
+
+  /** Render snapshot into the panel element. */
+  _render() {
+    const s = this.snap;
+    const f = DebugStats.fmtBytes;
+    let h = "";
+
+    // Throughput row.
+    h += `<b>Throughput:</b> ${s.msgPerSec} msg/s &nbsp;|&nbsp; `;
+    h += `${f(s.bytesPerSec)}/s decoded &nbsp;|&nbsp; `;
+    h += `${f(s.b64BytesPerSec)}/s base64<br>`;
+
+    // FPS + timing.
+    h += `<b>Frames:</b> ${s.fps} fps &nbsp;|&nbsp; `;
+    h += `decode: ${s.avgDecodeMs.toFixed(2)} ms &nbsp;|&nbsp; `;
+    h += `render: ${s.avgRenderMs.toFixed(2)} ms<br>`;
+
+    // Inter-arrival / congestion.
+    h += `<b>Arrival:</b> avg ${s.avgInterArrivalMs.toFixed(1)} ms &nbsp;|&nbsp; `;
+    h += `min ${s.minInterArrivalMs.toFixed(1)} ms &nbsp;|&nbsp; `;
+    h += `max queued: ${s.maxPending}`;
+    if (s.congested) h += ` <span style="color:#ff6b6b;font-weight:700">⚠ CONGESTED</span>`;
+    h += "<br>";
+
+    // Per-type breakdown.
+    if (s.tags.length) {
+      h += `<b>By type:</b><br>`;
+      for (const t of s.tags) {
+        h += `&nbsp;&nbsp;${t.name}: ${t.count}× &nbsp; ${f(t.bytes)}<br>`;
+      }
+    }
+
+    // Biggest messages.
+    if (s.biggest.length) {
+      h += `<b>Biggest msgs:</b> `;
+      h += s.biggest.map(b => `${b.name} ${f(b.bytes)}`).join(", ");
+      h += "<br>";
+    }
+
+    this._panel.innerHTML = h;
+  }
+}
+
+/** Map of instanceId -> DebugStats (only populated when FLASH_DEBUG). */
+const debugStatsMap = new Map();
+
+/**
+ * Create the debug stats DOM panel and attach it after the container.
+ * Returns the DebugStats instance.
+ */
+function createDebugStatsPanel(instanceId, container, anchorEl) {
+  const panel = document.createElement("div");
+  panel.className = "flash-debug-stats";
+  Object.assign(panel.style, {
+    fontFamily: "'Consolas', 'Menlo', 'Monaco', monospace",
+    fontSize: "11px",
+    lineHeight: "1.5",
+    color: "#c8d6e5",
+    background: "linear-gradient(135deg, #0b1a2e 0%, #142744 100%)",
+    border: "1px solid #1e3a5f",
+    borderTop: "none",
+    padding: "8px 12px",
+    maxWidth: container.style.width,
+    boxSizing: "border-box",
+    overflowX: "auto",
+    userSelect: "text",
+  });
+  panel.innerHTML = "<i>Collecting statistics…</i>";
+
+  // Insert right after anchorEl (defaults to container).
+  // For <object> elements pass the <object> itself so the panel lands
+  // outside it — otherwise it ends up inside the collapsed object and
+  // has zero height.
+  const insertAfter = anchorEl || container;
+  if (insertAfter.nextSibling) {
+    insertAfter.parentNode.insertBefore(panel, insertAfter.nextSibling);
+  } else if (insertAfter.parentNode) {
+    insertAfter.parentNode.appendChild(panel);
+  }
+
+  const stats = new DebugStats();
+  stats.start(panel);
+  debugStatsMap.set(instanceId, stats);
+  return stats;
+}
+
 /**
  * Replace a Flash element with a <canvas> and wire up the native messaging
  * bridge via the background service worker.
@@ -149,6 +418,12 @@ function replaceFlashElement(elem) {
   const meta = { canvas, ctx, swfUrl, origWidth, origHeight, port: null, container, elem };
   instanceMeta.set(instanceId, meta);
 
+  // ---- Debug stats panel (below the canvas) ----
+  if (FLASH_DEBUG) {
+    // Defer panel creation until the container is in the DOM.
+    meta._pendingDebugPanel = true;
+  }
+
   // ---- Connect and start ----
   startInstance(instanceId, meta);
 
@@ -165,6 +440,15 @@ function replaceFlashElement(elem) {
     elem.appendChild(container);
   }
   elem.setAttribute("data-flash-player", instanceId);
+
+  // Now that the container is in the DOM, create the debug panel if needed.
+  // For <object>, the container lives *inside* the element, so anchor the
+  // panel to the <object> itself so it appears outside/after it.
+  if (FLASH_DEBUG && meta._pendingDebugPanel) {
+    const anchor = elem.tagName === "OBJECT" ? elem : container;
+    createDebugStatsPanel(instanceId, container, anchor);
+    meta._pendingDebugPanel = false;
+  }
 
   return true;
 }
@@ -418,18 +702,60 @@ function readI32(dv, off) {
   return dv.getInt32(off, true);
 }
 
+// Pre-computed base64 decode lookup table (avoids atob + charCodeAt overhead).
+const _B64 = new Uint8Array(128);
+for (let _i = 0; _i < 64; _i++) _B64["ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".charCodeAt(_i)] = _i;
+
+/** True if the fast native Uint8Array.fromBase64 API is available (Chrome 128+). */
+const _hasFromBase64 = typeof Uint8Array.fromBase64 === "function";
+
+/** True if the fast native Uint8Array.prototype.toBase64 API is available. */
+const _hasToBase64 = typeof Uint8Array.prototype.toBase64 === "function";
+
 /**
  * Decode a base64 string into a Uint8Array.
+ *
+ * Fast path: native Uint8Array.fromBase64 (Chrome 128+, all-native, ~5× faster).
+ * Fallback : pure-JS lookup-table decoder — skips the intermediate binary string
+ *            that atob() creates and processes 4 input chars → 3 output bytes per
+ *            iteration instead of 1 byte per iteration.
  */
 function b64ToUint8(b64) {
-  const bin = atob(b64);
-  const len = bin.length;
-  const arr = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
-    arr[i] = bin.charCodeAt(i);
+  if (_hasFromBase64) return Uint8Array.fromBase64(b64);
+
+  const len = b64.length;
+  let outLen = (len * 3) >>> 2;
+  if (len > 0 && b64.charCodeAt(len - 1) === 0x3D) outLen--;
+  if (len > 1 && b64.charCodeAt(len - 2) === 0x3D) outLen--;
+
+  const out = new Uint8Array(outLen);
+  for (let i = 0, j = 0; i < len; i += 4) {
+    const a = _B64[b64.charCodeAt(i)];
+    const b = _B64[b64.charCodeAt(i + 1)];
+    const c = _B64[b64.charCodeAt(i + 2)];
+    const d = _B64[b64.charCodeAt(i + 3)];
+    out[j++] = (a << 2) | (b >> 4);
+    if (j < outLen) out[j++] = ((b & 0xF) << 4) | (c >> 2);
+    if (j < outLen) out[j++] = ((c & 0x3) << 6) | d;
   }
-  return arr;
+  return out;
 }
+
+/**
+ * Encode a Uint8Array to a base64 string.
+ * Uses the native toBase64() when available, otherwise batched btoa.
+ */
+function uint8ToB64(bytes) {
+  if (_hasToBase64) return bytes.toBase64();
+  const parts = [];
+  for (let off = 0; off < bytes.length; off += 8192) {
+    parts.push(String.fromCharCode.apply(null, bytes.subarray(off, off + 8192)));
+  }
+  return btoa(parts.join(""));
+}
+
+/** Shared TextDecoder — avoids allocating a new one on every message. */
+const _textDecoder = new TextDecoder();
 
 // ---------------------------------------------------------------------------
 // Web Audio playback — receives PCM from native host, plays via AudioContext
@@ -678,11 +1004,7 @@ function audioInputOpen(streamId, sampleRate, frameCount, port) {
 
         // Encode as base64 and send to the host.
         const bytes = new Uint8Array(i16.buffer);
-        let binary = '';
-        for (let i = 0; i < bytes.length; i++) {
-          binary += String.fromCharCode(bytes[i]);
-        }
-        const b64 = btoa(binary);
+        const b64 = uint8ToB64(bytes);
 
         streamState.port.postMessage({
           type: "audioInputData",
@@ -772,11 +1094,26 @@ function audioInputClose(streamId) {
  * Handle a fully reassembled binary message (as a base64 string).
  */
 function handleBinaryMessage(ctx, canvas, b64, port) {
+  const b64Len = b64.length;
+  const t0 = FLASH_DEBUG ? performance.now() : 0;
   const bytes = b64ToUint8(b64);
+  const decodeMs = FLASH_DEBUG ? performance.now() - t0 : 0;
   if (bytes.length === 0) return;
 
   const tag = bytes[0];
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+
+  // ---- Debug stats recording ----
+  // Find the stats object for this canvas (there may be multiple instances).
+  let _ds = null;
+  if (FLASH_DEBUG) {
+    const instId = canvas.getAttribute("data-flash-player");
+    if (instId != null) _ds = debugStatsMap.get(Number(instId));
+    if (_ds) {
+      _ds.recordMessage(b64Len, bytes.length, tag, decodeMs);
+      _ds.markProcessingStart();
+    }
+  }
 
   switch (tag) {
     case TAG_FRAME: {
@@ -796,19 +1133,24 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
         ctx.canvas.height = frameH;
       }
 
-      // Convert BGRA -> RGBA in-place within the bytes buffer.
+      // BGRA → RGBA: swap R and B channels in-place (zero extra allocation).
       const pixelLen = width * height * 4;
-      const rgba = new Uint8Array(pixelLen);
-      for (let i = 0; i < pixelLen; i += 4) {
-        const off = pixelOffset + i;
-        rgba[i]     = bytes[off + 2]; // R <- B
-        rgba[i + 1] = bytes[off + 1]; // G
-        rgba[i + 2] = bytes[off];     // B <- R
-        rgba[i + 3] = bytes[off + 3]; // A
+      const end = pixelOffset + pixelLen;
+      for (let i = pixelOffset; i < end; i += 4) {
+        const tmp = bytes[i];
+        bytes[i] = bytes[i + 2];
+        bytes[i + 2] = tmp;
       }
 
-      const imageData = new ImageData(new Uint8ClampedArray(rgba.buffer), width, height);
+      // Create ImageData as a *view* into the decoded buffer — avoids
+      // allocating a second multi-MB pixel array.
+      const imageData = new ImageData(
+        new Uint8ClampedArray(bytes.buffer, bytes.byteOffset + pixelOffset, pixelLen),
+        width, height,
+      );
+      const rt0 = FLASH_DEBUG ? performance.now() : 0;
       ctx.putImageData(imageData, x, y);
+      if (FLASH_DEBUG && _ds) _ds.recordFrameRender(performance.now() - rt0);
       break;
     }
 
@@ -836,8 +1178,7 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
       // 1 byte tag + u32 msg_len + UTF-8 bytes
       const msgLen = readU32(dv, 1);
       const msgBytes = bytes.subarray(5, 5 + msgLen);
-      const decoder = new TextDecoder();
-      const message = decoder.decode(msgBytes);
+      const message = _textDecoder.decode(msgBytes);
       console.error("[Flash Player]", message);
       break;
     }
@@ -846,8 +1187,7 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
       // 1 byte tag + u32 json_len + UTF-8 JSON bytes
       const jsonLen = readU32(dv, 1);
       const jsonBytes = bytes.subarray(5, 5 + jsonLen);
-      const decoder = new TextDecoder();
-      const jsonStr = decoder.decode(jsonBytes);
+      const jsonStr = _textDecoder.decode(jsonBytes);
       try {
         const req = JSON.parse(jsonStr);
         handleScriptRequest(req, port);
@@ -859,11 +1199,10 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
 
     case TAG_NAVIGATE: {
       // 1 byte tag + u32 url_len + UTF-8 url + u32 target_len + UTF-8 target
-      const decoder = new TextDecoder();
       const urlLen = readU32(dv, 1);
-      const url = decoder.decode(bytes.subarray(5, 5 + urlLen));
+      const url = _textDecoder.decode(bytes.subarray(5, 5 + urlLen));
       const targetLen = readU32(dv, 5 + urlLen);
-      const target = decoder.decode(bytes.subarray(9 + urlLen, 9 + urlLen + targetLen));
+      const target = _textDecoder.decode(bytes.subarray(9 + urlLen, 9 + urlLen + targetLen));
       console.log("[Flash Player] Navigate:", url, "target:", target);
       try {
         if (target === "_blank") {
@@ -951,6 +1290,9 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
     default:
       console.warn("[Flash Player] Unknown binary message tag:", tag);
   }
+
+  // ---- Debug: mark processing done ----
+  if (FLASH_DEBUG && _ds) _ds.markProcessingEnd();
 }
 
 // ---------------------------------------------------------------------------
@@ -1145,14 +1487,27 @@ function bindInputEvents(canvas, port) {
     });
   });
 
+  // Throttle mousemove to one message per animation frame to avoid
+  // flooding the native messaging channel with hundreds of events/sec.
+  let _pendingMove = null;
+  let _moveRaf = 0;
   canvas.addEventListener("mousemove", (e) => {
-    const pos = canvasPos(canvas, e);
-    port.postMessage({
-      type: "mousemove",
-      x: pos.x,
-      y: pos.y,
-      modifiers: getModifiers(e),
-    });
+    _pendingMove = e;
+    if (!_moveRaf) {
+      _moveRaf = requestAnimationFrame(() => {
+        _moveRaf = 0;
+        if (_pendingMove) {
+          const pos = canvasPos(canvas, _pendingMove);
+          port.postMessage({
+            type: "mousemove",
+            x: pos.x,
+            y: pos.y,
+            modifiers: getModifiers(_pendingMove),
+          });
+          _pendingMove = null;
+        }
+      });
+    }
   });
 
   canvas.addEventListener("mouseenter", () => {
@@ -1368,6 +1723,9 @@ function destroyAllInstances() {
     // Remove any crash overlay that may be showing.
     const overlay = meta.container.querySelector(".flash-crash-overlay");
     if (overlay) overlay.remove();
+    // Stop debug stats.
+    const ds = debugStatsMap.get(id);
+    if (ds) { ds.stop(); debugStatsMap.delete(id); }
   }
   // Close all audio streams.
   for (const [streamId] of audioStreams) {
