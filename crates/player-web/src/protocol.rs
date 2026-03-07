@@ -1,9 +1,34 @@
-//! Native Messaging protocol — length-prefixed JSON over stdin/stdout.
+//! Native Messaging protocol -- length-prefixed JSON over a saved stdout fd.
 //!
 //! Each message is a UTF-8 JSON blob prefixed by a 4-byte little-endian
 //! unsigned 32-bit integer containing the byte length of the JSON payload.
+//!
+//! Because stdout/stderr are redirected to `/dev/null` (to prevent the
+//! Flash plugin from corrupting the native messaging channel), we write
+//! to a duplicated fd that was saved before the redirect.
 
 use std::io::{self, Read, Write};
+use std::sync::OnceLock;
+
+#[cfg(unix)]
+use std::os::unix::io::{FromRawFd, RawFd};
+
+/// The saved stdout file, initialised by [`init_saved_stdout`] before
+/// the real stdout is redirected to `/dev/null`.
+static SAVED_STDOUT: OnceLock<parking_lot::Mutex<std::fs::File>> = OnceLock::new();
+
+/// Duplicate the current stdout fd and store it for later use by
+/// [`write_message`].  Must be called **before** stdout is redirected.
+#[cfg(unix)]
+pub fn init_saved_stdout() {
+    let raw: RawFd = unsafe { libc::dup(1) };
+    assert!(raw >= 0, "failed to dup stdout");
+    let file = unsafe { std::fs::File::from_raw_fd(raw) };
+    SAVED_STDOUT
+        .set(parking_lot::Mutex::new(file))
+        .ok()
+        .expect("init_saved_stdout called twice");
+}
 
 /// Read one native messaging frame from stdin.
 ///
@@ -41,7 +66,7 @@ pub fn read_message() -> io::Result<Option<serde_json::Value>> {
     Ok(Some(value))
 }
 
-/// Write one native messaging frame to stdout.
+/// Write one native messaging frame to the saved stdout fd.
 pub fn write_message(value: &serde_json::Value) -> io::Result<()> {
     let payload = serde_json::to_vec(value).map_err(|e| {
         io::Error::new(
@@ -51,8 +76,10 @@ pub fn write_message(value: &serde_json::Value) -> io::Result<()> {
     })?;
 
     let len = payload.len() as u32;
-    let stdout = io::stdout();
-    let mut handle = stdout.lock();
+    let saved = SAVED_STDOUT
+        .get()
+        .expect("init_saved_stdout was not called");
+    let mut handle = saved.lock();
     handle.write_all(&len.to_ne_bytes())?;
     handle.write_all(&payload)?;
     handle.flush()?;

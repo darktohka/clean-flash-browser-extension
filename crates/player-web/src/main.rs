@@ -46,8 +46,12 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
-    // Set up logging: write to both stderr and a per-execution log file.
-    // stdout is reserved for native messaging, so stderr is used for console output.
+    // Save the real stdout fd before we redirect it to /dev/null.
+    protocol::init_saved_stdout();
+
+    // Set up logging: write to log file ONLY.
+    // stdout is reserved for native messaging; stderr is silenced so that
+    // libpepflashplayer.so cannot corrupt the native messaging channel.
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     // Create a new log file for each execution, named with a timestamp.
@@ -66,19 +70,30 @@ fn main() {
     let _ = writeln!(header_file, "=== Started: {} ===", timestamp);
     let _ = writeln!(header_file);
 
-    // Build layered subscriber: stderr + log file.
+    // Build subscriber: log file only (no stderr, no stdout).
     let (file_writer, _guard) = tracing_appender::non_blocking(log_file);
-    let stderr_layer = tracing_subscriber::fmt::layer()
-        .with_writer(std::io::stderr);
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(file_writer)
         .with_ansi(false);
 
     tracing_subscriber::registry()
         .with(filter)
-        .with(stderr_layer)
         .with(file_layer)
         .init();
+
+    // Redirect stdout and stderr to /dev/null so that libpepflashplayer.so
+    // (and any other native code) cannot write to them and corrupt the
+    // native messaging channel. Our protocol::write_message() uses the
+    // saved fd from above.
+    #[cfg(unix)]
+    unsafe {
+        let devnull = libc::open(b"/dev/null\0".as_ptr() as *const _, libc::O_WRONLY);
+        if devnull >= 0 {
+            libc::dup2(devnull, 1); // stdout → /dev/null
+            libc::dup2(devnull, 2); // stderr → /dev/null
+            libc::close(devnull);
+        }
+    }
 
     tracing::info!("Flash Player Native Messaging Host starting");
     tracing::info!("Log file: {}", log_path.display());

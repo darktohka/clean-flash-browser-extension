@@ -2516,6 +2516,7 @@ name = "player-web"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "libc",
  "parking_lot",
  "player-core",
  "player-ui-traits",
