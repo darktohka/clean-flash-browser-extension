@@ -13,7 +13,7 @@
 //!
 //! | Tag   | Type            | Payload                                              |
 //! |-------|-----------------|------------------------------------------------------|
-//! | 0x01  | Frame           | 7×u32 (x y w h frameW frameH stride) + BGRA pixels   |
+//! | 0x01  | Frame           | 7×u32 (x y w h frameW frameH stride) + QOI data      |
 //! | 0x02  | State           | u8 state_code + u32 width + u32 height               |
 //! | 0x03  | Cursor          | i32 cursor_type                                      |
 //! | 0x04  | Error           | u32 msg_len + UTF-8 bytes                            |
@@ -166,8 +166,8 @@ pub enum HostMessage<'a> {
         frame_width: u32,
         frame_height: u32,
         stride: u32,
-        /// Raw BGRA_PREMUL pixels for the dirty sub-rect (row-major,
-        /// `width * 4` bytes per row).
+        /// QOI-encoded RGBA pixels for the dirty sub-rect.
+        /// Produced by `qoi_encode::qoi_encode_bgra` (BGRA→RGBA on the fly).
         pixels: &'a [u8],
     },
     /// Player state change.

@@ -28,6 +28,12 @@
     "48": "icons/flash-48.png",
     "128": "icons/flash-128.png"
   },
+  "web_accessible_resources": [
+    {
+      "resources": ["qoiopt.wasm"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "browser_specific_settings": {
     "gecko": {
       "id": "flash-player@nickvision.org",

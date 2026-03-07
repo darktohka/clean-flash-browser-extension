@@ -2,7 +2,7 @@
 //!
 //! This binary implements the Chrome/Firefox Native Messaging protocol.
 //! It receives JSON commands over stdin (input events, open requests)
-//! and sends frame updates over stdout (dirty regions as base64 BGRA data).
+//! and sends frame updates over stdout (dirty regions as QOI-encoded RGBA data).
 //!
 //! # Protocol (extension → host)
 //!
@@ -34,6 +34,7 @@
 //! ```
 
 mod protocol;
+mod qoi_encode;
 mod script_bridge;
 
 use parking_lot::Mutex;
@@ -564,6 +565,9 @@ fn send_dirty_frame(frame_handle: &Arc<Mutex<Option<player_core::SharedFrameBuff
     // Release the lock before the potentially slow encode + I/O.
     drop(guard);
 
+    // QOI-encode the dirty region (converts BGRA → RGBA on the fly).
+    let qoi_data = qoi_encode::qoi_encode_bgra(&region, dw, dh);
+
     let _ = protocol::send_host_message(&protocol::HostMessage::Frame {
         x: dx,
         y: dy,
@@ -572,7 +576,7 @@ fn send_dirty_frame(frame_handle: &Arc<Mutex<Option<player_core::SharedFrameBuff
         frame_width: frame_w,
         frame_height: frame_h,
         stride,
-        pixels: &region,
+        pixels: &qoi_data,
     });
 }
 

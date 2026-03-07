@@ -98,6 +98,29 @@ let nextInstanceId = 0;
 /** Active native messaging port — used by the ExternalInterface bridge. */
 let activePort = null;
 
+// ---------------------------------------------------------------------------
+// QOI WASM decoder — loaded once, reused for every frame.
+// ---------------------------------------------------------------------------
+
+/** @type {Function|null} decode(data_len) → output_ptr */
+let _qoiDecode = null;
+/** @type {WebAssembly.Memory|null} */
+let _qoiMemory = null;
+
+/** Resolves when the QOI WASM module is ready (or failed). */
+const _qoiReady = (async () => {
+  try {
+    const url = chrome.runtime.getURL("qoiopt.wasm");
+    const wasmBytes = await fetch(url).then((r) => r.arrayBuffer());
+    const { instance } = await WebAssembly.instantiate(wasmBytes);
+    _qoiDecode = instance.exports.decode;
+    _qoiMemory = instance.exports.memory;
+    console.log("[Flash Player] QOI WASM decoder ready");
+  } catch (e) {
+    console.error("[Flash Player] Failed to load QOI WASM decoder:", e);
+  }
+})();
+
 /**
  * Per-instance metadata used for crash recovery.
  * instanceId -> { canvas, ctx, swfUrl, origWidth, origHeight, port, container, elem }
@@ -1117,15 +1140,16 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
 
   switch (tag) {
     case TAG_FRAME: {
-      // 1 byte tag + 7 x u32 header (28 bytes) + BGRA pixels
+      // 1 byte tag + 7 x u32 header (28 bytes) + QOI-encoded RGBA pixels
       const x       = readU32(dv, 1);
       const y       = readU32(dv, 5);
       const width   = readU32(dv, 9);
       const height  = readU32(dv, 13);
       const frameW  = readU32(dv, 17);
       const frameH  = readU32(dv, 21);
-      // stride at offset 25, not needed for drawing
-      const pixelOffset = 29; // 1 + 7*4
+      // stride at offset 25 — ignored for QOI
+      const qoiOffset = 29; // 1 + 7*4
+      const qoiLen = bytes.length - qoiOffset;
 
       // Resize canvas if frame dimensions changed.
       if (ctx.canvas.width !== frameW || ctx.canvas.height !== frameH) {
@@ -1133,21 +1157,27 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
         ctx.canvas.height = frameH;
       }
 
-      // BGRA → RGBA: swap R and B channels in-place (zero extra allocation).
-      const pixelLen = width * height * 4;
-      const end = pixelOffset + pixelLen;
-      for (let i = pixelOffset; i < end; i += 4) {
-        const tmp = bytes[i];
-        bytes[i] = bytes[i + 2];
-        bytes[i + 2] = tmp;
+      if (!_qoiDecode || !_qoiMemory) break; // WASM not ready yet
+
+      // Ensure WASM memory can hold input + working space + decoded output.
+      const needBytes = qoiLen + 268 + width * height * 4;
+      const needPages = Math.ceil(needBytes / 65536);
+      const currPages = _qoiMemory.buffer.byteLength / 65536;
+      if (needPages > currPages) {
+        _qoiMemory.grow(needPages - currPages);
       }
 
-      // Create ImageData as a *view* into the decoded buffer — avoids
-      // allocating a second multi-MB pixel array.
-      const imageData = new ImageData(
-        new Uint8ClampedArray(bytes.buffer, bytes.byteOffset + pixelOffset, pixelLen),
-        width, height,
+      // Copy QOI data into WASM memory at address 0.
+      new Uint8Array(_qoiMemory.buffer, 0, qoiLen).set(
+        bytes.subarray(qoiOffset, qoiOffset + qoiLen),
       );
+
+      // Decode — returns pointer to [u32 width, u32 height, ...RGBA pixels].
+      const ptr = _qoiDecode(qoiLen);
+      const pixelLen = width * height * 4;
+      const rgba = new Uint8ClampedArray(_qoiMemory.buffer, ptr + 8, pixelLen);
+
+      const imageData = new ImageData(rgba, width, height);
       const rt0 = FLASH_DEBUG ? performance.now() : 0;
       ctx.putImageData(imageData, x, y);
       if (FLASH_DEBUG && _ds) _ds.recordFrameRender(performance.now() - rt0);
