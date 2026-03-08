@@ -2,7 +2,7 @@
 //!
 //! Provides TCP socket operations: create, connect (by host:port or
 //! by PP_NetAddress_Private), read, write, disconnect, and set-option.
-//! SSL handshake is stubbed (returns PP_ERROR_NOTSUPPORTED).
+//! SSL handshake is implemented using rustls.
 //!
 //! ## Flash socket policy handling
 //!
@@ -22,10 +22,13 @@ use crate::resource::Resource;
 use ppapi_sys::*;
 use std::any::Any;
 use std::ffi::{c_char, CStr};
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
+
+use parking_lot::Mutex;
 
 use super::net_address::{addr_to_socketaddr, socketaddr_to_addr};
 use crate::HOST;
@@ -46,14 +49,130 @@ const PERMISSIVE_POLICY: &[u8] =
 /// The exact bytes Flash sends when requesting a socket policy file.
 const POLICY_FILE_REQUEST: &[u8] = b"<policy-file-request/>\0";
 
+/// Hosts that must never be contacted through PPB_TCPSocket_Private.
+const BLOCKED_TCP_CONNECT_HOSTS: [&str; 3] = [
+    "geo2.adobe.com",
+    "geo.adobe.com",
+    "fpdownload.macromedia.com",
+];
+
+fn is_blocked_tcp_host(host: &str) -> bool {
+    let normalized = host.trim().trim_end_matches('.');
+    BLOCKED_TCP_CONNECT_HOSTS
+        .iter()
+        .any(|blocked| normalized.eq_ignore_ascii_case(blocked))
+}
+
+/// Limit payload previews so trace logs stay useful and bounded.
+const IO_TRACE_PREVIEW_LIMIT: usize = 2048;
+/// Limit how long a read attempt can hold the shared stream lock.
+const READ_SLICE_TIMEOUT: Duration = Duration::from_millis(50);
+
+fn push_hex_byte(out: &mut String, b: u8) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    out.push(HEX[(b >> 4) as usize] as char);
+    out.push(HEX[(b & 0x0f) as usize] as char);
+}
+
+fn format_payload_preview(bytes: &[u8]) -> String {
+    let shown = bytes.len().min(IO_TRACE_PREVIEW_LIMIT);
+    let mut ascii = String::with_capacity(shown * 4);
+    let mut hex = String::with_capacity(shown * 3);
+
+    for &b in &bytes[..shown] {
+        match b {
+            b'\r' => ascii.push_str("\\r"),
+            b'\n' => ascii.push_str("\\n"),
+            b'\t' => ascii.push_str("\\t"),
+            b'\\' => ascii.push_str("\\\\"),
+            0x20..=0x7e => ascii.push(b as char),
+            _ => {
+                ascii.push_str("\\x");
+                push_hex_byte(&mut ascii, b);
+            }
+        }
+
+        if !hex.is_empty() {
+            hex.push(' ');
+        }
+        push_hex_byte(&mut hex, b);
+    }
+
+    if bytes.len() > shown {
+        format!(
+            "len={} shown={} ascii=\"{}\"... hex={}...",
+            bytes.len(), shown, ascii, hex
+        )
+    } else {
+        format!("len={} ascii=\"{}\" hex={}", bytes.len(), ascii, hex)
+    }
+}
+
+fn trace_socket_payload(kind: &str, resource_id: PP_Resource, payload: &[u8]) {
+    tracing::trace!(
+        "PPB_TCPSocket_Private::{}(resource={}): {}",
+        kind,
+        resource_id,
+        format_payload_preview(payload)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Socket stream — plain TCP or TLS-wrapped
+// ---------------------------------------------------------------------------
+
+pub enum SocketStream {
+    Plain(TcpStream),
+    Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
+}
+
+impl SocketStream {
+    fn set_read_timeout(&mut self, timeout: Option<Duration>) -> std::io::Result<()> {
+        match self {
+            Self::Plain(s) => s.set_read_timeout(timeout),
+            Self::Tls(s) => s.get_mut().set_read_timeout(timeout),
+        }
+    }
+}
+
+impl Read for SocketStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Plain(s) => s.read(buf),
+            Self::Tls(s) => s.read(buf),
+        }
+    }
+}
+
+impl Write for SocketStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Plain(s) => s.write(buf),
+            Self::Tls(s) => s.write(buf),
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Plain(s) => s.flush(),
+            Self::Tls(s) => s.flush(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Resource
 // ---------------------------------------------------------------------------
 
 pub struct TcpSocketResource {
     pub instance: PP_Instance,
-    /// The underlying OS TCP stream, present once connected.
-    pub stream: Option<TcpStream>,
+    /// The I/O stream — plain TCP or TLS-wrapped.  Protected by a Mutex
+    /// so background read/write tasks can access it safely (required for
+    /// TLS where the connection state cannot be cloned).
+    pub stream: Arc<Mutex<Option<SocketStream>>>,
+    /// Cloned raw TCP handle for shutdown signals and address queries.
+    /// Kept outside the stream mutex so `disconnect` can call `shutdown()`
+    /// to interrupt blocking I/O held under the stream lock.
+    pub raw_tcp: Option<TcpStream>,
     /// Whether we've been explicitly disconnected.
     pub disconnected: bool,
     /// Whether TCP_NODELAY is requested (before or after connect).
@@ -65,6 +184,8 @@ pub struct TcpSocketResource {
     /// Set when we intercept a `<policy-file-request/>` write or when
     /// connecting to port 843.
     pub pending_policy_response: Option<Vec<u8>>,
+    /// DER-encoded server certificate from TLS handshake.
+    pub server_cert_der: Option<Vec<u8>>,
 }
 
 impl Resource for TcpSocketResource {
@@ -88,11 +209,13 @@ unsafe extern "C" fn create(instance: PP_Instance) -> PP_Resource {
     let Some(host) = HOST.get() else { return 0 };
     let res = TcpSocketResource {
         instance,
-        stream: None,
+        stream: Arc::new(Mutex::new(None)),
+        raw_tcp: None,
         disconnected: false,
         no_delay: false,
         cancel: Arc::new(AtomicBool::new(false)),
         pending_policy_response: None,
+        server_cert_der: None,
     };
     let id = host.resources.insert(instance, Box::new(res));
     tracing::debug!("PPB_TCPSocket_Private::Create -> resource={}", id);
@@ -123,6 +246,16 @@ unsafe extern "C" fn connect(
         "PPB_TCPSocket_Private::Connect(resource={}, host={}, port={})",
         tcp_socket, host_str, port
     );
+
+    if is_blocked_tcp_host(&host_str) {
+        tracing::warn!(
+            "PPB_TCPSocket_Private::Connect(resource={}, host={}, port={}): blocked by host denylist",
+            tcp_socket,
+            host_str,
+            port
+        );
+        return PP_ERROR_NOACCESS;
+    }
 
     let Some(host) = HOST.get() else {
         return PP_ERROR_FAILED;
@@ -280,7 +413,9 @@ fn finish_connect(
         Ok(stream) => {
             host.resources
                 .with_downcast_mut::<TcpSocketResource, _>(resource_id, |s| {
-                    s.stream = Some(stream);
+                    let raw_clone = stream.try_clone().ok();
+                    *s.stream.lock() = Some(SocketStream::Plain(stream));
+                    s.raw_tcp = raw_clone;
                 });
             PP_OK
         }
@@ -304,8 +439,8 @@ unsafe extern "C" fn get_local_address(
     let Some(host) = HOST.get() else { return PP_FALSE };
     host.resources
         .with_downcast::<TcpSocketResource, _>(tcp_socket, |s| {
-            if let Some(ref stream) = s.stream {
-                if let Ok(sa) = stream.local_addr() {
+            if let Some(ref tcp) = s.raw_tcp {
+                if let Ok(sa) = tcp.local_addr() {
                     let out = unsafe { &mut *local_addr };
                     socketaddr_to_addr(&sa, out);
                     return PP_TRUE;
@@ -326,8 +461,8 @@ unsafe extern "C" fn get_remote_address(
     let Some(host) = HOST.get() else { return PP_FALSE };
     host.resources
         .with_downcast::<TcpSocketResource, _>(tcp_socket, |s| {
-            if let Some(ref stream) = s.stream {
-                if let Ok(sa) = stream.peer_addr() {
+            if let Some(ref tcp) = s.raw_tcp {
+                if let Ok(sa) = tcp.peer_addr() {
                     let out = unsafe { &mut *remote_addr };
                     socketaddr_to_addr(&sa, out);
                     return PP_TRUE;
@@ -338,25 +473,178 @@ unsafe extern "C" fn get_remote_address(
         .unwrap_or(PP_FALSE)
 }
 
+// ---------------------------------------------------------------------------
+// TLS support — rustls
+// ---------------------------------------------------------------------------
+
+/// Returns a shared `ClientConfig` with Mozilla root certificates.
+fn tls_client_config() -> Arc<rustls::ClientConfig> {
+    static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+    CONFIG
+        .get_or_init(|| {
+            let mut root_store = rustls::RootCertStore::empty();
+            root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            Arc::new(
+                rustls::ClientConfig::builder()
+                    .with_root_certificates(root_store)
+                    .with_no_client_auth(),
+            )
+        })
+        .clone()
+}
+
+/// Perform TLS handshake on the stream inside the mutex, upgrading
+/// `SocketStream::Plain` → `SocketStream::Tls`.
+fn do_tls_handshake(
+    stream: &Mutex<Option<SocketStream>>,
+    server_name: &str,
+) -> Result<Vec<u8>, i32> {
+    let config = tls_client_config();
+
+    let sni = rustls::pki_types::ServerName::try_from(server_name.to_owned()).map_err(|e| {
+        tracing::warn!("SSLHandshake: invalid server name {:?}: {}", server_name, e);
+        PP_ERROR_BADARGUMENT
+    })?;
+
+    let mut conn = rustls::ClientConnection::new(config, sni).map_err(|e| {
+        tracing::warn!("SSLHandshake: ClientConnection::new failed: {}", e);
+        PP_ERROR_FAILED
+    })?;
+
+    // Lock the stream and take the plain TcpStream out.
+    let mut guard = stream.lock();
+    match guard.as_ref() {
+        None => return Err(PP_ERROR_FAILED),
+        Some(SocketStream::Tls(_)) => return Err(PP_ERROR_FAILED),
+        Some(SocketStream::Plain(_)) => {}
+    }
+    let mut tcp = match guard.take() {
+        Some(SocketStream::Plain(tcp)) => tcp,
+        _ => unreachable!(),
+    };
+
+    // Drive the TLS handshake to completion (blocking I/O).
+    // We hold the mutex during the handshake.  Per the PPAPI spec, no
+    // pending reads/writes should exist during SSLHandshake, so this
+    // will not cause contention.
+    while conn.is_handshaking() {
+        if let Err(e) = conn.complete_io(&mut tcp) {
+            tracing::warn!("SSLHandshake: handshake I/O error: {}", e);
+            let _ = tcp.shutdown(Shutdown::Both);
+            return Err(PP_ERROR_FAILED);
+        }
+    }
+
+    // Extract the server's leaf certificate (DER).
+    let cert_der = conn
+        .peer_certificates()
+        .and_then(|certs| certs.first())
+        .map(|c| c.as_ref().to_vec())
+        .unwrap_or_default();
+
+    // Wrap in StreamOwned and store back.
+    *guard = Some(SocketStream::Tls(Box::new(rustls::StreamOwned::new(
+        conn, tcp,
+    ))));
+
+    Ok(cert_der)
+}
+
 unsafe extern "C" fn ssl_handshake(
     tcp_socket: PP_Resource,
-    _server_name: *const c_char,
+    server_name: *const c_char,
     _server_port: u16,
     callback: PP_CompletionCallback,
 ) -> i32 {
-    tracing::warn!(
-        "PPB_TCPSocket_Private::SSLHandshake(resource={}) — not supported",
-        tcp_socket
+    if server_name.is_null() {
+        return PP_ERROR_BADARGUMENT;
+    }
+    let name_str = unsafe { CStr::from_ptr(server_name) }
+        .to_str()
+        .unwrap_or("")
+        .to_owned();
+    tracing::debug!(
+        "PPB_TCPSocket_Private::SSLHandshake(resource={}, server={})",
+        tcp_socket,
+        name_str
     );
-    // SSL is not implemented; report failure.
-    crate::callback::complete_immediately(callback, PP_ERROR_NOTSUPPORTED)
+
+    let Some(host) = HOST.get() else {
+        return PP_ERROR_FAILED;
+    };
+
+    let Some((stream_arc, cancel)) = host
+        .resources
+        .with_downcast::<TcpSocketResource, _>(tcp_socket, |s| {
+            if s.disconnected {
+                return None;
+            }
+            Some((s.stream.clone(), s.cancel.clone()))
+        })
+        .flatten()
+    else {
+        return PP_ERROR_FAILED;
+    };
+
+    let cb = callback;
+    let resource_id = tcp_socket;
+
+    crate::tokio_runtime().spawn_blocking(move || {
+        let result = do_tls_handshake(&stream_arc, &name_str);
+
+        if cancel.load(Ordering::Acquire) {
+            return;
+        }
+
+        let Some(host) = HOST.get() else { return };
+        let code = match result {
+            Ok(cert_der) => {
+                host.resources
+                    .with_downcast_mut::<TcpSocketResource, _>(resource_id, |s| {
+                        s.server_cert_der = if cert_der.is_empty() {
+                            None
+                        } else {
+                            Some(cert_der)
+                        };
+                    });
+                tracing::info!(
+                    "PPB_TCPSocket_Private::SSLHandshake(resource={}): TLS handshake complete",
+                    resource_id
+                );
+                PP_OK
+            }
+            Err(e) => {
+                // Disconnect on failure per spec.
+                host.resources
+                    .with_downcast_mut::<TcpSocketResource, _>(resource_id, |s| {
+                        s.disconnected = true;
+                        if let Some(ref tcp) = s.raw_tcp {
+                            let _ = tcp.shutdown(Shutdown::Both);
+                        }
+                        *s.stream.lock() = None;
+                        s.raw_tcp = None;
+                    });
+                e
+            }
+        };
+
+        if let Some(poster) = &*host.main_loop_poster.lock() {
+            poster.post_work(cb, 0, code);
+        } else {
+            unsafe { cb.run(code) };
+        }
+    });
+
+    PP_OK_COMPLETIONPENDING
 }
 
 unsafe extern "C" fn get_server_certificate(tcp_socket: PP_Resource) -> PP_Resource {
-    tracing::warn!(
-        "PPB_TCPSocket_Private::GetServerCertificate(resource={}) — stub",
+    tracing::debug!(
+        "PPB_TCPSocket_Private::GetServerCertificate(resource={})",
         tcp_socket
     );
+    // PPB_X509Certificate_Private resource is not implemented;
+    // return null resource.
     0
 }
 
@@ -365,6 +653,7 @@ unsafe extern "C" fn add_chain_building_certificate(
     _certificate: PP_Resource,
     _is_trusted: PP_Bool,
 ) -> PP_Bool {
+    // Not implemented per spec.
     PP_FALSE
 }
 
@@ -413,6 +702,7 @@ unsafe extern "C" fn read(
              auto-generated policy response",
             tcp_socket, n
         );
+        trace_socket_payload("Read response", tcp_socket, &policy_bytes[..n]);
         // Fire the read callback with the byte count.
         if let Some(poster) = &*host.main_loop_poster.lock() {
             poster.post_work(callback, 0, n as i32);
@@ -421,19 +711,15 @@ unsafe extern "C" fn read(
     }
 
     // -----------------------------------------------------------------
-    // Normal read path — clone the stream and read on a bg thread.
+    // Normal read path — lock the stream and read on a bg thread.
     // -----------------------------------------------------------------
-    let (stream_clone, cancel) = host
+    let Some((stream_arc, cancel)) = host
         .resources
         .with_downcast::<TcpSocketResource, _>(tcp_socket, |s| {
-            let sc = s.stream.as_ref().and_then(|st| st.try_clone().ok());
-            (sc, s.cancel.clone())
+            (s.stream.clone(), s.cancel.clone())
         })
-        .unwrap_or((None, Arc::new(AtomicBool::new(true))));
-
-    let Some(mut stream) = stream_clone else {
-        tracing::warn!("PPB_TCPSocket_Private::Read: not connected");
-        return PP_ERROR_FAILED;
+    else {
+        return PP_ERROR_BADRESOURCE;
     };
 
     // Cap at 1 MB as per spec.
@@ -450,27 +736,90 @@ unsafe extern "C" fn read(
         // Read into an owned buffer so we never construct a &mut [u8] to the
         // plugin's memory on a background thread.
         let mut owned_buf = vec![0u8; max_read];
-        let result = match stream.read(&mut owned_buf) {
-            Ok(0) => {
-                tracing::debug!(
-                    "PPB_TCPSocket_Private::Read(resource={}): EOF (0 bytes)",
-                    resource_id
-                );
-                0
-            }
-            Ok(n) => {
-                tracing::debug!(
-                    "PPB_TCPSocket_Private::Read(resource={}): received {} bytes",
-                    resource_id, n
-                );
-                n as i32
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "PPB_TCPSocket_Private::Read(resource={}): error: {}",
-                    resource_id, e
-                );
-                PP_ERROR_FAILED
+        enum ReadPoll {
+            Done(i32),
+            Retry,
+        }
+
+        let result = loop {
+            let poll = {
+                let mut guard = stream_arc.lock();
+                match guard.as_mut() {
+                    Some(ss) => {
+                        if let Err(e) = ss.set_read_timeout(Some(READ_SLICE_TIMEOUT)) {
+                            tracing::warn!(
+                                "PPB_TCPSocket_Private::Read(resource={}): set_read_timeout error: {}",
+                                resource_id, e
+                            );
+                            ReadPoll::Done(PP_ERROR_FAILED)
+                        } else {
+                            let read_result = ss.read(&mut owned_buf);
+                            if let Err(e) = ss.set_read_timeout(None) {
+                                tracing::warn!(
+                                    "PPB_TCPSocket_Private::Read(resource={}): clearing read timeout failed: {}",
+                                    resource_id, e
+                                );
+                            }
+
+                            match read_result {
+                                Ok(0) => {
+                                    tracing::debug!(
+                                        "PPB_TCPSocket_Private::Read(resource={}): EOF (0 bytes)",
+                                        resource_id
+                                    );
+                                    ReadPoll::Done(0)
+                                }
+                                Ok(n) => {
+                                    tracing::debug!(
+                                        "PPB_TCPSocket_Private::Read(resource={}): received {} bytes",
+                                        resource_id, n
+                                    );
+                                    trace_socket_payload("Read response", resource_id, &owned_buf[..n]);
+                                    ReadPoll::Done(n as i32)
+                                }
+                                Err(e)
+                                    if matches!(
+                                        e.kind(),
+                                        ErrorKind::WouldBlock
+                                            | ErrorKind::TimedOut
+                                            | ErrorKind::Interrupted
+                                    ) =>
+                                {
+                                    ReadPoll::Retry
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "PPB_TCPSocket_Private::Read(resource={}): error: {}",
+                                        resource_id, e
+                                    );
+                                    ReadPoll::Done(PP_ERROR_FAILED)
+                                }
+                            }
+                        }
+                    }
+                    None => {
+                        tracing::warn!(
+                            "PPB_TCPSocket_Private::Read(resource={}): not connected",
+                            resource_id
+                        );
+                        ReadPoll::Done(PP_ERROR_FAILED)
+                    }
+                }
+            };
+
+            match poll {
+                ReadPoll::Done(code) => break code,
+                ReadPoll::Retry => {
+                    if cancel.load(Ordering::Acquire) {
+                        tracing::debug!(
+                            "PPB_TCPSocket_Private::Read(resource={}): cancelled — dropping callback",
+                            resource_id
+                        );
+                        return;
+                    }
+                    std::thread::yield_now();
+                    continue;
+                }
             }
         };
 
@@ -528,6 +877,7 @@ unsafe extern "C" fn write(
     let max_write = bytes_to_write.min(1024 * 1024) as usize;
     // Copy data so the thread owns it.
     let data = unsafe { std::slice::from_raw_parts(buffer as *const u8, max_write) }.to_vec();
+    trace_socket_payload("Write request", tcp_socket, &data);
 
     // -----------------------------------------------------------------
     // Policy-file-request interception.  If Flash writes exactly the
@@ -555,37 +905,46 @@ unsafe extern "C" fn write(
     // -----------------------------------------------------------------
     // Normal write path.
     // -----------------------------------------------------------------
-    let (stream_clone, cancel) = host
+    let Some((stream_arc, cancel)) = host
         .resources
         .with_downcast::<TcpSocketResource, _>(tcp_socket, |s| {
-            let sc = s.stream.as_ref().and_then(|st| st.try_clone().ok());
-            (sc, s.cancel.clone())
+            (s.stream.clone(), s.cancel.clone())
         })
-        .unwrap_or((None, Arc::new(AtomicBool::new(true))));
-
-    let Some(mut stream) = stream_clone else {
-        tracing::warn!("PPB_TCPSocket_Private::Write: not connected");
-        return PP_ERROR_FAILED;
+    else {
+        return PP_ERROR_BADRESOURCE;
     };
 
     let cb = callback;
     let resource_id = tcp_socket;
 
     crate::tokio_runtime().spawn_blocking(move || {
-        let result = match stream.write(&data) {
-            Ok(n) => {
-                tracing::debug!(
-                    "PPB_TCPSocket_Private::Write(resource={}): wrote {} bytes",
-                    resource_id, n
-                );
-                n as i32
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "PPB_TCPSocket_Private::Write(resource={}): error: {}",
-                    resource_id, e
-                );
-                PP_ERROR_FAILED
+        let result = {
+            let mut guard = stream_arc.lock();
+            match guard.as_mut() {
+                Some(ss) => match ss.write(&data) {
+                    Ok(n) => {
+                        tracing::debug!(
+                            "PPB_TCPSocket_Private::Write(resource={}): wrote {} bytes",
+                            resource_id, n
+                        );
+                        trace_socket_payload("Write sent", resource_id, &data[..n]);
+                        n as i32
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "PPB_TCPSocket_Private::Write(resource={}): error: {}",
+                            resource_id, e
+                        );
+                        PP_ERROR_FAILED
+                    }
+                },
+                None => {
+                    tracing::warn!(
+                        "PPB_TCPSocket_Private::Write(resource={}): not connected",
+                        resource_id
+                    );
+                    PP_ERROR_FAILED
+                }
             }
         };
 
@@ -617,11 +976,15 @@ unsafe extern "C" fn disconnect(tcp_socket: PP_Resource) {
             // Signal cancellation so background threads drop their
             // callbacks instead of posting stale completions.
             s.cancel.store(true, Ordering::Release);
-            if let Some(ref stream) = s.stream {
-                let _ = stream.shutdown(Shutdown::Both);
+            // Shut down the raw TCP stream first — this interrupts any
+            // blocking I/O held under the stream lock.
+            if let Some(ref tcp) = s.raw_tcp {
+                let _ = tcp.shutdown(Shutdown::Both);
             }
-            s.stream = None;
+            *s.stream.lock() = None;
+            s.raw_tcp = None;
             s.pending_policy_response = None;
+            s.server_cert_der = None;
         });
 }
 
@@ -650,8 +1013,8 @@ unsafe extern "C" fn set_option(
             .resources
             .with_downcast_mut::<TcpSocketResource, _>(tcp_socket, |s| {
                 s.no_delay = enabled;
-                if let Some(ref stream) = s.stream {
-                    stream.set_nodelay(enabled).map_err(|e| {
+                if let Some(ref tcp) = s.raw_tcp {
+                    tcp.set_nodelay(enabled).map_err(|e| {
                         tracing::warn!("set_nodelay failed: {}", e);
                         PP_ERROR_FAILED
                     })

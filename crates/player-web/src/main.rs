@@ -37,35 +37,6 @@ mod protocol;
 mod qoi_encode;
 mod script_bridge;
 
-// ---------------------------------------------------------------------------
-// Windows-only: custom getrandom backend using RtlGenRandom
-// ---------------------------------------------------------------------------
-// Avoid calling BCryptGenRandom on Windows: it can crash (STATUS_INVALID_HANDLE)
-// during thread-pool initialization on some configurations.  Instead, use
-// RtlGenRandom (SystemFunction036) which is simpler and doesn't touch the TP.
-#[cfg(all(windows, target_pointer_width = "64"))]
-mod rtl_getrandom {
-    #[link(name = "advapi32")]
-    extern "system" {
-        #[link_name = "SystemFunction036"]
-        fn RtlGenRandom(buffer: *mut u8, length: u32) -> u8;
-    }
-
-    /// Custom getrandom backend that calls RtlGenRandom instead of BCryptGenRandom.
-    pub fn getrandom_impl(dest: &mut [u8]) -> Result<(), getrandom::Error> {
-        // RtlGenRandom has a 2^31-1 byte limit per call.
-        for chunk in dest.chunks_mut(i32::MAX as usize) {
-            let ok = unsafe { RtlGenRandom(chunk.as_mut_ptr(), chunk.len() as u32) };
-            if ok == 0 {
-                return Err(getrandom::Error::UNEXPECTED);
-            }
-        }
-        Ok(())
-    }
-
-    getrandom::register_custom_getrandom!(getrandom_impl);
-}
-
 use parking_lot::Mutex;
 use player_core::FlashPlayer;
 use ppapi_sys::*;

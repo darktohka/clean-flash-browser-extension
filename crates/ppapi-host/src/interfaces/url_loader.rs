@@ -349,23 +349,33 @@ unsafe extern "C" fn open(
 
         match result {
             Ok(mut response) => {
-                {
+                let upload_status = {
                     let mut inner = inner_arc.lock();
                     inner.open_complete = true;
                     inner.total_bytes = response.content_length.unwrap_or(-1);
                     inner.bytes_sent = inner.total_bytes_to_send;
-                    // Fire trusted status callback for upload completion.
-                    if let Some(cb) = inner.status_callback {
-                        unsafe {
-                            cb(
-                                instance_id,
-                                resource_id,
-                                inner.bytes_sent,
-                                inner.total_bytes_to_send,
-                                inner.bytes_received,
-                                inner.total_bytes,
-                            );
-                        }
+                    // Capture status callback payload and run it after unlocking.
+                    inner.status_callback.map(|cb| {
+                        (
+                            cb,
+                            inner.bytes_sent,
+                            inner.total_bytes_to_send,
+                            inner.bytes_received,
+                            inner.total_bytes,
+                        )
+                    })
+                };
+
+                if let Some((cb, bytes_sent, total_to_send, bytes_received, total_bytes)) = upload_status {
+                    unsafe {
+                        cb(
+                            instance_id,
+                            resource_id,
+                            bytes_sent,
+                            total_to_send,
+                            bytes_received,
+                            total_bytes,
+                        );
                     }
                 }
 
@@ -478,43 +488,61 @@ unsafe extern "C" fn open(
                 }
             };
 
-            let mut inner = inner_arc.lock();
-            inner.bytes_received += n as i64;
+            let (status_update, pending_completion) = {
+                let mut inner = inner_arc.lock();
+                inner.bytes_received += n as i64;
 
-            // Fire trusted status callback for download progress.
-            if let Some(cb) = inner.status_callback {
-                unsafe {
-                    cb(
-                        instance_id,
-                        resource_id,
+                // Capture status callback payload and run it after unlocking.
+                let status = inner.status_callback.map(|cb| {
+                    (
+                        cb,
                         inner.bytes_sent,
                         inner.total_bytes_to_send,
                         inner.bytes_received,
                         inner.total_bytes,
+                    )
+                });
+
+                let pending = if let Some(pending) = inner.pending_read.take() {
+                    let to_copy = n.min(pending.bytes_to_read);
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            chunk_buf.as_ptr(),
+                            pending.buffer,
+                            to_copy,
+                        );
+                    }
+                    if n > to_copy {
+                        inner.buffer.extend(&chunk_buf[to_copy..n]);
+                    }
+                    Some((pending.callback, to_copy as i32))
+                } else {
+                    inner.buffer.extend(&chunk_buf[..n]);
+                    None
+                };
+
+                (status, pending)
+            };
+
+            if let Some((cb, bytes_sent, total_to_send, bytes_received, total_bytes)) = status_update {
+                unsafe {
+                    cb(
+                        instance_id,
+                        resource_id,
+                        bytes_sent,
+                        total_to_send,
+                        bytes_received,
+                        total_bytes,
                     );
                 }
             }
 
-            if let Some(pending) = inner.pending_read.take() {
-                let to_copy = n.min(pending.bytes_to_read);
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        chunk_buf.as_ptr(),
-                        pending.buffer,
-                        to_copy,
-                    );
-                }
-                if n > to_copy {
-                    inner.buffer.extend(&chunk_buf[to_copy..n]);
-                }
-                drop(inner);
+            if let Some((pending_cb, completion_code)) = pending_completion {
                 if let Some(ref p) = poster {
-                    p.post_work(pending.callback, 0, to_copy as i32);
+                    p.post_work(pending_cb, 0, completion_code);
                 } else {
-                    unsafe { pending.callback.run(to_copy as i32) };
+                    unsafe { pending_cb.run(completion_code) };
                 }
-            } else {
-                inner.buffer.extend(&chunk_buf[..n]);
             }
         }
     }
