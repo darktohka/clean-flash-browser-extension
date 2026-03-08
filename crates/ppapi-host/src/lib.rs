@@ -11,6 +11,9 @@ pub mod font_rasterizer;
 #[cfg(feature = "audio-cpal")]
 pub mod audio_input_cpal;
 
+#[cfg(feature = "clipboard-arboard")]
+pub mod clipboard_arboard;
+
 pub mod instance;
 pub mod interface_registry;
 pub mod interfaces;
@@ -36,6 +39,24 @@ use std::ffi::{c_char, c_void, CStr};
 use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
 use std::sync::OnceLock;
+
+// ===========================================================================
+// Shared tokio runtime for background I/O tasks
+// ===========================================================================
+
+/// Return a reference to the lazily-initialised tokio runtime used by all
+/// PPAPI interface implementations that need to run blocking I/O off the
+/// plugin thread (URL loading, TCP/UDP sockets, file chooser dialogs, …).
+pub fn tokio_runtime() -> &'static tokio::runtime::Runtime {
+    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RT.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .thread_name("ppapi-io")
+            .enable_all()
+            .build()
+            .expect("failed to create tokio runtime")
+    })
+}
 
 // ===========================================================================
 // Host callbacks — trait for the UI/player layer to receive events from
@@ -157,6 +178,12 @@ pub struct HostState {
     /// Audio input (capture) provider.
     /// When set, PPB_AudioInput uses this to capture from a real microphone.
     pub audio_input_provider: Mutex<Option<Arc<dyn player_ui_traits::AudioInputProvider>>>,
+    /// Clipboard provider for system clipboard access.
+    /// When set, PPB_Flash_Clipboard uses this for real clipboard I/O.
+    pub clipboard_provider: Mutex<Option<Arc<dyn player_ui_traits::ClipboardProvider>>>,
+    /// Fullscreen provider for toggling fullscreen mode.
+    /// When set, PPB_FlashFullscreen and PPB_Fullscreen use this.
+    pub fullscreen_provider: Mutex<Option<Arc<dyn player_ui_traits::FullscreenProvider>>>,
     /// The plugin's main scriptable object, obtained via
     /// `PPP_Instance_Private::GetInstanceObject`.  Used to route incoming
     /// `CallFunction` invocations (ExternalInterface JS→AS direction)
@@ -199,6 +226,8 @@ impl HostState {
                 script_provider: Mutex::new(None),
                 audio_provider: Mutex::new(None),
                 audio_input_provider: Mutex::new(None),
+                clipboard_provider: Mutex::new(None),
+                fullscreen_provider: Mutex::new(None),
                 instance_object: Mutex::new(None),
             }
         })
@@ -237,6 +266,26 @@ impl HostState {
     /// Get a cloned `Arc` handle to the audio input provider, if set.
     pub fn get_audio_input_provider(&self) -> Option<Arc<dyn player_ui_traits::AudioInputProvider>> {
         self.audio_input_provider.lock().clone()
+    }
+
+    /// Set the clipboard provider for system clipboard access.
+    pub fn set_clipboard_provider(&self, provider: Box<dyn player_ui_traits::ClipboardProvider>) {
+        *self.clipboard_provider.lock() = Some(Arc::from(provider));
+    }
+
+    /// Get a cloned `Arc` handle to the clipboard provider, if set.
+    pub fn get_clipboard_provider(&self) -> Option<Arc<dyn player_ui_traits::ClipboardProvider>> {
+        self.clipboard_provider.lock().clone()
+    }
+
+    /// Set the fullscreen provider for fullscreen mode toggling.
+    pub fn set_fullscreen_provider(&self, provider: Box<dyn player_ui_traits::FullscreenProvider>) {
+        *self.fullscreen_provider.lock() = Some(Arc::from(provider));
+    }
+
+    /// Get a cloned `Arc` handle to the fullscreen provider, if set.
+    pub fn get_fullscreen_provider(&self) -> Option<Arc<dyn player_ui_traits::FullscreenProvider>> {
+        self.fullscreen_provider.lock().clone()
     }
 
     /// Get a cloned `Arc` handle to the scripting provider, if set.

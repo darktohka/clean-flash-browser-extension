@@ -5,13 +5,20 @@ edition.workspace = true
 license.workspace = true
 description = "Core Flash player logic — SWF loading, instance lifecycle"
 
+[features]
+default = []
+## Use reqwest for HTTP/HTTPS URL loading (adds native networking).
+url-reqwest = ["dep:reqwest"]
+## Stub URL loader — returns 404 for all HTTP/HTTPS requests.
+url-stub = []
+
 [dependencies]
 ppapi-sys = { workspace = true }
 ppapi-host = { workspace = true, features = ["fs-os"] }
 player-ui-traits = { workspace = true }
 tracing = { workspace = true }
 parking_lot = "0.12"
-ureq = { workspace = true }
+reqwest = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = ["Win32_System_LibraryLoader"] }

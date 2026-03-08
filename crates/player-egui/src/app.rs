@@ -49,6 +49,8 @@ pub struct FlashPlayerApp {
     last_content_size: (i32, i32),
     /// Whether the window currently has focus.
     has_focus: bool,
+    /// Egui context (for fullscreen provider).
+    egui_ctx: egui::Context,
 }
 
 impl FlashPlayerApp {
@@ -105,6 +107,7 @@ impl FlashPlayerApp {
             cursor_type,
             last_content_size: (0, 0),
             has_focus: true,
+            egui_ctx: _cc.egui_ctx.clone(),
         }
     }
 
@@ -165,6 +168,17 @@ impl FlashPlayerApp {
                     let host = ppapi_host::HOST.get().expect("HOST not initialised");
                     host.set_audio_input_provider(Box::new(
                         ppapi_host::audio_input_cpal::CpalAudioInputProvider::new(),
+                    ));
+
+                    // Set up the arboard-based clipboard provider for
+                    // system clipboard access (PPB_Flash_Clipboard).
+                    host.set_clipboard_provider(Box::new(
+                        ppapi_host::clipboard_arboard::ArboardClipboardProvider::new(),
+                    ));
+
+                    // Set up the egui fullscreen provider.
+                    host.set_fullscreen_provider(Box::new(
+                        dialogs::EguiFullscreenProvider::new(self.egui_ctx.clone()),
                     ));
                 }
                 Err(e) => {

@@ -388,11 +388,11 @@ unsafe extern "C" fn has_property(
     object: *mut c_void,
     name: PP_Var,
     _exception: *mut PP_Var,
-) -> PP_Bool {
+) -> bool {
     let obj = unsafe { &*(object as *const FakeObject) };
     let prop = match var_name_to_string(name) {
         Some(s) => s,
-        None => return PP_FALSE,
+        None => return false,
     };
 
     let result = match &obj.kind {
@@ -413,7 +413,7 @@ unsafe extern "C" fn has_property(
         prop,
         result
     );
-    if result { PP_TRUE } else { PP_FALSE }
+    result
 }
 
 // ===========================================================================
@@ -424,11 +424,11 @@ unsafe extern "C" fn has_method(
     object: *mut c_void,
     name: PP_Var,
     _exception: *mut PP_Var,
-) -> PP_Bool {
+) -> bool {
     let obj = unsafe { &*(object as *const FakeObject) };
     let method = match var_name_to_string(name) {
         Some(s) => s,
-        None => return PP_FALSE,
+        None => return false,
     };
 
     let result = match &obj.kind {
@@ -449,7 +449,7 @@ unsafe extern "C" fn has_method(
         method,
         result
     );
-    if result { PP_TRUE } else { PP_FALSE }
+    result
 }
 
 // ===========================================================================

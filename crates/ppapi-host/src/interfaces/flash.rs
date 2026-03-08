@@ -1,4 +1,4 @@
-//! PPB_Flash;12.6 and PPB_Flash;13.0 implementation.
+//! PPB_Flash;12.4, 12.5, 12.6 and PPB_Flash;13.0 implementation.
 //!
 //! Provides Flash-specific utilities: settings, timezone, crash data, etc.
 //! DrawGlyphs renders text glyphs into an image data buffer using `ab_glyph`.
@@ -57,14 +57,57 @@ static VTABLE_13_0: PPB_Flash_13_0 = PPB_Flash_13_0 {
     EnumerateVideoCaptureDevices: Some(enumerate_video_capture_devices),
 };
 
+// ---------------------------------------------------------------------------
+// PPB_Flash;12.5 — 16 functions (12.6 minus EnumerateVideoCaptureDevices)
+// ---------------------------------------------------------------------------
+
+static VTABLE_12_5: PPB_Flash_12_5 = PPB_Flash_12_5 {
+    SetInstanceAlwaysOnTop: Some(set_instance_always_on_top),
+    DrawGlyphs: Some(draw_glyphs),
+    GetProxyForURL: Some(get_proxy_for_url),
+    Navigate: Some(navigate),
+    RunMessageLoop: Some(run_message_loop),
+    QuitMessageLoop: Some(quit_message_loop),
+    GetLocalTimeZoneOffset: Some(get_local_time_zone_offset),
+    GetCommandLineArgs: Some(get_command_line_args),
+    PreloadFontWin: Some(preload_font_win),
+    IsRectTopmost: Some(is_rect_topmost),
+    InvokePrinting: Some(invoke_printing),
+    UpdateActivity: Some(update_activity),
+    GetDeviceID: Some(get_device_id_12_6),
+    GetSettingInt: Some(get_setting_int),
+    GetSetting: Some(get_setting),
+    SetCrashData: Some(set_crash_data),
+};
+
+// ---------------------------------------------------------------------------
+// PPB_Flash;12.4 — 15 functions (12.5 minus SetCrashData)
+// ---------------------------------------------------------------------------
+
+static VTABLE_12_4: PPB_Flash_12_4 = PPB_Flash_12_4 {
+    SetInstanceAlwaysOnTop: Some(set_instance_always_on_top),
+    DrawGlyphs: Some(draw_glyphs),
+    GetProxyForURL: Some(get_proxy_for_url),
+    Navigate: Some(navigate),
+    RunMessageLoop: Some(run_message_loop),
+    QuitMessageLoop: Some(quit_message_loop),
+    GetLocalTimeZoneOffset: Some(get_local_time_zone_offset),
+    GetCommandLineArgs: Some(get_command_line_args),
+    PreloadFontWin: Some(preload_font_win),
+    IsRectTopmost: Some(is_rect_topmost),
+    InvokePrinting: Some(invoke_printing),
+    UpdateActivity: Some(update_activity),
+    GetDeviceID: Some(get_device_id_12_6),
+    GetSettingInt: Some(get_setting_int),
+    GetSetting: Some(get_setting),
+};
+
 pub unsafe fn register(registry: &mut InterfaceRegistry) {
     unsafe {
-        registry.register(PPB_FLASH_INTERFACE_12_6, &VTABLE_12_6);
         registry.register(PPB_FLASH_INTERFACE_13_0, &VTABLE_13_0);
-        // 12.5 and 12.4 can share the 12.6 vtable since extra functions at the end
-        // are simply not called when the plugin requested an older version.
-        registry.register(PPB_FLASH_INTERFACE_12_5, &VTABLE_12_6);
-        registry.register(PPB_FLASH_INTERFACE_12_4, &VTABLE_12_6);
+        registry.register(PPB_FLASH_INTERFACE_12_6, &VTABLE_12_6);
+        registry.register(PPB_FLASH_INTERFACE_12_5, &VTABLE_12_5);
+        registry.register(PPB_FLASH_INTERFACE_12_4, &VTABLE_12_4);
     }
 }
 
@@ -329,9 +372,10 @@ unsafe extern "C" fn is_rect_topmost(
     PP_TRUE
 }
 
-unsafe extern "C" fn invoke_printing(_instance: PP_Instance) {
+unsafe extern "C" fn invoke_printing(_instance: PP_Instance) -> i32 {
     tracing::debug!("PPB_Flash::InvokePrinting(instance={})", _instance);
     // No printing support.
+    PP_OK
 }
 
 unsafe extern "C" fn update_activity(_instance: PP_Instance) {
@@ -408,18 +452,15 @@ unsafe extern "C" fn set_crash_data(
 unsafe extern "C" fn enumerate_video_capture_devices(
     _instance: PP_Instance,
     _video_capture: PP_Resource,
-    devices: *mut c_void,
+    devices: PP_ArrayOutput,
 ) -> i32 {
-    tracing::debug!("PPB_Flash::EnumerateVideoCaptureDevices(instance={}, video_capture={}, devices={:?})",
-        _instance, _video_capture, devices);
-    
-    // Convert void pointer to PP_ArrayOutput reference
-    let output = unsafe { &*(devices as *const PP_ArrayOutput) };
+    tracing::debug!("PPB_Flash::EnumerateVideoCaptureDevices(instance={}, video_capture={})",
+        _instance, _video_capture);
     
     // Return an empty device list — no video capture devices available.
-    if let Some(get_data_buffer) = output.GetDataBuffer {
+    if let Some(get_data_buffer) = devices.GetDataBuffer {
         unsafe {
-            get_data_buffer(output.user_data, 0, std::mem::size_of::<PP_Resource>() as u32);
+            get_data_buffer(devices.user_data, 0, std::mem::size_of::<PP_Resource>() as u32);
         }
     }
     

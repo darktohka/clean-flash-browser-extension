@@ -8,7 +8,7 @@ use ppapi_sys::*;
 
 use super::super::HOST;
 
-static VTABLE: PPB_URLUtil_Dev_0_7 = PPB_URLUtil_Dev_0_7 {
+static VTABLE_0_7: PPB_URLUtil_Dev_0_7 = PPB_URLUtil_Dev_0_7 {
     Canonicalize: Some(canonicalize),
     ResolveRelativeToURL: Some(resolve_relative_to_url),
     ResolveRelativeToDocument: Some(resolve_relative_to_document),
@@ -20,10 +20,21 @@ static VTABLE: PPB_URLUtil_Dev_0_7 = PPB_URLUtil_Dev_0_7 {
     GetPluginReferrerURL: Some(get_plugin_referrer_url),
 };
 
+static VTABLE_0_6: PPB_URLUtil_Dev_0_6 = PPB_URLUtil_Dev_0_6 {
+    Canonicalize: Some(canonicalize),
+    ResolveRelativeToURL: Some(resolve_relative_to_url),
+    ResolveRelativeToDocument: Some(resolve_relative_to_document),
+    IsSameSecurityOrigin: Some(is_same_security_origin),
+    DocumentCanRequest: Some(document_can_request),
+    DocumentCanAccessDocument: Some(document_can_access_document),
+    GetDocumentURL: Some(get_document_url),
+    GetPluginInstanceURL: Some(get_plugin_instance_url),
+};
+
 pub unsafe fn register(registry: &mut InterfaceRegistry) {
     unsafe {
-        registry.register(PPB_URLUTIL_DEV_INTERFACE_0_7, &VTABLE);
-        registry.register(PPB_URLUTIL_DEV_INTERFACE_0_6, &VTABLE);
+        registry.register(PPB_URLUTIL_DEV_INTERFACE_0_7, &VTABLE_0_7);
+        registry.register(PPB_URLUTIL_DEV_INTERFACE_0_6, &VTABLE_0_6);
     }
 }
 

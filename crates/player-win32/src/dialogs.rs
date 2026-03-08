@@ -3,7 +3,7 @@
 //! and file dialogs.
 
 use native_windows_gui as nwg;
-use player_ui_traits::{DialogProvider, FileChooserMode, FileChooserProvider};
+use player_ui_traits::{DialogProvider, FileChooserMode, FileChooserProvider, FullscreenProvider};
 
 // ===========================================================================
 // Win32DialogProvider
@@ -322,4 +322,156 @@ fn parse_accept_types(accept_types: &str) -> Vec<String> {
     }
 
     extensions
+}
+
+// ===========================================================================
+// Win32FullscreenProvider
+// ===========================================================================
+
+use parking_lot::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Fullscreen provider using Win32 APIs.
+///
+/// Saves the window's pre-fullscreen style and placement, then sets
+/// `WS_POPUP` style and resizes to the monitor dimensions. On exit,
+/// restores the original style and position.
+pub struct Win32FullscreenProvider {
+    /// The raw HWND of the main window (stored as usize for Send+Sync).
+    hwnd: usize,
+    is_fullscreen: AtomicBool,
+    /// Saved window style + placement before entering fullscreen.
+    saved: Mutex<Option<SavedWindowState>>,
+}
+
+struct SavedWindowState {
+    style: u32,
+    ex_style: u32,
+    placement: windows_sys::Win32::UI::WindowsAndMessaging::WINDOWPLACEMENT,
+}
+
+// SAFETY: The HWND is only used for Win32 API calls which are thread-safe
+// when targeting a single window from any thread.
+unsafe impl Send for Win32FullscreenProvider {}
+unsafe impl Sync for Win32FullscreenProvider {}
+
+impl Win32FullscreenProvider {
+    /// Create a new fullscreen provider for the given window.
+    ///
+    /// `hwnd` is the raw HWND cast to `usize`.
+    pub fn new(hwnd: usize) -> Self {
+        Self {
+            hwnd,
+            is_fullscreen: AtomicBool::new(false),
+            saved: Mutex::new(None),
+        }
+    }
+}
+
+impl FullscreenProvider for Win32FullscreenProvider {
+    fn is_fullscreen(&self) -> bool {
+        self.is_fullscreen.load(Ordering::Relaxed)
+    }
+
+    fn set_fullscreen(&self, fullscreen: bool) -> bool {
+        use windows_sys::Win32::UI::WindowsAndMessaging::*;
+
+        let hwnd = self.hwnd as windows_sys::Win32::Foundation::HWND;
+        if hwnd.is_null() {
+            return false;
+        }
+
+        if fullscreen == self.is_fullscreen.load(Ordering::Relaxed) {
+            return true; // already in requested state
+        }
+
+        unsafe {
+            if fullscreen {
+                // Save current window state.
+                let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+                let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+                let mut placement: WINDOWPLACEMENT = std::mem::zeroed();
+                placement.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+                GetWindowPlacement(hwnd, &mut placement);
+
+                *self.saved.lock() = Some(SavedWindowState {
+                    style,
+                    ex_style,
+                    placement,
+                });
+
+                // Get the monitor dimensions.
+                let monitor = windows_sys::Win32::Graphics::Gdi::MonitorFromWindow(
+                    hwnd,
+                    windows_sys::Win32::Graphics::Gdi::MONITOR_DEFAULTTONEAREST,
+                );
+                let mut mi: windows_sys::Win32::Graphics::Gdi::MONITORINFO = std::mem::zeroed();
+                mi.cbSize = std::mem::size_of::<windows_sys::Win32::Graphics::Gdi::MONITORINFO>() as u32;
+                windows_sys::Win32::Graphics::Gdi::GetMonitorInfoW(monitor, &mut mi);
+
+                // Remove caption and borders, make popup-style.
+                SetWindowLongW(
+                    hwnd,
+                    GWL_STYLE,
+                    (style & !(WS_CAPTION | WS_THICKFRAME)) as i32,
+                );
+                SetWindowLongW(
+                    hwnd,
+                    GWL_EXSTYLE,
+                    (ex_style & !(WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE)) as i32,
+                );
+
+                let rc = mi.rcMonitor;
+                SetWindowPos(
+                    hwnd,
+                    HWND_TOP,
+                    rc.left,
+                    rc.top,
+                    rc.right - rc.left,
+                    rc.bottom - rc.top,
+                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+                );
+
+                self.is_fullscreen.store(true, Ordering::Relaxed);
+            } else {
+                // Restore saved state.
+                let saved = self.saved.lock().take();
+                if let Some(s) = saved {
+                    SetWindowLongW(hwnd, GWL_STYLE, s.style as i32);
+                    SetWindowLongW(hwnd, GWL_EXSTYLE, s.ex_style as i32);
+                    SetWindowPlacement(hwnd, &s.placement);
+                    SetWindowPos(
+                        hwnd,
+                        std::ptr::null_mut(),
+                        0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED,
+                    );
+                }
+                self.is_fullscreen.store(false, Ordering::Relaxed);
+            }
+        }
+
+        true
+    }
+
+    fn get_screen_size(&self) -> Option<(i32, i32)> {
+        let hwnd = self.hwnd as windows_sys::Win32::Foundation::HWND;
+        if hwnd.is_null() {
+            return None;
+        }
+
+        unsafe {
+            let monitor = windows_sys::Win32::Graphics::Gdi::MonitorFromWindow(
+                hwnd,
+                windows_sys::Win32::Graphics::Gdi::MONITOR_DEFAULTTONEAREST,
+            );
+            let mut mi: windows_sys::Win32::Graphics::Gdi::MONITORINFO = std::mem::zeroed();
+            mi.cbSize = std::mem::size_of::<windows_sys::Win32::Graphics::Gdi::MONITORINFO>() as u32;
+            if windows_sys::Win32::Graphics::Gdi::GetMonitorInfoW(monitor, &mut mi) == 0 {
+                return None;
+            }
+            let rc = mi.rcMonitor;
+            Some((rc.right - rc.left, rc.bottom - rc.top))
+        }
+    }
 }

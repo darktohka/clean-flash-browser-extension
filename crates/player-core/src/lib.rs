@@ -158,12 +158,21 @@ impl FlashPlayer {
             host.set_file_chooser_provider(Box::new(ArcFileChooserProvider(fcp.clone())));
         }
 
+        #[cfg(feature = "url-reqwest")]
+        let http_client = reqwest::blocking::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .expect("failed to build HTTP client");
+
         host.set_callbacks(Box::new(PlayerHostCallbacks {
             shared_frame: frame_handle,
             cursor_type: self.cursor_type.clone(),
             dialog_provider: dialog,
             repaint_callback: self.repaint_callback.clone(),
             navigate_callback: self.navigate_callback.clone(),
+            #[cfg(feature = "url-reqwest")]
+            http_client,
         }));
 
         // If a plugin path is set, load it.
@@ -771,6 +780,8 @@ struct PlayerHostCallbacks {
     dialog_provider: Option<Arc<dyn DialogProvider>>,
     repaint_callback: Arc<Mutex<Option<Box<dyn Fn() + Send + Sync>>>>,
     navigate_callback: Arc<Mutex<Option<Box<dyn Fn(&str, &str) + Send + Sync>>>>,
+    #[cfg(feature = "url-reqwest")]
+    http_client: reqwest::blocking::Client,
 }
 
 /// Wrapper to make `Arc<dyn FileChooserProvider>` implement the trait as a `Box`.
@@ -857,6 +868,10 @@ impl HostCallbacks for PlayerHostCallbacks {
     ) -> Result<ppapi_host::UrlLoadResponse, i32> {
         tracing::info!("URL open requested: {} {}", method, url);
 
+        // Suppress unused-variable warnings when reqwest is not enabled.
+        #[cfg(not(feature = "url-reqwest"))]
+        let _ = (headers, body);
+
         // ----- file:// or bare path → local filesystem -----
         let path = if let Some(stripped) = url.strip_prefix("file://") {
             stripped
@@ -893,15 +908,15 @@ impl HostCallbacks for PlayerHostCallbacks {
             });
         }
 
-        // ----- http:// / https:// → ureq -----
+        // ----- http:// / https:// → reqwest -----
+        #[cfg(feature = "url-reqwest")]
         if url.starts_with("http://") || url.starts_with("https://") {
-            let agent = ureq::AgentBuilder::new()
-                .timeout_connect(std::time::Duration::from_secs(30))
-                .timeout_read(std::time::Duration::from_secs(120))
-                .build();
-
             // Build the request with the specified method.
-            let mut req = agent.request(method, url);
+            let http_method = method.to_uppercase().parse::<reqwest::Method>().map_err(|e| {
+                tracing::warn!("URL open: invalid HTTP method '{}': {}", method, e);
+                ppapi_sys::PP_ERROR_FAILED
+            })?;
+            let mut req = self.http_client.request(http_method, url);
 
             // Apply custom headers from the plugin.
             for line in headers.split("\r\n").chain(headers.split('\n')) {
@@ -910,48 +925,41 @@ impl HostCallbacks for PlayerHostCallbacks {
                     continue;
                 }
                 if let Some((key, value)) = line.split_once(':') {
-                    req = req.set(key.trim(), value.trim());
+                    req = req.header(key.trim(), value.trim());
                 }
             }
 
             // Send the request (with optional body).
-            let result = if let Some(body_data) = body {
-                req.send_bytes(body_data)
-            } else {
-                req.call()
-            };
+            if let Some(body_data) = body {
+                req = req.body(body_data.to_vec());
+            }
 
-            let response = match result {
+            let response = match req.send() {
                 Ok(resp) => resp,
-                Err(ureq::Error::Status(_code, resp)) => {
-                    // Non-2xx status — still return the response so Flash
-                    // can inspect the status code and body.
-                    resp
-                }
-                Err(ureq::Error::Transport(e)) => {
+                Err(e) => {
                     tracing::warn!("URL open: transport error for {}: {}", url, e);
                     return Err(ppapi_sys::PP_ERROR_FAILED);
                 }
             };
 
-            let status_code = response.status();
-            let status_line = format!("HTTP/1.1 {} {}", status_code, response.status_text());
+            let status_code = response.status().as_u16();
+            let status_line = format!(
+                "HTTP/1.1 {} {}",
+                status_code,
+                response.status().canonical_reason().unwrap_or("Unknown")
+            );
 
             // Reconstruct response headers.
             let mut resp_headers = String::new();
-            for name in response.headers_names() {
-                if let Some(val) = response.header(&name) {
-                    resp_headers.push_str(&name);
-                    resp_headers.push_str(": ");
-                    resp_headers.push_str(val);
-                    resp_headers.push_str("\r\n");
-                }
+            for (name, val) in response.headers().iter() {
+                resp_headers.push_str(name.as_str());
+                resp_headers.push_str(": ");
+                resp_headers.push_str(val.to_str().unwrap_or(""));
+                resp_headers.push_str("\r\n");
             }
             resp_headers.push_str("\r\n"); // blank line terminator
 
-            let content_length = response
-                .header("content-length")
-                .and_then(|v| v.parse::<i64>().ok());
+            let content_length = response.content_length().map(|v| v as i64);
 
             tracing::info!(
                 "URL open: HTTP {} {} → {} (content_length={:?})",
@@ -965,8 +973,21 @@ impl HostCallbacks for PlayerHostCallbacks {
                 status_code,
                 status_line,
                 headers: resp_headers,
-                body: response.into_reader(),
+                body: Box::new(response),
                 content_length,
+            });
+        }
+
+        // ----- http:// / https:// → stub (404) -----
+        #[cfg(all(feature = "url-stub", not(feature = "url-reqwest")))]
+        if url.starts_with("http://") || url.starts_with("https://") {
+            tracing::warn!("URL open: stub loader returning 404 for {}", url);
+            return Ok(ppapi_host::UrlLoadResponse {
+                status_code: 404,
+                status_line: "HTTP/1.1 404 Not Found".to_string(),
+                headers: "Content-Length: 0\r\n\r\n".to_string(),
+                body: Box::new(std::io::empty()),
+                content_length: Some(0),
             });
         }
 

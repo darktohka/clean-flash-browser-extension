@@ -1,4 +1,4 @@
-//! PPB_Flash_DRM;1.1 implementation.
+//! PPB_Flash_DRM;1.0 and 1.1 implementation.
 //!
 //! Flash calls GetDeviceID at startup to identify the machine.
 //! We generate a stable device ID from /etc/machine-id or a random salt.
@@ -25,7 +25,7 @@ impl Resource for FlashDRMResource {
     }
 }
 
-static VTABLE: PPB_Flash_DRM_1_1 = PPB_Flash_DRM_1_1 {
+static VTABLE_1_1: PPB_Flash_DRM_1_1 = PPB_Flash_DRM_1_1 {
     Create: Some(create),
     GetDeviceID: Some(get_device_id),
     GetHmonitor: Some(get_hmonitor),
@@ -33,10 +33,17 @@ static VTABLE: PPB_Flash_DRM_1_1 = PPB_Flash_DRM_1_1 {
     MonitorIsExternal: Some(monitor_is_external),
 };
 
+static VTABLE_1_0: PPB_Flash_DRM_1_0 = PPB_Flash_DRM_1_0 {
+    Create: Some(create),
+    GetDeviceID: Some(get_device_id),
+    GetHmonitor: Some(get_hmonitor),
+    GetVoucherFile: Some(get_voucher_file),
+};
+
 pub unsafe fn register(registry: &mut InterfaceRegistry) {
     unsafe {
-        registry.register(PPB_FLASH_DRM_INTERFACE_1_1, &VTABLE);
-        registry.register(PPB_FLASH_DRM_INTERFACE_1_0, &VTABLE);
+        registry.register(PPB_FLASH_DRM_INTERFACE_1_1, &VTABLE_1_1);
+        registry.register(PPB_FLASH_DRM_INTERFACE_1_0, &VTABLE_1_0);
     }
 }
 
@@ -71,17 +78,25 @@ unsafe extern "C" fn get_hmonitor(_drm: PP_Resource, _hmonitor: *mut i64) -> PP_
     PP_FALSE
 }
 
-unsafe extern "C" fn get_voucher_file(_drm: PP_Resource) -> i32 {
-    // No voucher file.
-    -1
+unsafe extern "C" fn get_voucher_file(
+    _drm: PP_Resource,
+    _file_ref: *mut PP_Resource,
+    callback: PP_CompletionCallback,
+) -> i32 {
+    // No voucher file available.
+    crate::callback::complete_immediately(callback, PP_ERROR_NOINTERFACE)
 }
 
 unsafe extern "C" fn monitor_is_external(
     _drm: PP_Resource,
+    is_external: *mut PP_Bool,
     callback: PP_CompletionCallback,
 ) -> i32 {
-    // Assume not external (PP_FALSE = 0).
-    crate::callback::complete_immediately(callback, PP_FALSE)
+    // Assume not external.
+    if !is_external.is_null() {
+        unsafe { *is_external = PP_FALSE };
+    }
+    crate::callback::complete_immediately(callback, PP_OK)
 }
 
 /// Get or create a device ID string.

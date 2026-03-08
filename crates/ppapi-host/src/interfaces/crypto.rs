@@ -2,8 +2,6 @@
 
 use crate::interface_registry::InterfaceRegistry;
 use ppapi_sys::*;
-use rand::rngs::SysRng;
-use rand::TryRng;
 use std::ffi::c_char;
 
 static VTABLE: PPB_Crypto_Dev_0_1 = PPB_Crypto_Dev_0_1 {
@@ -21,11 +19,30 @@ unsafe extern "C" fn get_random_bytes(buffer: *mut c_char, num_bytes: u32) {
         return;
     }
 
+    // Fill the buffer with random bytes.
     let slice = unsafe { std::slice::from_raw_parts_mut(buffer as *mut u8, num_bytes as usize) };
 
-    let mut rng = SysRng;
-    if let Err(err) = rng.try_fill_bytes(slice) {
-        tracing::error!(?err, "PPB_Crypto::GetRandomBytes failed");
-        slice.fill(0);
+    // Use RtlGenRandom on Windows, and getrandom() on Unix.
+    #[cfg(windows)]
+    {
+        #[link(name = "advapi32")]
+        extern "system" {
+            fn SystemFunction036(buffer: *mut u8, len: u32) -> u8;
+        }
+
+        let result = unsafe { SystemFunction036(slice.as_mut_ptr(), num_bytes) };
+        if result == 0 {
+            tracing::error!("RtlGenRandom failed");
+        }
     }
+
+    #[cfg(unix)]
+    {
+        use getrandom::getrandom;
+        if let Err(e) = getrandom(slice) {
+            tracing::error!("Failed to get random bytes: {}", e);
+        }
+    }
+
+    tracing::trace!("PPB_Crypto(Dev)::GetRandomBytes(num_bytes={})", num_bytes);
 }

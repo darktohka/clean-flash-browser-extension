@@ -162,7 +162,7 @@ unsafe extern "C" fn connect(
     // Perform DNS resolution + connect asynchronously.
     let cb = callback;
     let resource_id = tcp_socket;
-    std::thread::spawn(move || {
+    crate::tokio_runtime().spawn_blocking(move || {
         let result = do_connect_host(&host_str, port, no_delay);
         finish_connect(resource_id, result, cb, &cancel);
     });
@@ -201,7 +201,7 @@ unsafe extern "C" fn connect_with_net_address(
 
     let cb = callback;
     let resource_id = tcp_socket;
-    std::thread::spawn(move || {
+    crate::tokio_runtime().spawn_blocking(move || {
         let result = do_connect_addr(&sa, no_delay);
         finish_connect(resource_id, result, cb, &cancel);
     });
@@ -438,13 +438,19 @@ unsafe extern "C" fn read(
 
     // Cap at 1 MB as per spec.
     let max_read = bytes_to_read.min(1024 * 1024) as usize;
-    let buf_ptr = buffer as usize; // raw pointer sent to thread
+    // Carry the plugin buffer address as a usize so the closure is Send.
+    // We only use it *after* the read completes, right before posting the
+    // callback — at which point the PPAPI contract guarantees the buffer
+    // is still valid.
+    let buf_addr = buffer as usize;
     let cb = callback;
     let resource_id = tcp_socket;
 
-    std::thread::spawn(move || {
-        let slice = unsafe { std::slice::from_raw_parts_mut(buf_ptr as *mut u8, max_read) };
-        let result = match stream.read(slice) {
+    crate::tokio_runtime().spawn_blocking(move || {
+        // Read into an owned buffer so we never construct a &mut [u8] to the
+        // plugin's memory on a background thread.
+        let mut owned_buf = vec![0u8; max_read];
+        let result = match stream.read(&mut owned_buf) {
             Ok(0) => {
                 tracing::debug!(
                     "PPB_TCPSocket_Private::Read(resource={}): EOF (0 bytes)",
@@ -474,6 +480,19 @@ unsafe extern "C" fn read(
                 resource_id
             );
             return;
+        }
+
+        // Copy the data into the plugin's buffer before posting the callback.
+        // This is safe because the plugin buffer remains valid until the
+        // callback fires, and we copy before posting.
+        if result > 0 {
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    owned_buf.as_ptr(),
+                    buf_addr as *mut u8,
+                    result as usize,
+                );
+            }
         }
 
         let Some(host) = HOST.get() else { return };
@@ -552,7 +571,7 @@ unsafe extern "C" fn write(
     let cb = callback;
     let resource_id = tcp_socket;
 
-    std::thread::spawn(move || {
+    crate::tokio_runtime().spawn_blocking(move || {
         let result = match stream.write(&data) {
             Ok(n) => {
                 tracing::debug!(

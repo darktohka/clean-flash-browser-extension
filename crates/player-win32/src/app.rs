@@ -787,6 +787,18 @@ impl FlashPlayerApp {
                     host.set_audio_input_provider(Box::new(
                         ppapi_host::audio_input_cpal::CpalAudioInputProvider::new(),
                     ));
+
+                    // Set up the arboard-based clipboard provider for
+                    // system clipboard access (PPB_Flash_Clipboard).
+                    host.set_clipboard_provider(Box::new(
+                        ppapi_host::clipboard_arboard::ArboardClipboardProvider::new(),
+                    ));
+
+                    // Set up the Win32 fullscreen provider.
+                    let fs_hwnd = self.window.handle.hwnd().map(|h| h as usize).unwrap_or(0);
+                    host.set_fullscreen_provider(Box::new(
+                        dialogs::Win32FullscreenProvider::new(fs_hwnd),
+                    ));
                 }
                 Err(e) => {
                     *self.status_message.borrow_mut() = format!("Error: {}", e);

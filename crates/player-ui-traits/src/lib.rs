@@ -355,3 +355,67 @@ pub trait AudioInputProvider: Send + Sync {
     /// Close and release a capture stream permanently.
     fn close_stream(&self, stream_id: u32);
 }
+
+// ===========================================================================
+// Clipboard provider — abstracts system clipboard access
+// ===========================================================================
+
+/// The kind of clipboard data that Flash may read or write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardFormat {
+    /// Plain UTF-8 text.
+    PlainText,
+    /// HTML markup.
+    Html,
+    /// Rich Text Format (binary data).
+    Rtf,
+}
+
+/// Provides system clipboard access for the PPAPI host.
+///
+/// Implementations should be thread-safe; methods may be called from the
+/// PPAPI plugin thread and should block until the operation completes.
+pub trait ClipboardProvider: Send + Sync {
+    /// Check whether data of the given format is currently available on
+    /// the system clipboard.
+    fn is_format_available(&self, format: ClipboardFormat) -> bool;
+
+    /// Read text (plain or HTML) from the clipboard.
+    /// Returns `None` if the requested format is not available.
+    fn read_text(&self, format: ClipboardFormat) -> Option<String>;
+
+    /// Read binary data (RTF) from the clipboard.
+    /// Returns `None` if the requested format is not available.
+    fn read_rtf(&self) -> Option<Vec<u8>>;
+
+    /// Write one or more items to the clipboard atomically.
+    /// All existing clipboard content is cleared first.
+    ///
+    /// Each entry is `(format, data)` where `data` is a UTF-8 string for
+    /// `PlainText`/`Html`, or raw bytes for `Rtf`.
+    fn write(&self, items: &[(ClipboardFormat, Vec<u8>)]) -> bool;
+}
+
+// ===========================================================================
+// Fullscreen provider — abstracts fullscreen toggling for the PPAPI host
+// ===========================================================================
+
+/// Provides fullscreen mode toggling for the PPAPI host.
+///
+/// Implementations should be thread-safe; methods may be called from the
+/// PPAPI plugin thread. `set_fullscreen` may block until the transition
+/// completes or is acknowledged by the windowing system.
+pub trait FullscreenProvider: Send + Sync {
+    /// Check whether the player is currently in fullscreen mode.
+    fn is_fullscreen(&self) -> bool;
+
+    /// Enter or leave fullscreen mode.
+    ///
+    /// Returns `true` if the request was accepted, `false` on failure.
+    fn set_fullscreen(&self, fullscreen: bool) -> bool;
+
+    /// Get the full screen size in pixels.
+    ///
+    /// Returns `Some((width, height))` on success, `None` on failure.
+    fn get_screen_size(&self) -> Option<(i32, i32)>;
+}

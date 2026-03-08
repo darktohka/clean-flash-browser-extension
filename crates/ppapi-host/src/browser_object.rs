@@ -181,38 +181,30 @@ unsafe extern "C" fn browser_has_property(
     data: *mut c_void,
     name: PP_Var,
     _exception: *mut PP_Var,
-) -> PP_Bool {
+) -> bool {
     let Some((sp, id)) = get_ctx(data) else {
-        return PP_FALSE;
+        return false;
     };
     let Some(name_str) = resolve_name(name) else {
-        return PP_FALSE;
+        return false;
     };
     tracing::trace!("browser_has_property(obj={}, name={:?})", id, name_str);
-    if sp.has_property(id, &name_str) {
-        PP_TRUE
-    } else {
-        PP_FALSE
-    }
+    sp.has_property(id, &name_str)
 }
 
 unsafe extern "C" fn browser_has_method(
     data: *mut c_void,
     name: PP_Var,
     _exception: *mut PP_Var,
-) -> PP_Bool {
+) -> bool {
     let Some((sp, id)) = get_ctx(data) else {
-        return PP_FALSE;
+        return false;
     };
     let Some(name_str) = resolve_name(name) else {
-        return PP_FALSE;
+        return false;
     };
     tracing::trace!("browser_has_method(obj={}, name={:?})", id, name_str);
-    if sp.has_method(id, &name_str) {
-        PP_TRUE
-    } else {
-        PP_FALSE
-    }
+    sp.has_method(id, &name_str)
 }
 
 unsafe extern "C" fn browser_get_property(

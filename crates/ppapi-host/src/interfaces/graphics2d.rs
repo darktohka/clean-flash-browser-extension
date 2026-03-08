@@ -48,7 +48,7 @@ impl Graphics2DResource {
     }
 }
 
-static VTABLE: PPB_Graphics2D_1_1 = PPB_Graphics2D_1_1 {
+static VTABLE_1_1: PPB_Graphics2D_1_1 = PPB_Graphics2D_1_1 {
     Create: Some(create),
     IsGraphics2D: Some(is_graphics_2d),
     Describe: Some(describe),
@@ -60,10 +60,20 @@ static VTABLE: PPB_Graphics2D_1_1 = PPB_Graphics2D_1_1 {
     GetScale: Some(get_scale),
 };
 
+static VTABLE_1_0: PPB_Graphics2D_1_0 = PPB_Graphics2D_1_0 {
+    Create: Some(create),
+    IsGraphics2D: Some(is_graphics_2d),
+    Describe: Some(describe),
+    PaintImageData: Some(paint_image_data),
+    Scroll: Some(scroll),
+    ReplaceContents: Some(replace_contents),
+    Flush: Some(flush),
+};
+
 pub unsafe fn register(registry: &mut InterfaceRegistry) {
     unsafe {
-        registry.register(PPB_GRAPHICS2D_INTERFACE_1_1, &VTABLE);
-        registry.register(PPB_GRAPHICS2D_INTERFACE_1_0, &VTABLE);
+        registry.register(PPB_GRAPHICS2D_INTERFACE_1_1, &VTABLE_1_1);
+        registry.register(PPB_GRAPHICS2D_INTERFACE_1_0, &VTABLE_1_0);
     }
 }
 

@@ -4,14 +4,43 @@
 //! Internally the `data` field stores a `SockAddrIn` (IPv4) or
 //! `SockAddrIn6` (IPv6) in network byte order.
 //!
+//! Also provides [`NetAddressResource`] — a minimal resource wrapper around
+//! `SocketAddr` for use by the public `PPB_UDPSocket` (resource-based) API.
+//!
 //! We define our own portable socket structs so we don't depend on
 //! platform-specific `libc` types that aren't available everywhere.
 
 use crate::interface_registry::InterfaceRegistry;
+use crate::resource::Resource;
 use ppapi_sys::*;
+use std::any::Any;
 use std::ffi::c_void;
 use std::mem;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
+
+// ---------------------------------------------------------------------------
+// NetAddressResource — lightweight SocketAddr wrapper used by public APIs
+// ---------------------------------------------------------------------------
+
+/// A network address stored as a `PP_Resource`.
+///
+/// Created by the public `PPB_UDPSocket` interface when returning addresses
+/// (e.g. from `GetBoundAddress` and `RecvFrom`).
+pub struct NetAddressResource {
+    pub addr: SocketAddr,
+}
+
+impl Resource for NetAddressResource {
+    fn resource_type(&self) -> &'static str {
+        "PPB_NetAddress"
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Portable socket address definitions

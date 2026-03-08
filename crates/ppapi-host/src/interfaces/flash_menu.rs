@@ -219,7 +219,7 @@ unsafe extern "C" fn show(
     // SAFETY: Convert raw pointers to usize for Send safety.
     if let Some(func) = callback.func {
         let user_data = callback.user_data as usize;
-        std::thread::spawn(move || {
+        crate::tokio_runtime().spawn_blocking(move || {
             unsafe { func(user_data as *mut std::ffi::c_void, result) };
         });
     }

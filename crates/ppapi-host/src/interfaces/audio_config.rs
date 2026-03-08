@@ -47,10 +47,18 @@ static VTABLE_1_1: PPB_AudioConfig_1_1 = PPB_AudioConfig_1_1 {
     RecommendSampleRate: Some(recommend_sample_rate),
 };
 
+static VTABLE_1_0: PPB_AudioConfig_1_0 = PPB_AudioConfig_1_0 {
+    CreateStereo16Bit: Some(create_stereo_16_bit),
+    RecommendSampleFrameCount: Some(recommend_sample_frame_count_1_0),
+    IsAudioConfig: Some(is_audio_config),
+    GetSampleRate: Some(get_sample_rate),
+    GetSampleFrameCount: Some(get_sample_frame_count),
+};
+
 pub unsafe fn register(registry: &mut InterfaceRegistry) {
     unsafe {
         registry.register(PPB_AUDIOCONFIG_INTERFACE_1_1, &VTABLE_1_1);
-        registry.register(PPB_AUDIOCONFIG_INTERFACE_1_0, &VTABLE_1_1);
+        registry.register(PPB_AUDIOCONFIG_INTERFACE_1_0, &VTABLE_1_0);
     }
 }
 
@@ -95,6 +103,15 @@ unsafe extern "C" fn recommend_sample_frame_count(
     requested_sample_frame_count: u32,
 ) -> u32 {
     tracing::trace!("PPB_audio_config::recommend_sample_frame_count called");
+    clamp_sample_frame_count(requested_sample_frame_count)
+}
+
+/// 1.0 variant — no `PP_Instance` parameter.
+unsafe extern "C" fn recommend_sample_frame_count_1_0(
+    _sample_rate: PP_AudioSampleRate,
+    requested_sample_frame_count: u32,
+) -> u32 {
+    tracing::trace!("PPB_audio_config::recommend_sample_frame_count_1_0 called");
     clamp_sample_frame_count(requested_sample_frame_count)
 }
 

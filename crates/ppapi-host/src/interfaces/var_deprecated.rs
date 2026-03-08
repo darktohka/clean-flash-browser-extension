@@ -102,7 +102,7 @@ unsafe extern "C" fn var_to_utf8(var: PP_Var, len: *mut u32) -> *const c_char {
 // Object property / method functions
 // ---------------------------------------------------------------------------
 
-unsafe extern "C" fn has_property(object: PP_Var, name: PP_Var, exception: *mut PP_Var) -> PP_Bool {
+unsafe extern "C" fn has_property(object: PP_Var, name: PP_Var, exception: *mut PP_Var) -> bool {
     tracing::trace!(
         "PPB_Var_Deprecated::HasProperty(object={:?}, name={:?})",
         object,
@@ -110,7 +110,7 @@ unsafe extern "C" fn has_property(object: PP_Var, name: PP_Var, exception: *mut 
     );
     if object.type_ != PP_VARTYPE_OBJECT {
         tracing::trace!("PPB_Var_Deprecated::HasProperty: not an object");
-        return PP_FALSE;
+        return false;
     }
 
     let host = HOST.get().unwrap();
@@ -124,14 +124,14 @@ unsafe extern "C" fn has_property(object: PP_Var, name: PP_Var, exception: *mut 
             if let Some(hp) = (*class).HasProperty {
                 hp(data, name, exception)
             } else {
-                PP_FALSE
+                false
             }
         },
-        None => PP_FALSE,
+        None => false,
     }
 }
 
-unsafe extern "C" fn has_method(object: PP_Var, name: PP_Var, exception: *mut PP_Var) -> PP_Bool {
+unsafe extern "C" fn has_method(object: PP_Var, name: PP_Var, exception: *mut PP_Var) -> bool {
     tracing::trace!(
         "PPB_Var_Deprecated::HasMethod(object={:?}, name={:?})",
         object,
@@ -139,7 +139,7 @@ unsafe extern "C" fn has_method(object: PP_Var, name: PP_Var, exception: *mut PP
     );
     if object.type_ != PP_VARTYPE_OBJECT {
         tracing::trace!("PPB_Var_Deprecated::HasMethod: not an object");
-        return PP_FALSE;
+        return false;
     }
 
     let host = HOST.get().unwrap();
@@ -151,10 +151,10 @@ unsafe extern "C" fn has_method(object: PP_Var, name: PP_Var, exception: *mut PP
             if let Some(hm) = (*class).HasMethod {
                 hm(data, name, exception)
             } else {
-                PP_FALSE
+                false
             }
         },
-        None => PP_FALSE,
+        None => false,
     }
 }
 
@@ -343,14 +343,14 @@ unsafe extern "C" fn is_instance_of(
     var: PP_Var,
     object_class: *const PPP_Class_Deprecated,
     object_data: *mut *mut c_void,
-) -> PP_Bool {
+) -> bool {
     tracing::trace!(
         "PPB_Var_Deprecated::IsInstanceOf(var={:?}, object_class={:?})",
         var,
         object_class
     );
     if var.type_ != PP_VARTYPE_OBJECT {
-        return PP_FALSE;
+        return false;
     }
 
     let host = HOST.get().unwrap();
@@ -359,12 +359,12 @@ unsafe extern "C" fn is_instance_of(
             if !object_data.is_null() {
                 unsafe { *object_data = entry.data };
             }
-            PP_TRUE
+            true
         } else {
-            PP_FALSE
+            false
         }
     });
-    result.unwrap_or(PP_FALSE)
+    result.unwrap_or(false)
 }
 
 unsafe extern "C" fn create_object(

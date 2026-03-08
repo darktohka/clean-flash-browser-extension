@@ -285,10 +285,10 @@ impl PP_Var {
 #[repr(C)]
 pub struct PPP_Class_Deprecated {
     pub HasProperty: Option<
-        unsafe extern "C" fn(object: *mut c_void, name: PP_Var, exception: *mut PP_Var) -> PP_Bool,
+        unsafe extern "C" fn(object: *mut c_void, name: PP_Var, exception: *mut PP_Var) -> bool,
     >,
     pub HasMethod: Option<
-        unsafe extern "C" fn(object: *mut c_void, name: PP_Var, exception: *mut PP_Var) -> PP_Bool,
+        unsafe extern "C" fn(object: *mut c_void, name: PP_Var, exception: *mut PP_Var) -> bool,
     >,
     pub GetProperty: Option<
         unsafe extern "C" fn(object: *mut c_void, name: PP_Var, exception: *mut PP_Var) -> PP_Var,
@@ -719,14 +719,14 @@ pub struct PPB_Var_Deprecated_0_3 {
             object: PP_Var,
             name: PP_Var,
             exception: *mut PP_Var,
-        ) -> PP_Bool,
+        ) -> bool,
     >,
     pub HasMethod: Option<
         unsafe extern "C" fn(
             object: PP_Var,
             name: PP_Var,
             exception: *mut PP_Var,
-        ) -> PP_Bool,
+        ) -> bool,
     >,
     pub GetProperty: Option<
         unsafe extern "C" fn(
@@ -780,7 +780,7 @@ pub struct PPB_Var_Deprecated_0_3 {
             var: PP_Var,
             object_class: *const PPP_Class_Deprecated,
             object_data: *mut *mut c_void,
-        ) -> PP_Bool,
+        ) -> bool,
     >,
     pub CreateObject: Option<
         unsafe extern "C" fn(
@@ -894,6 +894,36 @@ pub struct PPB_View_1_2 {
 unsafe impl Send for PPB_View_1_2 {}
 unsafe impl Sync for PPB_View_1_2 {}
 
+#[repr(C)]
+pub struct PPB_View_1_1 {
+    pub IsView: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub GetRect: Option<unsafe extern "C" fn(resource: PP_Resource, rect: *mut PP_Rect) -> PP_Bool>,
+    pub IsFullscreen: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub IsVisible: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub IsPageVisible: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub GetClipRect:
+        Option<unsafe extern "C" fn(resource: PP_Resource, clip: *mut PP_Rect) -> PP_Bool>,
+    pub GetDeviceScale: Option<unsafe extern "C" fn(resource: PP_Resource) -> f32>,
+    pub GetCSSScale: Option<unsafe extern "C" fn(resource: PP_Resource) -> f32>,
+}
+
+unsafe impl Send for PPB_View_1_1 {}
+unsafe impl Sync for PPB_View_1_1 {}
+
+#[repr(C)]
+pub struct PPB_View_1_0 {
+    pub IsView: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub GetRect: Option<unsafe extern "C" fn(resource: PP_Resource, rect: *mut PP_Rect) -> PP_Bool>,
+    pub IsFullscreen: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub IsVisible: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub IsPageVisible: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub GetClipRect:
+        Option<unsafe extern "C" fn(resource: PP_Resource, clip: *mut PP_Rect) -> PP_Bool>,
+}
+
+unsafe impl Send for PPB_View_1_0 {}
+unsafe impl Sync for PPB_View_1_0 {}
+
 // ===========================================================================
 // PPB_MessageLoop;1.0
 // ===========================================================================
@@ -971,6 +1001,48 @@ pub struct PPB_Graphics2D_1_1 {
 
 unsafe impl Send for PPB_Graphics2D_1_1 {}
 unsafe impl Sync for PPB_Graphics2D_1_1 {}
+
+#[repr(C)]
+pub struct PPB_Graphics2D_1_0 {
+    pub Create: Option<
+        unsafe extern "C" fn(
+            instance: PP_Instance,
+            size: *const PP_Size,
+            is_always_opaque: PP_Bool,
+        ) -> PP_Resource,
+    >,
+    pub IsGraphics2D: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub Describe: Option<
+        unsafe extern "C" fn(
+            graphics_2d: PP_Resource,
+            size: *mut PP_Size,
+            is_always_opaque: *mut PP_Bool,
+        ) -> PP_Bool,
+    >,
+    pub PaintImageData: Option<
+        unsafe extern "C" fn(
+            graphics_2d: PP_Resource,
+            image_data: PP_Resource,
+            top_left: *const PP_Point,
+            src_rect: *const PP_Rect,
+        ),
+    >,
+    pub Scroll: Option<
+        unsafe extern "C" fn(
+            graphics_2d: PP_Resource,
+            clip_rect: *const PP_Rect,
+            amount: *const PP_Point,
+        ),
+    >,
+    pub ReplaceContents:
+        Option<unsafe extern "C" fn(graphics_2d: PP_Resource, image_data: PP_Resource)>,
+    pub Flush: Option<
+        unsafe extern "C" fn(graphics_2d: PP_Resource, callback: PP_CompletionCallback) -> i32,
+    >,
+}
+
+unsafe impl Send for PPB_Graphics2D_1_0 {}
+unsafe impl Sync for PPB_Graphics2D_1_0 {}
 
 // ===========================================================================
 // PPB_Graphics3D;1.0
@@ -1135,6 +1207,31 @@ pub struct PPB_AudioConfig_1_1 {
 
 unsafe impl Send for PPB_AudioConfig_1_1 {}
 unsafe impl Sync for PPB_AudioConfig_1_1 {}
+
+/// PPB_AudioConfig;1.0 — same as 1.1 but `RecommendSampleFrameCount` has no
+/// `instance` parameter and `RecommendSampleRate` is absent.
+#[repr(C)]
+pub struct PPB_AudioConfig_1_0 {
+    pub CreateStereo16Bit: Option<
+        unsafe extern "C" fn(
+            instance: PP_Instance,
+            sample_rate: PP_AudioSampleRate,
+            sample_frame_count: u32,
+        ) -> PP_Resource,
+    >,
+    pub RecommendSampleFrameCount: Option<
+        unsafe extern "C" fn(
+            sample_rate: PP_AudioSampleRate,
+            requested_sample_frame_count: u32,
+        ) -> u32,
+    >,
+    pub IsAudioConfig: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub GetSampleRate: Option<unsafe extern "C" fn(config: PP_Resource) -> PP_AudioSampleRate>,
+    pub GetSampleFrameCount: Option<unsafe extern "C" fn(config: PP_Resource) -> u32>,
+}
+
+unsafe impl Send for PPB_AudioConfig_1_0 {}
+unsafe impl Sync for PPB_AudioConfig_1_0 {}
 
 // ===========================================================================
 // PPB_InputEvent;1.0
@@ -1531,7 +1628,7 @@ unsafe impl Send for PPB_Crypto_Dev_0_1 {}
 unsafe impl Sync for PPB_Crypto_Dev_0_1 {}
 
 // ===========================================================================
-// PPB_Flash;12.6, 13.0 (partial — essential entries only)
+// PPB_Flash;12.4, 12.5, 12.6, 13.0
 // ===========================================================================
 
 pub const PPB_FLASH_INTERFACE_12_6: &str = "PPB_Flash;12.6\0";
@@ -1579,17 +1676,90 @@ pub struct PPB_Flash_12_6 {
     pub GetCommandLineArgs: Option<unsafe extern "C" fn(module: PP_Module) -> PP_Var>,
     pub PreloadFontWin: Option<unsafe extern "C" fn(logfontw: *const c_void)>,
     pub IsRectTopmost: Option<unsafe extern "C" fn(instance: PP_Instance, rect: *const PP_Rect) -> PP_Bool>,
-    pub InvokePrinting: Option<unsafe extern "C" fn(instance: PP_Instance)>,
+    pub InvokePrinting: Option<unsafe extern "C" fn(instance: PP_Instance) -> i32>,
     pub UpdateActivity: Option<unsafe extern "C" fn(instance: PP_Instance)>,
     pub GetDeviceID: Option<unsafe extern "C" fn(instance: PP_Instance) -> PP_Var>,
     pub GetSettingInt: Option<unsafe extern "C" fn(instance: PP_Instance, setting: i32) -> i32>,
     pub GetSetting: Option<unsafe extern "C" fn(instance: PP_Instance, setting: i32) -> PP_Var>,
     pub SetCrashData: Option<unsafe extern "C" fn(instance: PP_Instance, key: i32, value: PP_Var) -> PP_Bool>,
-    pub EnumerateVideoCaptureDevices: Option<unsafe extern "C" fn(instance: PP_Instance, video_capture: PP_Resource, devices: *mut c_void) -> i32>,
+    pub EnumerateVideoCaptureDevices: Option<unsafe extern "C" fn(instance: PP_Instance, video_capture: PP_Resource, devices: PP_ArrayOutput) -> i32>,
 }
 
 unsafe impl Send for PPB_Flash_12_6 {}
 unsafe impl Sync for PPB_Flash_12_6 {}
+
+/// PPB_Flash;12.5 vtable — 16 functions.
+/// Same as 12.6 but without EnumerateVideoCaptureDevices.
+#[repr(C)]
+pub struct PPB_Flash_12_5 {
+    pub SetInstanceAlwaysOnTop: Option<unsafe extern "C" fn(instance: PP_Instance, on_top: PP_Bool)>,
+    pub DrawGlyphs: Option<unsafe extern "C" fn(
+        instance: PP_Instance,
+        image_data: PP_Resource,
+        font_desc: *const c_void, // PP_BrowserFont_Trusted_Description
+        color: u32,
+        position: *const PP_Point,
+        clip: *const PP_Rect,
+        transformation: *const [f32; 9],
+        allow_subpixel_aa: PP_Bool,
+        glyph_count: u32,
+        glyph_indices: *const u16,
+        glyph_advances: *const PP_Point,
+    ) -> PP_Bool>,
+    pub GetProxyForURL: Option<unsafe extern "C" fn(instance: PP_Instance, url: *const c_char) -> PP_Var>,
+    pub Navigate: Option<unsafe extern "C" fn(request_info: PP_Resource, target: *const c_char, from_user_action: PP_Bool) -> i32>,
+    pub RunMessageLoop: Option<unsafe extern "C" fn(instance: PP_Instance)>,
+    pub QuitMessageLoop: Option<unsafe extern "C" fn(instance: PP_Instance)>,
+    pub GetLocalTimeZoneOffset: Option<unsafe extern "C" fn(instance: PP_Instance, t: f64) -> f64>,
+    pub GetCommandLineArgs: Option<unsafe extern "C" fn(module: PP_Module) -> PP_Var>,
+    pub PreloadFontWin: Option<unsafe extern "C" fn(logfontw: *const c_void)>,
+    pub IsRectTopmost: Option<unsafe extern "C" fn(instance: PP_Instance, rect: *const PP_Rect) -> PP_Bool>,
+    pub InvokePrinting: Option<unsafe extern "C" fn(instance: PP_Instance) -> i32>,
+    pub UpdateActivity: Option<unsafe extern "C" fn(instance: PP_Instance)>,
+    pub GetDeviceID: Option<unsafe extern "C" fn(instance: PP_Instance) -> PP_Var>,
+    pub GetSettingInt: Option<unsafe extern "C" fn(instance: PP_Instance, setting: i32) -> i32>,
+    pub GetSetting: Option<unsafe extern "C" fn(instance: PP_Instance, setting: i32) -> PP_Var>,
+    pub SetCrashData: Option<unsafe extern "C" fn(instance: PP_Instance, key: i32, value: PP_Var) -> PP_Bool>,
+}
+
+unsafe impl Send for PPB_Flash_12_5 {}
+unsafe impl Sync for PPB_Flash_12_5 {}
+
+/// PPB_Flash;12.4 vtable — 15 functions.
+/// Same as 12.5 but without SetCrashData.
+#[repr(C)]
+pub struct PPB_Flash_12_4 {
+    pub SetInstanceAlwaysOnTop: Option<unsafe extern "C" fn(instance: PP_Instance, on_top: PP_Bool)>,
+    pub DrawGlyphs: Option<unsafe extern "C" fn(
+        instance: PP_Instance,
+        image_data: PP_Resource,
+        font_desc: *const c_void, // PP_BrowserFont_Trusted_Description
+        color: u32,
+        position: *const PP_Point,
+        clip: *const PP_Rect,
+        transformation: *const [f32; 9],
+        allow_subpixel_aa: PP_Bool,
+        glyph_count: u32,
+        glyph_indices: *const u16,
+        glyph_advances: *const PP_Point,
+    ) -> PP_Bool>,
+    pub GetProxyForURL: Option<unsafe extern "C" fn(instance: PP_Instance, url: *const c_char) -> PP_Var>,
+    pub Navigate: Option<unsafe extern "C" fn(request_info: PP_Resource, target: *const c_char, from_user_action: PP_Bool) -> i32>,
+    pub RunMessageLoop: Option<unsafe extern "C" fn(instance: PP_Instance)>,
+    pub QuitMessageLoop: Option<unsafe extern "C" fn(instance: PP_Instance)>,
+    pub GetLocalTimeZoneOffset: Option<unsafe extern "C" fn(instance: PP_Instance, t: f64) -> f64>,
+    pub GetCommandLineArgs: Option<unsafe extern "C" fn(module: PP_Module) -> PP_Var>,
+    pub PreloadFontWin: Option<unsafe extern "C" fn(logfontw: *const c_void)>,
+    pub IsRectTopmost: Option<unsafe extern "C" fn(instance: PP_Instance, rect: *const PP_Rect) -> PP_Bool>,
+    pub InvokePrinting: Option<unsafe extern "C" fn(instance: PP_Instance) -> i32>,
+    pub UpdateActivity: Option<unsafe extern "C" fn(instance: PP_Instance)>,
+    pub GetDeviceID: Option<unsafe extern "C" fn(instance: PP_Instance) -> PP_Var>,
+    pub GetSettingInt: Option<unsafe extern "C" fn(instance: PP_Instance, setting: i32) -> i32>,
+    pub GetSetting: Option<unsafe extern "C" fn(instance: PP_Instance, setting: i32) -> PP_Var>,
+}
+
+unsafe impl Send for PPB_Flash_12_4 {}
+unsafe impl Sync for PPB_Flash_12_4 {}
 
 /// PPB_Flash;13.0 vtable — 12 functions.  
 /// Does NOT have RunMessageLoop / QuitMessageLoop (those were removed).
@@ -1618,7 +1788,7 @@ pub struct PPB_Flash_13_0 {
     pub UpdateActivity: Option<unsafe extern "C" fn(instance: PP_Instance)>,
     pub GetSetting: Option<unsafe extern "C" fn(instance: PP_Instance, setting: i32) -> PP_Var>,
     pub SetCrashData: Option<unsafe extern "C" fn(instance: PP_Instance, key: i32, value: PP_Var) -> PP_Bool>,
-    pub EnumerateVideoCaptureDevices: Option<unsafe extern "C" fn(instance: PP_Instance, video_capture: PP_Resource, devices: *mut c_void) -> i32>,
+    pub EnumerateVideoCaptureDevices: Option<unsafe extern "C" fn(instance: PP_Instance, video_capture: PP_Resource, devices: PP_ArrayOutput) -> i32>,
 }
 
 unsafe impl Send for PPB_Flash_13_0 {}
@@ -1636,12 +1806,23 @@ pub struct PPB_Flash_DRM_1_1 {
     pub Create: Option<unsafe extern "C" fn(instance: PP_Instance) -> PP_Resource>,
     pub GetDeviceID: Option<unsafe extern "C" fn(drm: PP_Resource, id: *mut PP_Var, callback: PP_CompletionCallback) -> i32>,
     pub GetHmonitor: Option<unsafe extern "C" fn(drm: PP_Resource, hmonitor: *mut i64) -> PP_Bool>,
-    pub GetVoucherFile: Option<unsafe extern "C" fn(drm: PP_Resource) -> i32>,
-    pub MonitorIsExternal: Option<unsafe extern "C" fn(drm: PP_Resource, callback: PP_CompletionCallback) -> i32>,
+    pub GetVoucherFile: Option<unsafe extern "C" fn(drm: PP_Resource, file_ref: *mut PP_Resource, callback: PP_CompletionCallback) -> i32>,
+    pub MonitorIsExternal: Option<unsafe extern "C" fn(drm: PP_Resource, is_external: *mut PP_Bool, callback: PP_CompletionCallback) -> i32>,
 }
 
 unsafe impl Send for PPB_Flash_DRM_1_1 {}
 unsafe impl Sync for PPB_Flash_DRM_1_1 {}
+
+#[repr(C)]
+pub struct PPB_Flash_DRM_1_0 {
+    pub Create: Option<unsafe extern "C" fn(instance: PP_Instance) -> PP_Resource>,
+    pub GetDeviceID: Option<unsafe extern "C" fn(drm: PP_Resource, id: *mut PP_Var, callback: PP_CompletionCallback) -> i32>,
+    pub GetHmonitor: Option<unsafe extern "C" fn(drm: PP_Resource, hmonitor: *mut i64) -> PP_Bool>,
+    pub GetVoucherFile: Option<unsafe extern "C" fn(drm: PP_Resource, file_ref: *mut PP_Resource, callback: PP_CompletionCallback) -> i32>,
+}
+
+unsafe impl Send for PPB_Flash_DRM_1_0 {}
+unsafe impl Sync for PPB_Flash_DRM_1_0 {}
 
 // ===========================================================================
 // PPB_URLUtil(Dev);0.7
@@ -1696,6 +1877,21 @@ pub struct PPB_URLUtil_Dev_0_7 {
 unsafe impl Send for PPB_URLUtil_Dev_0_7 {}
 unsafe impl Sync for PPB_URLUtil_Dev_0_7 {}
 
+#[repr(C)]
+pub struct PPB_URLUtil_Dev_0_6 {
+    pub Canonicalize: Option<unsafe extern "C" fn(url: PP_Var, components: *mut PP_URLComponents_Dev) -> PP_Var>,
+    pub ResolveRelativeToURL: Option<unsafe extern "C" fn(base_url: PP_Var, relative_string: PP_Var, components: *mut PP_URLComponents_Dev) -> PP_Var>,
+    pub ResolveRelativeToDocument: Option<unsafe extern "C" fn(instance: PP_Instance, relative_string: PP_Var, components: *mut PP_URLComponents_Dev) -> PP_Var>,
+    pub IsSameSecurityOrigin: Option<unsafe extern "C" fn(url_a: PP_Var, url_b: PP_Var) -> PP_Bool>,
+    pub DocumentCanRequest: Option<unsafe extern "C" fn(instance: PP_Instance, url: PP_Var) -> PP_Bool>,
+    pub DocumentCanAccessDocument: Option<unsafe extern "C" fn(active: PP_Instance, target: PP_Instance) -> PP_Bool>,
+    pub GetDocumentURL: Option<unsafe extern "C" fn(instance: PP_Instance, components: *mut PP_URLComponents_Dev) -> PP_Var>,
+    pub GetPluginInstanceURL: Option<unsafe extern "C" fn(instance: PP_Instance, components: *mut PP_URLComponents_Dev) -> PP_Var>,
+}
+
+unsafe impl Send for PPB_URLUtil_Dev_0_6 {}
+unsafe impl Sync for PPB_URLUtil_Dev_0_6 {}
+
 // ===========================================================================
 // PPB_FlashFullscreen;1.0
 // ===========================================================================
@@ -1711,6 +1907,38 @@ pub struct PPB_FlashFullscreen_1_0 {
 
 unsafe impl Send for PPB_FlashFullscreen_1_0 {}
 unsafe impl Sync for PPB_FlashFullscreen_1_0 {}
+
+// ===========================================================================
+// PPB_FlashFullscreen;0.1 (deprecated — superseded by PPB_Fullscreen;1.0)
+// ===========================================================================
+
+pub const PPB_FLASHFULLSCREEN_INTERFACE_0_1: &str = "PPB_FlashFullscreen;0.1\0";
+
+#[repr(C)]
+pub struct PPB_FlashFullscreen_0_1 {
+    pub IsFullscreen: Option<unsafe extern "C" fn(instance: PP_Instance) -> PP_Bool>,
+    pub SetFullscreen: Option<unsafe extern "C" fn(instance: PP_Instance, fullscreen: PP_Bool) -> PP_Bool>,
+    pub GetScreenSize: Option<unsafe extern "C" fn(instance: PP_Instance, size: *mut PP_Size) -> PP_Bool>,
+}
+
+unsafe impl Send for PPB_FlashFullscreen_0_1 {}
+unsafe impl Sync for PPB_FlashFullscreen_0_1 {}
+
+// ===========================================================================
+// PPB_Fullscreen;1.0
+// ===========================================================================
+
+pub const PPB_FULLSCREEN_INTERFACE_1_0: &str = "PPB_Fullscreen;1.0\0";
+
+#[repr(C)]
+pub struct PPB_Fullscreen_1_0 {
+    pub IsFullscreen: Option<unsafe extern "C" fn(instance: PP_Instance) -> PP_Bool>,
+    pub SetFullscreen: Option<unsafe extern "C" fn(instance: PP_Instance, fullscreen: PP_Bool) -> PP_Bool>,
+    pub GetScreenSize: Option<unsafe extern "C" fn(instance: PP_Instance, size: *mut PP_Size) -> PP_Bool>,
+}
+
+unsafe impl Send for PPB_Fullscreen_1_0 {}
+unsafe impl Sync for PPB_Fullscreen_1_0 {}
 
 // ===========================================================================
 // PPB_Flash_Clipboard;5.1
@@ -1729,6 +1957,47 @@ pub struct PPB_Flash_Clipboard_5_1 {
 
 unsafe impl Send for PPB_Flash_Clipboard_5_1 {}
 unsafe impl Sync for PPB_Flash_Clipboard_5_1 {}
+
+// PPB_Flash_Clipboard;5.0
+
+pub const PPB_FLASH_CLIPBOARD_INTERFACE_5_0: &str = "PPB_Flash_Clipboard;5.0\0";
+
+#[repr(C)]
+pub struct PPB_Flash_Clipboard_5_0 {
+    pub RegisterCustomFormat: Option<unsafe extern "C" fn(instance: PP_Instance, format_name: *const c_char) -> u32>,
+    pub IsFormatAvailable: Option<unsafe extern "C" fn(instance: PP_Instance, clipboard_type: u32, format: u32) -> PP_Bool>,
+    pub ReadData: Option<unsafe extern "C" fn(instance: PP_Instance, clipboard_type: u32, format: u32) -> PP_Var>,
+    pub WriteData: Option<unsafe extern "C" fn(instance: PP_Instance, clipboard_type: u32, data_item_count: u32, formats: *const u32, data_items: *const PP_Var) -> i32>,
+}
+
+unsafe impl Send for PPB_Flash_Clipboard_5_0 {}
+unsafe impl Sync for PPB_Flash_Clipboard_5_0 {}
+
+// PPB_Flash_Clipboard;4.0
+
+pub const PPB_FLASH_CLIPBOARD_INTERFACE_4_0: &str = "PPB_Flash_Clipboard;4.0\0";
+
+/// In 4.0 the format parameter is the enum `PP_Flash_Clipboard_Format` (i32)
+/// rather than a `u32` custom-format id.
+#[repr(C)]
+pub struct PPB_Flash_Clipboard_4_0 {
+    pub IsFormatAvailable: Option<unsafe extern "C" fn(instance: PP_Instance, clipboard_type: u32, format: i32) -> PP_Bool>,
+    pub ReadData: Option<unsafe extern "C" fn(instance: PP_Instance, clipboard_type: u32, format: i32) -> PP_Var>,
+    pub WriteData: Option<unsafe extern "C" fn(instance: PP_Instance, clipboard_type: u32, data_item_count: u32, formats: *const i32, data_items: *const PP_Var) -> i32>,
+}
+
+unsafe impl Send for PPB_Flash_Clipboard_4_0 {}
+unsafe impl Sync for PPB_Flash_Clipboard_4_0 {}
+
+// Flash clipboard format constants (PP_Flash_Clipboard_Format enum values)
+pub const PP_FLASH_CLIPBOARD_FORMAT_INVALID: u32 = 0;
+pub const PP_FLASH_CLIPBOARD_FORMAT_PLAINTEXT: u32 = 1;
+pub const PP_FLASH_CLIPBOARD_FORMAT_HTML: u32 = 2;
+pub const PP_FLASH_CLIPBOARD_FORMAT_RTF: u32 = 3;
+
+// Flash clipboard type constants (PP_Flash_Clipboard_Type enum values)
+pub const PP_FLASH_CLIPBOARD_TYPE_STANDARD: u32 = 0;
+pub const PP_FLASH_CLIPBOARD_TYPE_SELECTION: u32 = 1;
 
 // ===========================================================================
 // PPB_Flash_File_ModuleLocal;3
@@ -2717,14 +2986,14 @@ pub struct PPB_PDF {
             table: u32,
             output: *mut c_void,
             output_length: *mut u32,
-        ) -> PP_Bool,
+        ) -> bool,
     >,
     pub SearchString: Option<
         unsafe extern "C" fn(
             instance: PP_Instance,
             string: *const u16,
             term: *const u16,
-            case_sensitive: PP_Bool,
+            case_sensitive: bool,
             results: *mut *mut PP_PrivateFindResult,
             count: *mut i32,
         ),
@@ -3349,6 +3618,128 @@ pub struct PPB_UDPSocket_Private_0_3 {
 
 unsafe impl Send for PPB_UDPSocket_Private_0_3 {}
 unsafe impl Sync for PPB_UDPSocket_Private_0_3 {}
+
+// ===========================================================================
+// PPB_UDPSocket;1.0 / 1.1 / 1.2  (public interface, uses PP_Resource addrs)
+// ===========================================================================
+
+/// Option names used by `PPB_UDPSocket::SetOption()`.
+pub type PP_UDPSocket_Option = i32;
+pub const PP_UDPSOCKET_OPTION_ADDRESS_REUSE: PP_UDPSocket_Option = 0;
+pub const PP_UDPSOCKET_OPTION_BROADCAST: PP_UDPSocket_Option = 1;
+pub const PP_UDPSOCKET_OPTION_SEND_BUFFER_SIZE: PP_UDPSocket_Option = 2;
+pub const PP_UDPSOCKET_OPTION_RECV_BUFFER_SIZE: PP_UDPSocket_Option = 3;
+pub const PP_UDPSOCKET_OPTION_MULTICAST_LOOP: PP_UDPSocket_Option = 4;
+pub const PP_UDPSOCKET_OPTION_MULTICAST_TTL: PP_UDPSocket_Option = 5;
+
+pub const PPB_UDPSOCKET_INTERFACE_1_0: &str = "PPB_UDPSocket;1.0\0";
+pub const PPB_UDPSOCKET_INTERFACE_1_1: &str = "PPB_UDPSocket;1.1\0";
+pub const PPB_UDPSOCKET_INTERFACE_1_2: &str = "PPB_UDPSocket;1.2\0";
+
+#[repr(C)]
+pub struct PPB_UDPSocket_1_0 {
+    pub Create: Option<unsafe extern "C" fn(instance: PP_Instance) -> PP_Resource>,
+    pub IsUDPSocket: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub Bind: Option<
+        unsafe extern "C" fn(
+            udp_socket: PP_Resource,
+            addr: PP_Resource,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub GetBoundAddress: Option<unsafe extern "C" fn(udp_socket: PP_Resource) -> PP_Resource>,
+    pub RecvFrom: Option<
+        unsafe extern "C" fn(
+            udp_socket: PP_Resource,
+            buffer: *mut c_char,
+            num_bytes: i32,
+            addr: *mut PP_Resource,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub SendTo: Option<
+        unsafe extern "C" fn(
+            udp_socket: PP_Resource,
+            buffer: *const c_char,
+            num_bytes: i32,
+            addr: PP_Resource,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub Close: Option<unsafe extern "C" fn(udp_socket: PP_Resource)>,
+    pub SetOption: Option<
+        unsafe extern "C" fn(
+            udp_socket: PP_Resource,
+            name: PP_UDPSocket_Option,
+            value: PP_Var,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+}
+
+unsafe impl Send for PPB_UDPSocket_1_0 {}
+unsafe impl Sync for PPB_UDPSocket_1_0 {}
+
+/// PPB_UDPSocket;1.1 — identical layout to 1.0 (behavioural differences only).
+pub type PPB_UDPSocket_1_1 = PPB_UDPSocket_1_0;
+
+#[repr(C)]
+pub struct PPB_UDPSocket_1_2 {
+    pub Create: Option<unsafe extern "C" fn(instance: PP_Instance) -> PP_Resource>,
+    pub IsUDPSocket: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub Bind: Option<
+        unsafe extern "C" fn(
+            udp_socket: PP_Resource,
+            addr: PP_Resource,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub GetBoundAddress: Option<unsafe extern "C" fn(udp_socket: PP_Resource) -> PP_Resource>,
+    pub RecvFrom: Option<
+        unsafe extern "C" fn(
+            udp_socket: PP_Resource,
+            buffer: *mut c_char,
+            num_bytes: i32,
+            addr: *mut PP_Resource,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub SendTo: Option<
+        unsafe extern "C" fn(
+            udp_socket: PP_Resource,
+            buffer: *const c_char,
+            num_bytes: i32,
+            addr: PP_Resource,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub Close: Option<unsafe extern "C" fn(udp_socket: PP_Resource)>,
+    pub SetOption: Option<
+        unsafe extern "C" fn(
+            udp_socket: PP_Resource,
+            name: PP_UDPSocket_Option,
+            value: PP_Var,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub JoinGroup: Option<
+        unsafe extern "C" fn(
+            udp_socket: PP_Resource,
+            group: PP_Resource,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+    pub LeaveGroup: Option<
+        unsafe extern "C" fn(
+            udp_socket: PP_Resource,
+            group: PP_Resource,
+            callback: PP_CompletionCallback,
+        ) -> i32,
+    >,
+}
+
+unsafe impl Send for PPB_UDPSocket_1_2 {}
+unsafe impl Sync for PPB_UDPSocket_1_2 {}
 
 // ===========================================================================
 // PPB_FileRef;1.0 / 1.1 / 1.2

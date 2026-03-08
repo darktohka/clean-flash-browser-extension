@@ -206,15 +206,15 @@ fn do_show(
     let suggested_name = suggested_name.to_string();
     let accept_types_clone = accept_types.clone();
 
-    // Spawn a thread for the blocking file dialog so we don't block the plugin thread.
-    // The callback will be fired from this thread.
+    // Spawn a blocking task for the file dialog so we don't block the plugin thread.
+    // The callback will be fired from this task.
     // SAFETY: PP_CompletionCallback contains raw pointers that the plugin expects
     // to be called back on; we trust the plugin's threading model here.
     let cb_func = callback.func;
     let cb_user_data = callback.user_data as usize; // convert to usize for Send
     let output_get = output.GetDataBuffer;
     let output_user = output.user_data as usize;
-    std::thread::spawn(move || {
+    crate::tokio_runtime().spawn_blocking(move || {
         let Some(host) = HOST.get() else { return };
 
         let chosen_files = {

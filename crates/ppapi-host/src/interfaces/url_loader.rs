@@ -1,6 +1,6 @@
 //! PPB_URLLoader;1.0 implementation — chunked async download/upload.
 //!
-//! `Open()` spawns a background I/O thread that calls
+//! `Open()` spawns a background I/O task (via tokio) that calls
 //! [`HostCallbacks::on_url_open`] and then streams the response body
 //! through a shared ring-buffer.  `ReadResponseBody()` serves data from
 //! that buffer with proper PPAPI completion-callback semantics.
@@ -31,14 +31,21 @@ struct PendingRead {
     callback: PP_CompletionCallback,
 }
 
-// Safety: the buffer pointer is provided by the plugin and remains valid
-// until the callback fires.  We only write to it *before* posting the
-// callback, so the pointer access is safe.
+// SAFETY: `PendingRead` is created on the main (plugin) thread and consumed
+// on the background I/O thread.  The raw `buffer` pointer is provided by the
+// plugin and guaranteed valid until the completion callback fires.  We write
+// to the buffer *before* posting / running the callback, so:
+//   1. There is no data race: only the I/O thread touches the pointer, and
+//      the plugin cannot re-use the buffer until it receives the callback.
+//   2. The pointer is never read — only written to via copy_nonoverlapping.
+// `Sync` is technically not required (the pointer is never shared between
+// two threads simultaneously), but `PendingRead` lives inside an
+// `Arc<Mutex<…>>` which requires `Send + Sync` on the inner type.
 unsafe impl Send for PendingRead {}
 unsafe impl Sync for PendingRead {}
 
 // ---------------------------------------------------------------------------
-// Shared streaming state between main thread and background I/O thread
+// Shared streaming state between main thread and background I/O task
 // ---------------------------------------------------------------------------
 
 pub struct URLLoaderInner {
@@ -172,7 +179,7 @@ unsafe extern "C" fn is_url_loader(resource: PP_Resource) -> PP_Bool {
 }
 
 // ---------------------------------------------------------------------------
-// Open — spawn background I/O thread for async download + upload
+// Open — spawn background I/O task for async download + upload
 // ---------------------------------------------------------------------------
 
 /// Chunk size for reading the response body from the network.
@@ -258,7 +265,7 @@ unsafe extern "C" fn open(
         .with_downcast::<URLLoaderResource, _>(loader, |l| l.instance)
         .unwrap_or(0);
 
-    // Clone the poster and the Arc<HostCallbacks> so the background thread
+    // Clone the poster and the Arc<HostCallbacks> so the background task
     // does NOT hold the host_callbacks mutex during long-running I/O.
     let poster = host.main_loop_poster.lock().clone();
     let host_cbs: Option<std::sync::Arc<dyn crate::HostCallbacks>> =
@@ -267,7 +274,7 @@ unsafe extern "C" fn open(
     // --- Blocking vs async Open ------------------------------------------
     // PP_BlockUntilComplete (null callback) means "run synchronously and
     // return the result directly".  For non-null callbacks we spawn a
-    // background I/O thread as before.
+    // background I/O task.
     let is_blocking = callback.is_null();
     let cb = callback;
     let resource_id = loader;
@@ -292,7 +299,7 @@ unsafe extern "C" fn open(
         };
 
         match result {
-            Ok(response) => {
+            Ok(mut response) => {
                 {
                     let mut inner = inner_arc.lock();
                     inner.open_complete = true;
@@ -300,11 +307,14 @@ unsafe extern "C" fn open(
                     inner.bytes_sent = inner.total_bytes_to_send;
                 }
 
+                // Move url and take status_line / headers out of response
+                // (stream_body only needs response.body, so emptying the
+                // strings avoids cloning them).
                 let ri = super::url_response_info::URLResponseInfoResource {
-                    url: url.clone(),
+                    url,
                     status_code: response.status_code as i32,
-                    status_line: response.status_line.clone(),
-                    headers: response.headers.clone(),
+                    status_line: std::mem::take(&mut response.status_line),
+                    headers: std::mem::take(&mut response.headers),
                     redirect_url: String::new(),
                 };
                 let ri_id = host.resources.insert(instance_id, Box::new(ri));
@@ -338,7 +348,7 @@ unsafe extern "C" fn open(
                 );
 
                 let ri = super::url_response_info::URLResponseInfoResource {
-                    url: url.clone(),
+                    url,
                     status_code: 0,
                     status_line: String::new(),
                     headers: String::new(),
@@ -436,20 +446,20 @@ unsafe extern "C" fn open(
         // ----- Blocking (synchronous) Open -----
         // Perform the HTTP request on the calling thread so that when we
         // return, the response info is already populated.
-        match do_open(inner_arc.clone(), host_cbs, url, method, headers, body) {
+        let inner_for_open = inner_arc.clone();
+        match do_open(inner_for_open, host_cbs, url, method, headers, body) {
             Ok(response) => {
-                // Stream body data on a background thread.
-                let inner_for_stream = inner_arc.clone();
-                std::thread::spawn(move || {
-                    stream_body(response, inner_for_stream, poster, resource_id);
+                // Stream body data in a background task.
+                crate::tokio_runtime().spawn_blocking(move || {
+                    stream_body(response, inner_arc, poster, resource_id);
                 });
                 PP_OK
             }
             Err(error_code) => error_code,
         }
     } else {
-        // ----- Async Open (spawn background I/O thread) -----
-        std::thread::spawn(move || {
+        // ----- Async Open (spawn background I/O task) -----
+        crate::tokio_runtime().spawn_blocking(move || {
             match do_open(inner_arc.clone(), host_cbs, url, method, headers, body) {
                 Ok(response) => {
                     // Fire the Open completion callback (headers ready).
@@ -629,18 +639,22 @@ unsafe extern "C" fn read_response_body(
                 let to_read = (bytes_to_read as usize).min(available);
                 let dst = buffer as *mut u8;
 
-                // Make the VecDeque contiguous so we can memcpy.
-                {
-                    let contiguous = inner.buffer.make_contiguous();
-                    unsafe {
+                // Copy from the two contiguous slices of VecDeque
+                // directly, avoiding the O(n) rotation that
+                // make_contiguous() may perform.
+                let (front, back) = inner.buffer.as_slices();
+                let front_n = front.len().min(to_read);
+                unsafe {
+                    std::ptr::copy_nonoverlapping(front.as_ptr(), dst, front_n);
+                    if front_n < to_read {
                         std::ptr::copy_nonoverlapping(
-                            contiguous.as_ptr(),
-                            dst,
-                            to_read,
+                            back.as_ptr(),
+                            dst.add(front_n),
+                            to_read - front_n,
                         );
                     }
                 }
-                let _ = inner.buffer.drain(..to_read);
+                drop(inner.buffer.drain(..to_read));
 
                 tracing::trace!(
                     "PPB_URLLoader::ReadResponseBody: loader={} served {} bytes \
@@ -729,7 +743,7 @@ unsafe extern "C" fn finish_streaming_to_file(
 
 unsafe extern "C" fn close(loader: PP_Resource) {
     tracing::debug!("PPB_URLLoader::Close(loader={})", loader);
-    // Mark the stream as finished so the background thread stops writing
+    // Mark the stream as finished so the background task stops writing
     // and any pending read gets cancelled.
     let Some(host) = HOST.get() else { return };
     host.resources

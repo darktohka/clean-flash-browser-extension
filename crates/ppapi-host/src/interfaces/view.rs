@@ -48,7 +48,7 @@ impl ViewResource {
     }
 }
 
-static VTABLE: PPB_View_1_2 = PPB_View_1_2 {
+static VTABLE_1_2: PPB_View_1_2 = PPB_View_1_2 {
     IsView: Some(is_view),
     GetRect: Some(get_rect),
     IsFullscreen: Some(is_fullscreen),
@@ -60,11 +60,31 @@ static VTABLE: PPB_View_1_2 = PPB_View_1_2 {
     GetScrollOffset: Some(get_scroll_offset),
 };
 
+static VTABLE_1_1: PPB_View_1_1 = PPB_View_1_1 {
+    IsView: Some(is_view),
+    GetRect: Some(get_rect),
+    IsFullscreen: Some(is_fullscreen),
+    IsVisible: Some(is_visible),
+    IsPageVisible: Some(is_page_visible),
+    GetClipRect: Some(get_clip_rect),
+    GetDeviceScale: Some(get_device_scale),
+    GetCSSScale: Some(get_css_scale),
+};
+
+static VTABLE_1_0: PPB_View_1_0 = PPB_View_1_0 {
+    IsView: Some(is_view),
+    GetRect: Some(get_rect),
+    IsFullscreen: Some(is_fullscreen),
+    IsVisible: Some(is_visible),
+    IsPageVisible: Some(is_page_visible),
+    GetClipRect: Some(get_clip_rect),
+};
+
 pub unsafe fn register(registry: &mut InterfaceRegistry) {
     unsafe {
-        registry.register(PPB_VIEW_INTERFACE_1_2, &VTABLE);
-        registry.register(PPB_VIEW_INTERFACE_1_1, &VTABLE);
-        registry.register(PPB_VIEW_INTERFACE_1_0, &VTABLE);
+        registry.register(PPB_VIEW_INTERFACE_1_2, &VTABLE_1_2);
+        registry.register(PPB_VIEW_INTERFACE_1_1, &VTABLE_1_1);
+        registry.register(PPB_VIEW_INTERFACE_1_0, &VTABLE_1_0);
     }
 }
 

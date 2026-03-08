@@ -1,4 +1,4 @@
-//! PPB_Var;1.1 and 1.2 implementation.
+//! PPB_Var;1.0, 1.1 and 1.2 implementation.
 
 use crate::interface_registry::InterfaceRegistry;
 use ppapi_sys::*;
@@ -22,10 +22,18 @@ static VTABLE_1_1: PPB_Var_1_1 = PPB_Var_1_1 {
     VarToUtf8: Some(var_to_utf8),
 };
 
+static VTABLE_1_0: PPB_Var_1_0 = PPB_Var_1_0 {
+    AddRef: Some(add_ref),
+    Release: Some(release),
+    VarFromUtf8: Some(var_from_utf8_1_0),
+    VarToUtf8: Some(var_to_utf8),
+};
+
 pub unsafe fn register(registry: &mut InterfaceRegistry) {
     unsafe {
         registry.register(PPB_VAR_INTERFACE_1_2, &VTABLE_1_2);
         registry.register(PPB_VAR_INTERFACE_1_1, &VTABLE_1_1);
+        registry.register(PPB_VAR_INTERFACE_1_0, &VTABLE_1_0);
     }
 }
 
@@ -96,6 +104,11 @@ unsafe extern "C" fn var_to_utf8(var: PP_Var, len: *mut u32) -> *const c_char {
             c"".as_ptr()
         }
     }
+}
+
+unsafe extern "C" fn var_from_utf8_1_0(_module: PP_Module, data: *const c_char, len: u32) -> PP_Var {
+    tracing::trace!("PPB_Var(1.0)::VarFromUtf8(module={}, len={})", _module, len);
+    var_from_utf8(data, len)
 }
 
 unsafe extern "C" fn var_to_resource(var: PP_Var) -> PP_Resource {

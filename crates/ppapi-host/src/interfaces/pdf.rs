@@ -62,7 +62,7 @@ unsafe extern "C" fn get_font_table_for_private_font_file(
     table: u32,
     output: *mut c_void,
     output_length: *mut u32,
-) -> PP_Bool {
+) -> bool {
     tracing::trace!(
         "ppb_pdf_get_font_table_for_private_font_file: font_file={}, table=0x{:08x}",
         font_file,
@@ -70,14 +70,14 @@ unsafe extern "C" fn get_font_table_for_private_font_file(
     );
     let _ = (output, output_length);
     // TODO: delegate to flash_font_file::get_font_table when implemented
-    PP_FALSE
+    false
 }
 
 unsafe extern "C" fn search_string(
     instance: PP_Instance,
     string: *const u16,
     term: *const u16,
-    case_sensitive: PP_Bool,
+    case_sensitive: bool,
     results: *mut *mut PP_PrivateFindResult,
     count: *mut i32,
 ) {

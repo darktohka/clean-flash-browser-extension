@@ -37,6 +37,35 @@ mod protocol;
 mod qoi_encode;
 mod script_bridge;
 
+// ---------------------------------------------------------------------------
+// Windows-only: custom getrandom backend using RtlGenRandom
+// ---------------------------------------------------------------------------
+// Avoid calling BCryptGenRandom on Windows: it can crash (STATUS_INVALID_HANDLE)
+// during thread-pool initialization on some configurations.  Instead, use
+// RtlGenRandom (SystemFunction036) which is simpler and doesn't touch the TP.
+#[cfg(all(windows, target_pointer_width = "64"))]
+mod rtl_getrandom {
+    #[link(name = "advapi32")]
+    extern "system" {
+        #[link_name = "SystemFunction036"]
+        fn RtlGenRandom(buffer: *mut u8, length: u32) -> u8;
+    }
+
+    /// Custom getrandom backend that calls RtlGenRandom instead of BCryptGenRandom.
+    pub fn getrandom_impl(dest: &mut [u8]) -> Result<(), getrandom::Error> {
+        // RtlGenRandom has a 2^31-1 byte limit per call.
+        for chunk in dest.chunks_mut(i32::MAX as usize) {
+            let ok = unsafe { RtlGenRandom(chunk.as_mut_ptr(), chunk.len() as u32) };
+            if ok == 0 {
+                return Err(getrandom::Error::UNEXPECTED);
+            }
+        }
+        Ok(())
+    }
+
+    getrandom::register_custom_getrandom!(getrandom_impl);
+}
+
 use parking_lot::Mutex;
 use player_core::FlashPlayer;
 use ppapi_sys::*;
@@ -54,8 +83,8 @@ fn main() {
     // stdout is reserved for native messaging; stderr is silenced so that
     // libpepflashplayer.so cannot corrupt the native messaging channel.
     let filter = 
-                //EnvFilter::new("trace");
-                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+                EnvFilter::new("trace");
+                //EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     // Create a new log file for each execution, named with a timestamp.
     let log_dir = std::env::var("FLASH_PLAYER_LOG_DIR")
@@ -191,6 +220,16 @@ fn main() {
             .ok()
             .expect("WEB_AUDIO_INPUT already initialised");
         host.set_audio_input_provider(Box::new(WebAudioInputProviderWrapper(audio_input)));
+
+        // Set up the clipboard provider so that Flash clipboard operations
+        // are forwarded to the browser via the script bridge.
+        let clip_bridge = SCRIPT_BRIDGE.get().expect("SCRIPT_BRIDGE not initialised").clone();
+        host.set_clipboard_provider(Box::new(WebClipboardProvider::new(clip_bridge)));
+
+        // Set up the fullscreen provider so that Flash fullscreen requests
+        // are forwarded to the browser's Fullscreen API.
+        let fs_bridge = SCRIPT_BRIDGE.get().expect("SCRIPT_BRIDGE not initialised").clone();
+        host.set_fullscreen_provider(Box::new(WebFullscreenProvider::new(fs_bridge)));
     }
 
     tracing::info!("Host initialized successfully, entering main loop");
@@ -854,6 +893,96 @@ impl player_ui_traits::AudioInputProvider for WebAudioInputProviderWrapper {
 }
 
 // ===========================================================================
+// Clipboard provider — routes through ScriptBridge to browser clipboard APIs
+// ===========================================================================
+
+/// Clipboard provider for the web player.
+///
+/// Uses the ScriptBridge (TAG_SCRIPT → page-script.js) to call browser
+/// clipboard APIs.  Because the async Clipboard API requires a user gesture
+/// and is not reliably available, the page-script.js implementation uses a
+/// synchronous `execCommand` approach with a hidden textarea fallback, plus
+/// an internal buffer for formats that the browser doesn't natively support.
+struct WebClipboardProvider {
+    bridge: Arc<script_bridge::ScriptBridge>,
+}
+
+impl WebClipboardProvider {
+    fn new(bridge: Arc<script_bridge::ScriptBridge>) -> Self {
+        Self { bridge }
+    }
+}
+
+impl player_ui_traits::ClipboardProvider for WebClipboardProvider {
+    fn is_format_available(&self, format: player_ui_traits::ClipboardFormat) -> bool {
+        let fmt_str = match format {
+            player_ui_traits::ClipboardFormat::PlainText => "plaintext",
+            player_ui_traits::ClipboardFormat::Html => "html",
+            player_ui_traits::ClipboardFormat::Rtf => "rtf",
+        };
+        let resp = self.bridge.request(serde_json::json!({
+            "op": "clipboardIsAvailable",
+            "format": fmt_str,
+        }));
+        resp.as_ref()
+            .and_then(|r| r.get("value"))
+            .and_then(|v| v.get("v"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
+    fn read_text(&self, format: player_ui_traits::ClipboardFormat) -> Option<String> {
+        let fmt_str = match format {
+            player_ui_traits::ClipboardFormat::PlainText => "plaintext",
+            player_ui_traits::ClipboardFormat::Html => "html",
+            player_ui_traits::ClipboardFormat::Rtf => return None,
+        };
+        let resp = self.bridge.request(serde_json::json!({
+            "op": "clipboardRead",
+            "format": fmt_str,
+        }));
+        resp.as_ref()
+            .and_then(|r| r.get("value"))
+            .and_then(|v| v.get("v"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_owned())
+    }
+
+    fn read_rtf(&self) -> Option<Vec<u8>> {
+        // RTF is not supported in web browsers
+        None
+    }
+
+    fn write(&self, items: &[(player_ui_traits::ClipboardFormat, Vec<u8>)]) -> bool {
+        let mut plain: Option<String> = None;
+        let mut html: Option<String> = None;
+
+        for (fmt, data) in items {
+            match fmt {
+                player_ui_traits::ClipboardFormat::PlainText => {
+                    plain = Some(String::from_utf8_lossy(data).into_owned());
+                }
+                player_ui_traits::ClipboardFormat::Html => {
+                    html = Some(String::from_utf8_lossy(data).into_owned());
+                }
+                player_ui_traits::ClipboardFormat::Rtf => {} // not supported in web
+            }
+        }
+
+        let resp = self.bridge.request(serde_json::json!({
+            "op": "clipboardWrite",
+            "plaintext": plain,
+            "html": html,
+        }));
+        resp.as_ref()
+            .and_then(|r| r.get("value"))
+            .and_then(|v| v.get("v"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+}
+
+// ===========================================================================
 // Timestamp helper (no external chrono dependency)
 // ===========================================================================
 
@@ -896,4 +1025,55 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
+}
+
+// ===========================================================================
+// Web fullscreen provider — uses the script bridge to toggle fullscreen
+// ===========================================================================
+
+struct WebFullscreenProvider {
+    bridge: Arc<script_bridge::ScriptBridge>,
+}
+
+impl WebFullscreenProvider {
+    fn new(bridge: Arc<script_bridge::ScriptBridge>) -> Self {
+        Self { bridge }
+    }
+}
+
+impl player_ui_traits::FullscreenProvider for WebFullscreenProvider {
+    fn is_fullscreen(&self) -> bool {
+        let resp = self.bridge.request(serde_json::json!({
+            "op": "fullscreenIsActive",
+        }));
+        resp.as_ref()
+            .and_then(|r| r.get("value"))
+            .and_then(|v| v.get("v"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
+    fn set_fullscreen(&self, fullscreen: bool) -> bool {
+        let resp = self.bridge.request(serde_json::json!({
+            "op": "fullscreenSet",
+            "fullscreen": fullscreen,
+        }));
+        resp.as_ref()
+            .and_then(|r| r.get("value"))
+            .and_then(|v| v.get("v"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
+    fn get_screen_size(&self) -> Option<(i32, i32)> {
+        let resp = self.bridge.request(serde_json::json!({
+            "op": "fullscreenGetScreenSize",
+        }));
+        let obj = resp.as_ref()
+            .and_then(|r| r.get("value"))
+            .and_then(|v| v.get("v"))?;
+        let w = obj.get("w")?.as_i64()? as i32;
+        let h = obj.get("h")?.as_i64()? as i32;
+        Some((w, h))
+    }
 }

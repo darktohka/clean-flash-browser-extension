@@ -347,3 +347,55 @@ fn parse_accept_types(accept_types: &str) -> Vec<String> {
 
     extensions
 }
+
+// ===========================================================================
+// Egui fullscreen provider — uses eframe ViewportCommand
+// ===========================================================================
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Fullscreen provider that toggles eframe's native fullscreen mode via
+/// `egui::ViewportCommand::Fullscreen`.
+///
+/// The `egui::Context` is safe to use from any thread; calling
+/// `send_viewport_cmd` is non-blocking.
+pub struct EguiFullscreenProvider {
+    ctx: egui::Context,
+    is_fullscreen: AtomicBool,
+}
+
+impl EguiFullscreenProvider {
+    pub fn new(ctx: egui::Context) -> Self {
+        Self {
+            ctx,
+            is_fullscreen: AtomicBool::new(false),
+        }
+    }
+}
+
+impl player_ui_traits::FullscreenProvider for EguiFullscreenProvider {
+    fn is_fullscreen(&self) -> bool {
+        self.is_fullscreen.load(Ordering::Relaxed)
+    }
+
+    fn set_fullscreen(&self, fullscreen: bool) -> bool {
+        self.is_fullscreen.store(fullscreen, Ordering::Relaxed);
+        self.ctx
+            .send_viewport_cmd(egui::ViewportCommand::Fullscreen(fullscreen));
+        self.ctx.request_repaint();
+        true
+    }
+
+    fn get_screen_size(&self) -> Option<(i32, i32)> {
+        // Query the monitor size from the viewport.
+        self.ctx.input(|i| {
+            let r = i.viewport().monitor_size.unwrap_or(
+                egui::Vec2::new(
+                    i.viewport().inner_rect.map_or(800.0, |r| r.width()),
+                    i.viewport().inner_rect.map_or(600.0, |r| r.height()),
+                ),
+            );
+            Some((r.x as i32, r.y as i32))
+        })
+    }
+}

@@ -62,7 +62,7 @@ impl ScriptBridge {
     ///
     /// Returns the full JSON response (the caller picks out the fields it
     /// needs) or `None` on timeout / send failure.
-    fn request(&self, payload: Value) -> Option<Value> {
+    pub(crate) fn request(&self, payload: Value) -> Option<Value> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
         // Merge the request id into the payload.
