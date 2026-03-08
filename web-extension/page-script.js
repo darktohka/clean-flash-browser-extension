@@ -531,6 +531,118 @@
         return null; // no response needed
       }
 
+      // ---------------------------------------------------------------
+      // Clipboard operations for PPB_Flash_Clipboard
+      // ---------------------------------------------------------------
+
+      case "clipboardIsAvailable": {
+        const fmt = req.format; // "plaintext" | "html" | "rtf"
+        if (fmt === "rtf") return { value: encodeJsValue(false) };
+        // We can always report plaintext/html as available if we have
+        // data in our internal buffer, or attempt a read.
+        if (window.__flashClipboard && window.__flashClipboard[fmt]) {
+          return { value: encodeJsValue(true) };
+        }
+        // Try reading from the real clipboard via a hidden textarea.
+        // This only works for plaintext during a user gesture.
+        if (fmt === "plaintext") {
+          try {
+            const ta = document.createElement("textarea");
+            ta.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0";
+            document.body.appendChild(ta);
+            ta.focus();
+            const ok = document.execCommand("paste");
+            const text = ta.value;
+            document.body.removeChild(ta);
+            if (ok && text.length > 0) return { value: encodeJsValue(true) };
+          } catch (_) { /* ignore */ }
+        }
+        return { value: encodeJsValue(false) };
+      }
+
+      case "clipboardRead": {
+        const fmt = req.format; // "plaintext" | "html"
+        // First check our internal buffer.
+        if (window.__flashClipboard && window.__flashClipboard[fmt]) {
+          return { value: encodeJsValue(window.__flashClipboard[fmt]) };
+        }
+        // Fallback: try reading plaintext via execCommand.
+        if (fmt === "plaintext") {
+          try {
+            const ta = document.createElement("textarea");
+            ta.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0";
+            document.body.appendChild(ta);
+            ta.focus();
+            const ok = document.execCommand("paste");
+            const text = ta.value;
+            document.body.removeChild(ta);
+            if (ok && text) return { value: encodeJsValue(text) };
+          } catch (_) { /* ignore */ }
+        }
+        return { value: encodeJsValue(null) };
+      }
+
+      case "clipboardWrite": {
+        // Store in internal buffer for reads within the same page.
+        if (!window.__flashClipboard) window.__flashClipboard = {};
+        if (req.plaintext != null) window.__flashClipboard.plaintext = req.plaintext;
+        else delete window.__flashClipboard.plaintext;
+        if (req.html != null) window.__flashClipboard.html = req.html;
+        else delete window.__flashClipboard.html;
+
+        // Also try to write to the system clipboard via execCommand.
+        const text = req.plaintext || req.html || "";
+        try {
+          const ta = document.createElement("textarea");
+          ta.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0";
+          ta.value = text;
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          document.body.removeChild(ta);
+        } catch (_) { /* ignore - clipboard write may fail without user gesture */ }
+        return { value: encodeJsValue(true) };
+      }
+
+      // ---------------------------------------------------------------
+      // Fullscreen operations for PPB_FlashFullscreen / PPB_Fullscreen
+      // ---------------------------------------------------------------
+
+      case "fullscreenIsActive": {
+        return { value: encodeJsValue(!!document.fullscreenElement) };
+      }
+
+      case "fullscreenSet": {
+        const enter = !!req.fullscreen;
+        try {
+          if (enter) {
+            // Prefer the plugin's embed/object element, fall back to documentElement.
+            const el = document.querySelector("embed, object") || document.documentElement;
+            if (el.requestFullscreen) {
+              el.requestFullscreen();
+            } else if (el.webkitRequestFullscreen) {
+              el.webkitRequestFullscreen();
+            }
+          } else {
+            if (document.exitFullscreen) {
+              document.exitFullscreen();
+            } else if (document.webkitExitFullscreen) {
+              document.webkitExitFullscreen();
+            }
+          }
+          return { value: encodeJsValue(true) };
+        } catch (e) {
+          console.warn("[flash] fullscreenSet failed:", e);
+          return { value: encodeJsValue(false) };
+        }
+      }
+
+      case "fullscreenGetScreenSize": {
+        return {
+          value: encodeJsValue({ w: screen.width, h: screen.height }),
+        };
+      }
+
       default:
         console.warn("[flash] unknown script op: %s", op);
         return { error: `unknown script op: ${op}` };
