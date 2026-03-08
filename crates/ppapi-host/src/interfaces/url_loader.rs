@@ -45,6 +45,51 @@ unsafe impl Send for PendingRead {}
 unsafe impl Sync for PendingRead {}
 
 // ---------------------------------------------------------------------------
+// Concurrency limiter — caps the number of simultaneous URL loader I/O tasks
+// ---------------------------------------------------------------------------
+
+/// Maximum number of concurrent URL loader I/O operations.
+const MAX_CONCURRENT_LOADS: usize = 1;
+
+struct LoaderConcurrencyLimiter {
+    active: parking_lot::Mutex<usize>,
+    cv: parking_lot::Condvar,
+}
+
+impl LoaderConcurrencyLimiter {
+    const fn new() -> Self {
+        Self {
+            active: parking_lot::Mutex::new(0),
+            cv: parking_lot::Condvar::new(),
+        }
+    }
+
+    /// Block until a slot is available, then return a RAII guard.
+    fn acquire(&self) -> LoaderConcurrencyGuard<'_> {
+        let mut count = self.active.lock();
+        while *count >= MAX_CONCURRENT_LOADS {
+            self.cv.wait(&mut count);
+        }
+        *count += 1;
+        LoaderConcurrencyGuard { limiter: self }
+    }
+}
+
+struct LoaderConcurrencyGuard<'a> {
+    limiter: &'a LoaderConcurrencyLimiter,
+}
+
+impl Drop for LoaderConcurrencyGuard<'_> {
+    fn drop(&mut self) {
+        let mut count = self.limiter.active.lock();
+        *count -= 1;
+        self.limiter.cv.notify_one();
+    }
+}
+
+static LOADER_LIMITER: LoaderConcurrencyLimiter = LoaderConcurrencyLimiter::new();
+
+// ---------------------------------------------------------------------------
 // Shared streaming state between main thread and background I/O task
 // ---------------------------------------------------------------------------
 
@@ -79,6 +124,9 @@ pub struct URLLoaderInner {
 
     /// The URL being loaded.
     pub url: Option<String>,
+
+    /// Trusted status callback for reporting upload/download progress.
+    pub status_callback: PP_URLLoaderTrusted_StatusCallback,
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +205,7 @@ unsafe extern "C" fn create(instance: PP_Instance) -> PP_Resource {
         record_download_progress: false,
         record_upload_progress: false,
         url: None,
+        status_callback: None,
     };
     let loader = URLLoaderResource {
         instance,
@@ -305,6 +354,19 @@ unsafe extern "C" fn open(
                     inner.open_complete = true;
                     inner.total_bytes = response.content_length.unwrap_or(-1);
                     inner.bytes_sent = inner.total_bytes_to_send;
+                    // Fire trusted status callback for upload completion.
+                    if let Some(cb) = inner.status_callback {
+                        unsafe {
+                            cb(
+                                instance_id,
+                                resource_id,
+                                inner.bytes_sent,
+                                inner.total_bytes_to_send,
+                                inner.bytes_received,
+                                inner.total_bytes,
+                            );
+                        }
+                    }
                 }
 
                 // Move url and take status_line / headers out of response
@@ -371,6 +433,7 @@ unsafe extern "C" fn open(
         inner_arc: Arc<Mutex<URLLoaderInner>>,
         poster: Option<crate::message_loop::MessageLoopPoster>,
         resource_id: PP_Resource,
+        instance_id: PP_Instance,
     ) {
         let mut chunk_buf = vec![0u8; STREAM_CHUNK_SIZE];
         loop {
@@ -418,6 +481,20 @@ unsafe extern "C" fn open(
             let mut inner = inner_arc.lock();
             inner.bytes_received += n as i64;
 
+            // Fire trusted status callback for download progress.
+            if let Some(cb) = inner.status_callback {
+                unsafe {
+                    cb(
+                        instance_id,
+                        resource_id,
+                        inner.bytes_sent,
+                        inner.total_bytes_to_send,
+                        inner.bytes_received,
+                        inner.total_bytes,
+                    );
+                }
+            }
+
             if let Some(pending) = inner.pending_read.take() {
                 let to_copy = n.min(pending.bytes_to_read);
                 unsafe {
@@ -446,12 +523,16 @@ unsafe extern "C" fn open(
         // ----- Blocking (synchronous) Open -----
         // Perform the HTTP request on the calling thread so that when we
         // return, the response info is already populated.
+        let guard = LOADER_LIMITER.acquire();
         let inner_for_open = inner_arc.clone();
         match do_open(inner_for_open, host_cbs, url, method, headers, body) {
             Ok(response) => {
                 // Stream body data in a background task.
+                // The concurrency guard is moved into the closure so
+                // the slot is held until streaming finishes.
                 crate::tokio_runtime().spawn_blocking(move || {
-                    stream_body(response, inner_arc, poster, resource_id);
+                    stream_body(response, inner_arc, poster, resource_id, instance_id);
+                    drop(guard);
                 });
                 PP_OK
             }
@@ -460,6 +541,7 @@ unsafe extern "C" fn open(
     } else {
         // ----- Async Open (spawn background I/O task) -----
         crate::tokio_runtime().spawn_blocking(move || {
+            let _guard = LOADER_LIMITER.acquire();
             match do_open(inner_arc.clone(), host_cbs, url, method, headers, body) {
                 Ok(response) => {
                     // Fire the Open completion callback (headers ready).
@@ -469,7 +551,7 @@ unsafe extern "C" fn open(
                         unsafe { cb.run(PP_OK) };
                     }
                     // Stream the response body.
-                    stream_body(response, inner_arc, poster, resource_id);
+                    stream_body(response, inner_arc, poster, resource_id, instance_id);
                 }
                 Err(error_code) => {
                     if let Some(ref p) = poster {
@@ -776,11 +858,16 @@ unsafe extern "C" fn grant_universal_access(loader: PP_Resource) {
 
 unsafe extern "C" fn register_status_callback(
     loader: PP_Resource,
-    _cb: PP_URLLoaderTrusted_StatusCallback,
+    cb: PP_URLLoaderTrusted_StatusCallback,
 ) {
     tracing::debug!(
-        "PPB_URLLoaderTrusted::RegisterStatusCallback(loader={})",
-        loader
+        "PPB_URLLoaderTrusted::RegisterStatusCallback(loader={}, cb={:?})",
+        loader,
+        cb
     );
-    // No-op stub.
+    let Some(host) = HOST.get() else { return };
+    host.resources
+        .with_downcast::<URLLoaderResource, _>(loader, |l| {
+            l.inner.lock().status_callback = cb;
+        });
 }
