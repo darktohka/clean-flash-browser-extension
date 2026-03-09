@@ -4,9 +4,10 @@
 //! (player-ui-traits) to form the complete Flash player logic.
 
 use parking_lot::Mutex;
-use player_ui_traits::{DialogProvider, FileChooserProvider, PlayerState};
+use player_ui_traits::{DialogProvider, EmbedArg, FileChooserProvider, PlayerState};
 use ppapi_host::{HostCallbacks, HostState, PluginLoader};
 use ppapi_sys::*;
+use std::ffi::CString;
 use std::path::Path;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
@@ -55,6 +56,48 @@ pub struct FlashPlayer {
     repaint_callback: Arc<Mutex<Option<Box<dyn Fn() + Send + Sync>>>>,
     /// Callback invoked when Flash requests navigation to a URL.
     navigate_callback: Arc<Mutex<Option<Box<dyn Fn(&str, &str) + Send + Sync>>>>,
+}
+
+fn has_embed_arg(args: &[(String, String)], wanted: &str) -> bool {
+    args.iter().any(|(name, _)| name.eq_ignore_ascii_case(wanted))
+}
+
+fn escape_command_line_value(value: &str) -> String {
+    if value
+        .chars()
+        .any(|c| c.is_ascii_whitespace() || c == '"' || c == '\\')
+    {
+        let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+        format!("\"{}\"", escaped)
+    } else {
+        value.to_string()
+    }
+}
+
+fn format_flash_command_line_args(args: &[(String, String)]) -> String {
+    args.iter()
+        .map(|(name, value)| {
+            format!(
+                "--{}={}",
+                name,
+                escape_command_line_value(value)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn to_cstring_lossy_label(label: &str, value: &str) -> Option<CString> {
+    match CString::new(value) {
+        Ok(s) => Some(s),
+        Err(_) => {
+            tracing::warn!(
+                "Dropping DidCreate argument {} because it contains an interior NUL byte",
+                label
+            );
+            None
+        }
+    }
 }
 
 impl FlashPlayer {
@@ -165,6 +208,14 @@ impl FlashPlayer {
             .build()
             .expect("failed to build HTTP client");
 
+        #[cfg(feature = "url-reqwest")]
+        let http_client_no_redirect = reqwest::blocking::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .expect("failed to build no-redirect HTTP client");
+
         host.set_callbacks(Box::new(PlayerHostCallbacks {
             shared_frame: frame_handle,
             cursor_type: self.cursor_type.clone(),
@@ -173,6 +224,8 @@ impl FlashPlayer {
             navigate_callback: self.navigate_callback.clone(),
             #[cfg(feature = "url-reqwest")]
             http_client,
+            #[cfg(feature = "url-reqwest")]
+            http_client_no_redirect,
         }));
 
         // If a plugin path is set, load it.
@@ -213,12 +266,23 @@ impl FlashPlayer {
 
     /// Open a .swf file: create an instance and call DidCreate.
     ///
+    /// Uses only default embed arguments (`type`, `src`, `movie`, `data`).
+    pub fn open_swf(&mut self, swf_path: &str) -> Result<(), String> {
+        self.open_swf_with_args(swf_path, &[])
+    }
+
+    /// Open a .swf file with explicit embed arguments.
+    ///
     /// Mirrors freshplayerplugin's `call_plugin_did_create_comt` flow:
     ///  1. Query PPP_Instance;1.1 and PPP_InputEvent;0.1
     ///  2. Call DidCreate(id, argc, argn, argv)
     ///  3. Query PPP_Instance_Private;0.1 → call GetInstanceObject
     ///  4. If full-frame: create URLRequestInfo + URLLoader, Open, HandleDocumentLoad
-    pub fn open_swf(&mut self, swf_path: &str) -> Result<(), String> {
+    pub fn open_swf_with_args(
+        &mut self,
+        swf_path: &str,
+        embed_args: &[EmbedArg],
+    ) -> Result<(), String> {
         tracing::info!("open_swf: starting for {}", swf_path);
         let host = ppapi_host::HOST.get().ok_or("Host not initialized")?;
 
@@ -271,27 +335,84 @@ impl FlashPlayer {
         let did_create = ppp.DidCreate.ok_or("PPP_Instance::DidCreate is null")?;
         tracing::info!("open_swf: calling DidCreate for instance {}", instance_id);
 
-        tracing::info!("DidCreate arguments: instance={}, argc=0, argn=nullptr, argv=nullptr", instance_id);
-        tracing::info!("Did_create value: instance={}, argc=0, argn=nullptr, argv=nullptr", instance_id);
+        let mut did_create_args: Vec<(String, String)> = embed_args
+            .iter()
+            .filter_map(|arg| {
+                let name = arg.name.trim();
+                if name.is_empty() {
+                    return None;
+                }
+                Some((name.to_string(), arg.value.clone()))
+            })
+            .collect();
 
-        // Pass type attribute for the MIME type. We'll deliver the actual
-        // SWF data through HandleDocumentLoad.
-        //let type_key = std::ffi::CString::new("type").unwrap();
-        //let type_val = std::ffi::CString::new("application/x-shockwave-flash").unwrap();
-        //let url_key = std::ffi::CString::new("src").unwrap();
-        //let url_val = std::ffi::CString::new(instance_url.clone()).unwrap();
-        //let movie_key = std::ffi::CString::new("movie").unwrap();
-        //let movie_val = std::ffi::CString::new(instance_url.clone()).unwrap();
-        //let data_key = std::ffi::CString::new("data").unwrap();
-        //let data_val = std::ffi::CString::new(instance_url.clone()).unwrap();
+        // Ensure PepperFlash sees the standard embed keys when the page
+        // omitted them from explicit <param> entries.
+        if !has_embed_arg(&did_create_args, "type") {
+            did_create_args.push((
+                "type".to_string(),
+                "application/x-shockwave-flash".to_string(),
+            ));
+        }
+        for key in ["src", "movie", "data"] {
+            if !has_embed_arg(&did_create_args, key) {
+                did_create_args.push((key.to_string(), instance_url.clone()));
+            }
+        }
 
-        //let argn = [type_key.as_ptr(), url_key.as_ptr(), movie_key.as_ptr(), data_key.as_ptr()];
-        //let argv = [type_val.as_ptr(), url_val.as_ptr(), movie_val.as_ptr(), data_val.as_ptr()];
-        let argn = [];
-        let argv = [];
+        let mut argn_c = Vec::with_capacity(did_create_args.len());
+        let mut argv_c = Vec::with_capacity(did_create_args.len());
+        let mut final_did_create_args = Vec::with_capacity(did_create_args.len());
+        for (name, value) in &did_create_args {
+            let Some(name_c) = to_cstring_lossy_label("name", name) else {
+                continue;
+            };
+            let Some(value_c) = to_cstring_lossy_label(name, value) else {
+                continue;
+            };
+            final_did_create_args.push((name.clone(), value.clone()));
+            argn_c.push(name_c);
+            argv_c.push(value_c);
+        }
+
+        host.set_flash_command_line_args(format_flash_command_line_args(
+            &final_did_create_args,
+        ));
+
+        let argn: Vec<*const std::ffi::c_char> = argn_c.iter().map(|s| s.as_ptr()).collect();
+        let argv: Vec<*const std::ffi::c_char> = argv_c.iter().map(|s| s.as_ptr()).collect();
         let argc = argn.len() as u32;
 
-        let result = unsafe { did_create(instance_id, argc, argn.as_ptr(), argv.as_ptr()) };
+        if argc == 0 {
+            tracing::warn!(
+                "DidCreate arguments: instance={}, argc=0, argn=nullptr, argv=nullptr",
+                instance_id
+            );
+        } else {
+            let names: Vec<&str> = final_did_create_args
+                .iter()
+                .map(|(k, _)| k.as_str())
+                .collect();
+            tracing::info!(
+                "DidCreate arguments: instance={}, argc={}, arg names={:?}",
+                instance_id,
+                argc,
+                names
+            );
+        }
+
+        let argn_ptr = if argn.is_empty() {
+            std::ptr::null()
+        } else {
+            argn.as_ptr()
+        };
+        let argv_ptr = if argv.is_empty() {
+            std::ptr::null()
+        } else {
+            argv.as_ptr()
+        };
+
+        let result = unsafe { did_create(instance_id, argc, argn_ptr, argv_ptr) };
         tracing::info!("open_swf: DidCreate returned {}", result);
 
         if result == PP_FALSE {
@@ -782,6 +903,8 @@ struct PlayerHostCallbacks {
     navigate_callback: Arc<Mutex<Option<Box<dyn Fn(&str, &str) + Send + Sync>>>>,
     #[cfg(feature = "url-reqwest")]
     http_client: reqwest::blocking::Client,
+    #[cfg(feature = "url-reqwest")]
+    http_client_no_redirect: reqwest::blocking::Client,
 }
 
 /// Wrapper to make `Arc<dyn FileChooserProvider>` implement the trait as a `Box`.
@@ -796,6 +919,65 @@ impl FileChooserProvider for ArcFileChooserProvider {
     ) -> Vec<String> {
         self.0.show_file_chooser(mode, accept_types, suggested_name)
     }
+}
+
+#[cfg(feature = "url-reqwest")]
+fn map_io_error_kind_to_pp(kind: std::io::ErrorKind) -> i32 {
+    use std::io::ErrorKind;
+
+    match kind {
+        ErrorKind::TimedOut => ppapi_sys::PP_ERROR_CONNECTION_TIMEDOUT,
+        ErrorKind::ConnectionRefused => ppapi_sys::PP_ERROR_CONNECTION_REFUSED,
+        ErrorKind::ConnectionReset => ppapi_sys::PP_ERROR_CONNECTION_RESET,
+        ErrorKind::ConnectionAborted => ppapi_sys::PP_ERROR_CONNECTION_ABORTED,
+        ErrorKind::NotConnected | ErrorKind::BrokenPipe | ErrorKind::UnexpectedEof => {
+            ppapi_sys::PP_ERROR_CONNECTION_CLOSED
+        }
+        ErrorKind::AddrInUse => ppapi_sys::PP_ERROR_ADDRESS_IN_USE,
+        ErrorKind::AddrNotAvailable => ppapi_sys::PP_ERROR_ADDRESS_INVALID,
+        _ => ppapi_sys::PP_ERROR_CONNECTION_FAILED,
+    }
+}
+
+#[cfg(feature = "url-reqwest")]
+fn extract_io_error_kind(
+    mut current: Option<&(dyn std::error::Error + 'static)>,
+) -> Option<std::io::ErrorKind> {
+    while let Some(err) = current {
+        if let Some(io_err) = err.downcast_ref::<std::io::Error>() {
+            return Some(io_err.kind());
+        }
+        current = err.source();
+    }
+
+    None
+}
+
+#[cfg(feature = "url-reqwest")]
+fn map_reqwest_transport_error(error: &reqwest::Error) -> i32 {
+    if error.is_timeout() {
+        return ppapi_sys::PP_ERROR_CONNECTION_TIMEDOUT;
+    }
+
+    if let Some(kind) = extract_io_error_kind(Some(error)) {
+        return map_io_error_kind_to_pp(kind);
+    }
+
+    if error.is_connect() {
+        let msg = error.to_string().to_ascii_lowercase();
+        if msg.contains("failed to lookup address")
+            || msg.contains("no such host")
+            || msg.contains("name or service not known")
+            || msg.contains("temporary failure in name resolution")
+            || msg.contains("nodename nor servname")
+            || msg.contains("dns")
+        {
+            return ppapi_sys::PP_ERROR_NAME_NOT_RESOLVED;
+        }
+        return ppapi_sys::PP_ERROR_CONNECTION_FAILED;
+    }
+
+    ppapi_sys::PP_ERROR_FAILED
 }
 
 impl HostCallbacks for PlayerHostCallbacks {
@@ -865,12 +1047,13 @@ impl HostCallbacks for PlayerHostCallbacks {
         method: &str,
         headers: &str,
         body: Option<&[u8]>,
+        follow_redirects: bool,
     ) -> Result<ppapi_host::UrlLoadResponse, i32> {
         tracing::info!("URL open requested: {} {}", method, url);
 
         // Suppress unused-variable warnings when reqwest is not enabled.
         #[cfg(not(feature = "url-reqwest"))]
-        let _ = (headers, body);
+        let _ = (headers, body, follow_redirects);
 
         // ----- file:// or bare path → local filesystem -----
         let path = if let Some(stripped) = url.strip_prefix("file://") {
@@ -901,7 +1084,7 @@ impl HostCallbacks for PlayerHostCallbacks {
             );
             return Ok(ppapi_host::UrlLoadResponse {
                 status_code: 200,
-                status_line: "HTTP/1.1 200 OK".to_string(),
+                status_line: "OK".to_string(),
                 headers: headers_str,
                 body: Box::new(std::io::BufReader::new(file)),
                 content_length: len,
@@ -911,12 +1094,19 @@ impl HostCallbacks for PlayerHostCallbacks {
         // ----- http:// / https:// → reqwest -----
         #[cfg(feature = "url-reqwest")]
         if url.starts_with("http://") || url.starts_with("https://") {
+            // Redirect behavior is controlled per PPB_URLLoader request.
+            let http_client = if follow_redirects {
+                self.http_client.clone()
+            } else {
+                self.http_client_no_redirect.clone()
+            };
+
             // Build the request with the specified method.
             let http_method = method.to_uppercase().parse::<reqwest::Method>().map_err(|e| {
                 tracing::warn!("URL open: invalid HTTP method '{}': {}", method, e);
                 ppapi_sys::PP_ERROR_FAILED
             })?;
-            let mut req = self.http_client.request(http_method, url);
+            let mut req = http_client.request(http_method, url);
 
             // Apply custom headers from the plugin.
             for line in headers.split("\r\n").chain(headers.split('\n')) {
@@ -937,17 +1127,31 @@ impl HostCallbacks for PlayerHostCallbacks {
             let response = match req.send() {
                 Ok(resp) => resp,
                 Err(e) => {
-                    tracing::warn!("URL open: transport error for {}: {}", url, e);
-                    return Err(ppapi_sys::PP_ERROR_FAILED);
+                    let pp_error = map_reqwest_transport_error(&e);
+                    tracing::warn!(
+                        "URL open: transport error for {}: {} (pp_error={})",
+                        url,
+                        e,
+                        pp_error
+                    );
+                    return Err(pp_error);
                 }
             };
 
             let status_code = response.status().as_u16();
-            let status_line = format!(
-                "HTTP/1.1 {} {}",
-                status_code,
-                response.status().canonical_reason().unwrap_or("Unknown")
-            );
+            let status_line = response
+                .status()
+                .canonical_reason()
+                .unwrap_or("Unknown")
+                .to_string();
+
+            if !(200..=299).contains(&status_code) {
+                tracing::info!(
+                    "URL open: non-2xx HTTP status {} for {} (returned as response, not transport error)",
+                    status_code,
+                    url
+                );
+            }
 
             // Reconstruct response headers.
             let mut resp_headers = String::new();
@@ -984,7 +1188,7 @@ impl HostCallbacks for PlayerHostCallbacks {
             tracing::warn!("URL open: stub loader returning 404 for {}", url);
             return Ok(ppapi_host::UrlLoadResponse {
                 status_code: 404,
-                status_line: "HTTP/1.1 404 Not Found".to_string(),
+                status_line: "Not Found".to_string(),
                 headers: "Content-Length: 0\r\n\r\n".to_string(),
                 body: Box::new(std::io::empty()),
                 content_length: Some(0),

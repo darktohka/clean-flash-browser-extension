@@ -7,6 +7,11 @@ use std::any::Any;
 
 use super::super::HOST;
 
+#[inline]
+fn is_redirect(status_code: i32) -> bool {
+    (300..=399).contains(&status_code)
+}
+
 /// URLResponseInfo resource.
 pub struct URLResponseInfoResource {
     pub url: String,
@@ -80,17 +85,29 @@ unsafe extern "C" fn get_property(
                 host.vars.var_from_str(&r.headers)
             }
             PP_URLRESPONSEPROPERTY_REDIRECTURL => {
-                if r.redirect_url.is_empty() {
-                    tracing::trace!("PPB_URLResponseInfo::GetProperty(response={}, REDIRECTURL) -> undefined", response);
-                    PP_Var::undefined()
-                } else {
-                    tracing::trace!("PPB_URLResponseInfo::GetProperty(response={}, REDIRECTURL) -> {:?}", response, r.redirect_url);
+                if is_redirect(r.status_code) {
+                    tracing::trace!(
+                        "PPB_URLResponseInfo::GetProperty(response={}, REDIRECTURL) -> {:?}",
+                        response,
+                        r.redirect_url
+                    );
                     host.vars.var_from_str(&r.redirect_url)
+                } else {
+                    tracing::trace!(
+                        "PPB_URLResponseInfo::GetProperty(response={}, REDIRECTURL) -> undefined",
+                        response
+                    );
+                    PP_Var::undefined()
                 }
             }
             PP_URLRESPONSEPROPERTY_REDIRECTMETHOD => {
-                tracing::info!("PPB_URLResponseInfo::GetProperty(response={}, property={}) -> undefined <-- Flash querying redirect", response, property);
-                PP_Var::undefined()
+                if is_redirect(r.status_code) {
+                    // Chromium currently exposes status_text here.
+                    host.vars.var_from_str(&r.status_line)
+                } else {
+                    tracing::info!("PPB_URLResponseInfo::GetProperty(response={}, property={}) -> undefined <-- Flash querying redirect", response, property);
+                    PP_Var::undefined()
+                }
             }
             _ => {
                 tracing::info!("PPB_URLResponseInfo::GetProperty(response={}, property={}) -> undefined (unknown) <-- Flash querying unknown property", response, property);
@@ -105,6 +122,7 @@ unsafe extern "C" fn get_property(
 }
 
 unsafe extern "C" fn get_body_as_file_ref(response: PP_Resource) -> PP_Resource {
+    // This should not be implemented, because Chrome does not support it
     tracing::debug!("PPB_URLResponseInfo::GetBodyAsFileRef(response={}) -> 0 (not implemented)", response);
     0 // Not implemented.
 }

@@ -14,6 +14,7 @@
 // Debug mode — set to true to show a live statistics panel below each canvas.
 // ---------------------------------------------------------------------------
 const FLASH_DEBUG = true;
+const LOG_HOST_EVENTS = true;
 
 // ---------------------------------------------------------------------------
 // Utilities
@@ -43,7 +44,14 @@ function getFlashParams(elem) {
       return null;
     }
 
-    const params = { src: elem.getAttribute("data") };
+    const params = {};
+    const attrs = elem.attributes;
+    for (let i = 0; i < attrs.length; i++) {
+      params[attrs[i].name.toLowerCase()] = attrs[i].value;
+    }
+    if (!params.src && params.data) {
+      params.src = params.data;
+    }
     for (let i = 0; i < elem.children.length; i++) {
       const c = elem.children[i];
       if (c.nodeName.toLowerCase() !== "param") continue;
@@ -74,6 +82,34 @@ function getFlashParams(elem) {
   }
 
   return null;
+}
+
+/**
+ * Convert parsed <object>/<embed> params into DidCreate argn/argv pairs.
+ */
+function buildDidCreateArgs(params, swfUrl) {
+  const args = [];
+  const seen = new Set();
+
+  const push = (name, value) => {
+    if (name == null) return;
+    const key = String(name).trim().toLowerCase();
+    if (!key || seen.has(key)) return;
+    args.push({ name: key, value: value == null ? "" : String(value) });
+    seen.add(key);
+  };
+
+  for (const [name, value] of Object.entries(params || {})) {
+    push(name, value);
+  }
+
+  // Keep core Flash keys present even if not explicitly specified in HTML.
+  push("type", "application/x-shockwave-flash");
+  push("src", swfUrl);
+  push("movie", swfUrl);
+  push("data", swfUrl);
+
+  return args;
 }
 
 /**
@@ -123,7 +159,7 @@ const _qoiReady = (async () => {
 
 /**
  * Per-instance metadata used for crash recovery.
- * instanceId -> { canvas, ctx, swfUrl, origWidth, origHeight, port, container, elem }
+ * instanceId -> { canvas, ctx, swfUrl, didCreateArgs, origWidth, origHeight, port, container, elem }
  */
 const instanceMeta = new Map();
 
@@ -408,6 +444,7 @@ function replaceFlashElement(elem) {
 
   const swfUrl = resolveSwfUrl(params.src);
   if (!swfUrl) return false;
+  const didCreateArgs = buildDidCreateArgs(params, swfUrl);
 
   const instanceId = nextInstanceId++;
 
@@ -438,7 +475,17 @@ function replaceFlashElement(elem) {
   container.appendChild(canvas);
 
   // ---- Store instance metadata for crash recovery ----
-  const meta = { canvas, ctx, swfUrl, origWidth, origHeight, port: null, container, elem };
+  const meta = {
+    canvas,
+    ctx,
+    swfUrl,
+    didCreateArgs,
+    origWidth,
+    origHeight,
+    port: null,
+    container,
+    elem,
+  };
   instanceMeta.set(instanceId, meta);
 
   // ---- Debug stats panel (below the canvas) ----
@@ -485,7 +532,7 @@ function replaceFlashElement(elem) {
  * background service worker and wiring up message handlers.
  */
 function startInstance(instanceId, meta) {
-  const { canvas, ctx, swfUrl, origWidth, origHeight } = meta;
+  const { canvas, ctx, swfUrl, didCreateArgs, origWidth, origHeight } = meta;
 
   const port = chrome.runtime.connect({ name: "flash-instance" });
   meta.port = port;
@@ -496,6 +543,7 @@ function startInstance(instanceId, meta) {
     type: "start",
     instanceId,
     url: swfUrl,
+    args: didCreateArgs,
     width: origWidth,
     height: origHeight,
   });
@@ -710,6 +758,16 @@ const TAG_AUDIO_INPUT_OPEN  = 0x30;
 const TAG_AUDIO_INPUT_START = 0x31;
 const TAG_AUDIO_INPUT_STOP  = 0x32;
 const TAG_AUDIO_INPUT_CLOSE = 0x33;
+
+function tagHex(tag) {
+  return `0x${tag.toString(16).padStart(2, "0")}`;
+}
+
+function logHostEvent(tag, payloadBytes) {
+  if (!LOG_HOST_EVENTS) return;
+  const name = TAG_NAMES[tag] || `UNKNOWN(${tagHex(tag)})`;
+  console.log("[Flash Player] Host event:", name, `tag=${tagHex(tag)}`, `bytes=${payloadBytes}`);
+}
 
 /**
  * Read a little-endian u32 from a DataView at the given offset.
@@ -1129,6 +1187,9 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
   const tag = bytes[0];
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 
+  // Log every host-originated event type as it arrives.
+  logHostEvent(tag, bytes.length);
+
   // ---- Debug stats recording ----
   // Find the stats object for this canvas (there may be multiple instances).
   let _ds = null;
@@ -1376,12 +1437,44 @@ function sendToPageScript(req) {
 }
 
 /**
+ * Find instance metadata for the given native messaging port.
+ */
+function getMetaForPort(port) {
+  for (const meta of instanceMeta.values()) {
+    if (meta.port === port) {
+      return meta;
+    }
+  }
+  return null;
+}
+
+/**
  * Handle a scripting request from the native host.
  * Forwards to the MAIN-world page script and sends the response back.
  */
 function handleScriptRequest(req, port) {
   const id = req.id;
   const op = req.op;
+
+  if (op === "getDocumentUrl") {
+    sendScriptResponse(port, id, { type: "string", v: window.location.href });
+    return;
+  }
+
+  if (op === "getDocumentBaseUrl") {
+    sendScriptResponse(port, id, { type: "string", v: document.baseURI || window.location.href });
+    return;
+  }
+
+  if (op === "getPluginUrl") {
+    const meta = getMetaForPort(port);
+    if (meta && typeof meta.swfUrl === "string" && meta.swfUrl.length > 0) {
+      sendScriptResponse(port, id, { type: "string", v: meta.swfUrl });
+    } else {
+      sendScriptResponse(port, id, { type: "undefined" });
+    }
+    return;
+  }
 
   // Fire-and-forget operations (e.g. "release") don't need a response.
   if (op === "release") {

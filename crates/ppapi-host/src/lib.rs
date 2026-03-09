@@ -97,10 +97,19 @@ pub trait HostCallbacks: Send + Sync {
     /// (e.g. perform HTTP I/O).  The returned reader is consumed in
     /// chunks by the URLLoader streaming loop.
     ///
+    /// Chromium semantics: HTTP status codes (including 4xx/5xx) are
+    /// represented as a successful URL response (`Ok(UrlLoadResponse)`),
+    /// not as transport errors. Use `Err(PP_ERROR_*)` only for failures
+    /// where no valid HTTP response is available (DNS/TCP/TLS/I/O, policy
+    /// denial, etc.).
+    ///
     /// * `url`     — the resolved URL string.
     /// * `method`  — HTTP method ("GET", "POST", etc.).
     /// * `headers` — request headers, CRLF-delimited.
     /// * `body`    — optional request body (from `AppendDataToBody`).
+    /// * `follow_redirects` — whether redirects should be followed
+    ///   automatically (`true`) or surfaced to PPB_URLLoader for auditing
+    ///   via `FollowRedirect` (`false`).
     ///
     /// Return `Err(PP_ERROR_*)` on failure.
     fn on_url_open(
@@ -109,6 +118,7 @@ pub trait HostCallbacks: Send + Sync {
         method: &str,
         headers: &str,
         body: Option<&[u8]>,
+        follow_redirects: bool,
     ) -> Result<UrlLoadResponse, i32>;
 
     /// Show an alert dialog with a message. Blocks until dismissed.
@@ -184,6 +194,12 @@ pub struct HostState {
     /// Fullscreen provider for toggling fullscreen mode.
     /// When set, PPB_FlashFullscreen and PPB_Fullscreen use this.
     pub fullscreen_provider: Mutex<Option<Arc<dyn player_ui_traits::FullscreenProvider>>>,
+    /// URL provider for browser-hosted URL utility queries.
+    /// When set, PPB_URLUtil(Dev)::GetDocumentURL/GetPluginInstanceURL use this.
+    pub url_provider: Mutex<Option<Arc<dyn player_ui_traits::UrlProvider>>>,
+    /// Serialized command-line string exposed via
+    /// `PPB_Flash::GetCommandLineArgs`.
+    pub flash_command_line_args: Mutex<String>,
     /// The plugin's main scriptable object, obtained via
     /// `PPP_Instance_Private::GetInstanceObject`.  Used to route incoming
     /// `CallFunction` invocations (ExternalInterface JS→AS direction)
@@ -228,6 +244,8 @@ impl HostState {
                 audio_input_provider: Mutex::new(None),
                 clipboard_provider: Mutex::new(None),
                 fullscreen_provider: Mutex::new(None),
+                url_provider: Mutex::new(None),
+                flash_command_line_args: Mutex::new(String::new()),
                 instance_object: Mutex::new(None),
             }
         })
@@ -286,6 +304,27 @@ impl HostState {
     /// Get a cloned `Arc` handle to the fullscreen provider, if set.
     pub fn get_fullscreen_provider(&self) -> Option<Arc<dyn player_ui_traits::FullscreenProvider>> {
         self.fullscreen_provider.lock().clone()
+    }
+
+    /// Set the URL provider for browser-sourced document/plugin URL queries.
+    pub fn set_url_provider(&self, provider: Box<dyn player_ui_traits::UrlProvider>) {
+        *self.url_provider.lock() = Some(Arc::from(provider));
+    }
+
+    /// Get a cloned `Arc` handle to the URL provider, if set.
+    pub fn get_url_provider(&self) -> Option<Arc<dyn player_ui_traits::UrlProvider>> {
+        self.url_provider.lock().clone()
+    }
+
+    /// Set the command-line string returned by
+    /// `PPB_Flash::GetCommandLineArgs`.
+    pub fn set_flash_command_line_args(&self, args: impl Into<String>) {
+        *self.flash_command_line_args.lock() = args.into();
+    }
+
+    /// Get the command-line string exposed to Flash.
+    pub fn get_flash_command_line_args(&self) -> String {
+        self.flash_command_line_args.lock().clone()
     }
 
     /// Get a cloned `Arc` handle to the scripting provider, if set.

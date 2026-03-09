@@ -39,6 +39,16 @@ pub struct FrameData {
     pub height: u32,
 }
 
+/// One key/value argument passed to `PPP_Instance::DidCreate`.
+///
+/// In browser-hosted mode these are sourced from the page's
+/// `<object>/<embed>` attributes and `<param>` tags.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbedArg {
+    pub name: String,
+    pub value: String,
+}
+
 /// Commands that the UI sends to the player core.
 #[derive(Debug, Clone)]
 pub enum PlayerCommand {
@@ -257,6 +267,36 @@ pub trait ScriptProvider: Send + Sync {
 
     /// Tell the browser it may release the object reference with this id.
     fn release_object(&self, object_id: u64);
+}
+
+// ===========================================================================
+// URL provider — browser document / plugin source URL retrieval
+// ===========================================================================
+
+/// Provides browser-sourced URL values used by `PPB_URLUtil(Dev)`.
+///
+/// In browser-hosted players this allows the host to query the real page
+/// URL (`window.location.href`) and the plugin instance source URL
+/// (`<embed src>` / `<object data|movie>` resolution) from the extension.
+pub trait UrlProvider: Send + Sync {
+    /// Return the URL of the document hosting the given plugin instance.
+    ///
+    /// Mirrors `PPB_URLUtil(Dev)::GetDocumentURL` semantics.
+    fn get_document_url(&self, instance: i32) -> Option<String>;
+
+    /// Return the document base URL used for relative URL resolution.
+    ///
+    /// Mirrors `PPB_URLUtil(Dev)::ResolveRelativeToDocument` semantics.
+    /// This may differ from `window.location.href` when the page has a
+    /// `<base>` element.
+    fn get_document_base_url(&self, instance: i32) -> Option<String> {
+        self.get_document_url(instance)
+    }
+
+    /// Return the source URL of the given plugin instance.
+    ///
+    /// Mirrors `PPB_URLUtil(Dev)::GetPluginInstanceURL` semantics.
+    fn get_plugin_instance_url(&self, instance: i32) -> Option<String>;
 }
 
 // ===========================================================================

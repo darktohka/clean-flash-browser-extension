@@ -7,7 +7,8 @@
 //! # Protocol (extension → host)
 //!
 //! ```json
-//! {"type": "open", "url": "https://example.com/game.swf"}
+//! {"type": "open", "url": "https://example.com/game.swf",
+//!  "args": [{"name": "allowScriptAccess", "value": "always"}]}
 //! {"type": "resize", "width": 800, "height": 600}
 //! {"type": "mousedown", "x": 100, "y": 200, "button": 0, "modifiers": 0}
 //! {"type": "mouseup",   "x": 100, "y": 200, "button": 0, "modifiers": 0}
@@ -39,6 +40,7 @@ mod script_bridge;
 
 use parking_lot::Mutex;
 use player_core::FlashPlayer;
+use player_ui_traits::EmbedArg;
 use ppapi_sys::*;
 use serde_json::json;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -176,8 +178,9 @@ fn main() {
     {
         let host = ppapi_host::HOST.get().expect("HOST not initialised");
         host.set_script_provider(Box::new(
-            script_bridge::WebScriptProvider::new(script_bridge),
+            script_bridge::WebScriptProvider::new(script_bridge.clone()),
         ));
+        host.set_url_provider(Box::new(WebUrlProvider::new(script_bridge.clone())));
 
         // Set up the audio provider so that Flash audio is forwarded to
         // the browser's Web Audio API instead of playing via cpal.
@@ -340,6 +343,31 @@ fn try_read_command() -> Option<serde_json::Value> {
 // Command handling
 // ===========================================================================
 
+fn parse_open_embed_args(cmd: &serde_json::Value) -> Vec<EmbedArg> {
+    let Some(raw_args) = cmd.get("args").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+
+    raw_args
+        .iter()
+        .filter_map(|raw| {
+            let name = raw.get("name").and_then(|v| v.as_str())?.trim();
+            if name.is_empty() {
+                return None;
+            }
+            let value = raw
+                .get("value")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            Some(EmbedArg {
+                name: name.to_string(),
+                value,
+            })
+        })
+        .collect()
+}
+
 /// Handle one incoming JSON command. Returns `false` to signal shutdown.
 fn handle_command(player: &mut FlashPlayer, cmd: &serde_json::Value) -> bool {
     let msg_type = cmd["type"].as_str().unwrap_or("");
@@ -353,8 +381,10 @@ fn handle_command(player: &mut FlashPlayer, cmd: &serde_json::Value) -> bool {
                 ));
                 return true;
             }
+            let embed_args = parse_open_embed_args(cmd);
             tracing::info!("Opening SWF: {}", url);
-            match player.open_swf(url) {
+            tracing::info!("Open command includes {} DidCreate args", embed_args.len());
+            match player.open_swf_with_args(url, &embed_args) {
                 Ok(()) => {
                     let _ = protocol::send_host_message(&protocol::HostMessage::State {
                         code: 2, // running
@@ -1046,5 +1076,48 @@ impl player_ui_traits::FullscreenProvider for WebFullscreenProvider {
         let w = obj.get("w")?.as_i64()? as i32;
         let h = obj.get("h")?.as_i64()? as i32;
         Some((w, h))
+    }
+}
+
+// ===========================================================================
+// Web URL provider — browser-backed document/plugin URL lookups
+// ===========================================================================
+
+struct WebUrlProvider {
+    bridge: Arc<script_bridge::ScriptBridge>,
+}
+
+impl WebUrlProvider {
+    fn new(bridge: Arc<script_bridge::ScriptBridge>) -> Self {
+        Self { bridge }
+    }
+
+    fn decode_string_value(resp: Option<serde_json::Value>) -> Option<String> {
+        let value = resp.as_ref()?.get("value")?;
+        let ty = value.get("type")?.as_str()?;
+        if ty != "string" {
+            return None;
+        }
+        value.get("v")?.as_str().map(|s| s.to_string())
+    }
+}
+
+impl player_ui_traits::UrlProvider for WebUrlProvider {
+    fn get_document_url(&self, _instance: i32) -> Option<String> {
+        Self::decode_string_value(self.bridge.request(serde_json::json!({
+            "op": "getDocumentUrl",
+        })))
+    }
+
+    fn get_document_base_url(&self, _instance: i32) -> Option<String> {
+        Self::decode_string_value(self.bridge.request(serde_json::json!({
+            "op": "getDocumentBaseUrl",
+        })))
+    }
+
+    fn get_plugin_instance_url(&self, _instance: i32) -> Option<String> {
+        Self::decode_string_value(self.bridge.request(serde_json::json!({
+            "op": "getPluginUrl",
+        })))
     }
 }

@@ -51,6 +51,7 @@ fn parse_components(url: &str, components: *mut PP_URLComponents_Dev) {
     if components.is_null() {
         return;
     }
+
     let mut comp = PP_URLComponents_Dev::default();
     // Initialize all as "not present" (len = -1, matching Chrome convention)
     comp.scheme = ABSENT;
@@ -62,83 +63,201 @@ fn parse_components(url: &str, components: *mut PP_URLComponents_Dev) {
     comp.query = ABSENT;
     comp.ref_ = ABSENT;
 
-    let bytes = url.as_bytes();
+    // Parse fragment/query boundaries first so authority/path parsing does not
+    // accidentally consume them.
+    let ref_start = url.find('#');
+    let end_no_ref = ref_start.unwrap_or(url.len());
+    if let Some(hash) = ref_start {
+        comp.ref_ = PP_URLComponent_Dev {
+            begin: (hash + 1) as i32,
+            len: (url.len() - hash - 1) as i32,
+        };
+    }
+
+    let query_start = url[..end_no_ref].find('?');
+    let end_no_query = query_start.unwrap_or(end_no_ref);
+    if let Some(qmark) = query_start {
+        comp.query = PP_URLComponent_Dev {
+            begin: (qmark + 1) as i32,
+            len: (end_no_ref - qmark - 1) as i32,
+        };
+    }
+
     let mut pos = 0usize;
 
-    // Scheme: find "://"
-    if let Some(scheme_end) = url.find("://") {
+    // Scheme (supports both hierarchical and non-hierarchical URLs).
+    if let Some((scheme, _)) = split_scheme(&url[..end_no_query]) {
+        let scheme_end = scheme.len();
         comp.scheme = PP_URLComponent_Dev {
             begin: 0,
             len: scheme_end as i32,
         };
-        pos = scheme_end + 3; // skip "://"
+        pos = scheme_end + 1; // skip ":"
 
-        // Authority (host[:port])
-        let auth_start = pos;
-        let auth_end = url[pos..]
-            .find('/')
-            .map(|i| pos + i)
-            .unwrap_or(url.len());
+        // Authority (if present): //[userinfo@]host[:port]
+        if url[pos..end_no_query].starts_with("//") {
+            let auth_start = pos + 2;
+            let auth_end = url[auth_start..end_no_query]
+                .find('/')
+                .map(|i| auth_start + i)
+                .unwrap_or(end_no_query);
 
-        let auth = &url[auth_start..auth_end];
-        // Check for port
-        if let Some(colon) = auth.rfind(':') {
-            comp.host = PP_URLComponent_Dev {
-                begin: auth_start as i32,
-                len: colon as i32,
-            };
-            comp.port = PP_URLComponent_Dev {
-                begin: (auth_start + colon + 1) as i32,
-                len: (auth.len() - colon - 1) as i32,
-            };
-        } else {
-            comp.host = PP_URLComponent_Dev {
-                begin: auth_start as i32,
-                len: auth.len() as i32,
-            };
+            let authority = &url[auth_start..auth_end];
+            let mut hostport_start = auth_start;
+
+            // Userinfo: username[:password]@
+            if let Some(at_rel) = authority.rfind('@') {
+                let userinfo_start = auth_start;
+                let userinfo_end = auth_start + at_rel;
+                let userinfo = &url[userinfo_start..userinfo_end];
+                hostport_start = userinfo_end + 1;
+
+                if let Some(colon_rel) = userinfo.find(':') {
+                    comp.username = PP_URLComponent_Dev {
+                        begin: userinfo_start as i32,
+                        len: colon_rel as i32,
+                    };
+                    comp.password = PP_URLComponent_Dev {
+                        begin: (userinfo_start + colon_rel + 1) as i32,
+                        len: (userinfo.len() - colon_rel - 1) as i32,
+                    };
+                } else {
+                    comp.username = PP_URLComponent_Dev {
+                        begin: userinfo_start as i32,
+                        len: userinfo.len() as i32,
+                    };
+                }
+            }
+
+            let hostport = &url[hostport_start..auth_end];
+
+            // Host + optional port, with IPv6 literal support.
+            if hostport.starts_with('[') {
+                if let Some(close_rel) = hostport.find(']') {
+                    // [ipv6]
+                    comp.host = PP_URLComponent_Dev {
+                        begin: hostport_start as i32,
+                        len: (close_rel + 1) as i32,
+                    };
+
+                    if close_rel + 1 < hostport.len() {
+                        if hostport.as_bytes()[close_rel + 1] == b':' {
+                            comp.port = PP_URLComponent_Dev {
+                                begin: (hostport_start + close_rel + 2) as i32,
+                                len: (hostport.len() - close_rel - 2) as i32,
+                            };
+                        } else {
+                            // Malformed tail after ]: keep entire hostport as host.
+                            comp.host = PP_URLComponent_Dev {
+                                begin: hostport_start as i32,
+                                len: hostport.len() as i32,
+                            };
+                        }
+                    }
+                } else {
+                    // Malformed IPv6 literal: keep as host.
+                    comp.host = PP_URLComponent_Dev {
+                        begin: hostport_start as i32,
+                        len: hostport.len() as i32,
+                    };
+                }
+            } else if let Some(colon_rel) = hostport.rfind(':') {
+                comp.host = PP_URLComponent_Dev {
+                    begin: hostport_start as i32,
+                    len: colon_rel as i32,
+                };
+                comp.port = PP_URLComponent_Dev {
+                    begin: (hostport_start + colon_rel + 1) as i32,
+                    len: (hostport.len() - colon_rel - 1) as i32,
+                };
+            } else {
+                // Also covers empty host (eg file:///path) with len=0.
+                comp.host = PP_URLComponent_Dev {
+                    begin: hostport_start as i32,
+                    len: hostport.len() as i32,
+                };
+            }
+
+            pos = auth_end;
         }
-        pos = auth_end;
     }
 
-    // Path
+    // Path (may be empty when query/fragment exists immediately after authority)
     if pos < url.len() {
-        let path_start = pos;
-        let path_end = url[pos..]
-            .find(|c| c == '?' || c == '#')
-            .map(|i| pos + i)
-            .unwrap_or(url.len());
         comp.path = PP_URLComponent_Dev {
-            begin: path_start as i32,
-            len: (path_end - path_start) as i32,
-        };
-        pos = path_end;
-    }
-
-    // Query
-    if pos < url.len() && bytes[pos] == b'?' {
-        pos += 1;
-        let query_start = pos;
-        let query_end = url[pos..]
-            .find('#')
-            .map(|i| pos + i)
-            .unwrap_or(url.len());
-        comp.query = PP_URLComponent_Dev {
-            begin: query_start as i32,
-            len: (query_end - query_start) as i32,
-        };
-        pos = query_end;
-    }
-
-    // Fragment
-    if pos < url.len() && bytes[pos] == b'#' {
-        pos += 1;
-        comp.ref_ = PP_URLComponent_Dev {
             begin: pos as i32,
-            len: (url.len() - pos) as i32,
+            len: (end_no_query - pos) as i32,
         };
     }
 
     unsafe { *components = comp };
+}
+
+fn non_empty_url(url: Option<String>) -> Option<String> {
+    url.and_then(|u| {
+        if u.trim().is_empty() {
+            None
+        } else {
+            Some(u)
+        }
+    })
+}
+
+fn var_to_string(host: &crate::HostState, var: PP_Var) -> Option<String> {
+    host.vars.get_string(var)
+}
+
+fn split_scheme(url: &str) -> Option<(&str, &str)> {
+    let colon = url.find(':')?;
+    let scheme = &url[..colon];
+    if scheme.is_empty() {
+        return None;
+    }
+
+    let mut chars = scheme.chars();
+    let first = chars.next()?;
+    if !first.is_ascii_alphabetic() {
+        return None;
+    }
+    if !chars.all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.') {
+        return None;
+    }
+
+    Some((scheme, &url[colon + 1..]))
+}
+
+fn split_hierarchical_url(url: &str) -> Option<(&str, &str, &str)> {
+    let (scheme, after_scheme) = split_scheme(url)?;
+    let after_slashes = after_scheme.strip_prefix("//")?;
+
+    let authority_end = after_slashes
+        .find(|c| c == '/' || c == '?' || c == '#')
+        .unwrap_or(after_slashes.len());
+    let authority = &after_slashes[..authority_end];
+    let tail = &after_slashes[authority_end..];
+
+    Some((scheme, authority, tail))
+}
+
+fn is_absolute_url(url: &str) -> bool {
+    split_scheme(url).is_some()
+}
+
+fn document_base_url(host: &crate::HostState, instance: PP_Instance) -> Option<String> {
+    let provider = host.get_url_provider();
+
+    non_empty_url(
+        provider
+            .as_ref()
+            .and_then(|p| p.get_document_base_url(instance)),
+    )
+    .or_else(|| {
+        non_empty_url(
+            host.instances
+                .with_instance(instance, |inst| inst.swf_url.clone())
+                .flatten(),
+        )
+    })
 }
 
 unsafe extern "C" fn canonicalize(
@@ -149,7 +268,13 @@ unsafe extern "C" fn canonicalize(
     let Some(host) = HOST.get() else {
         return PP_Var::undefined();
     };
-    let url_str = host.vars.get_string(url).unwrap_or_default();
+    let Some(url_str) = var_to_string(host, url) else {
+        return PP_Var::null();
+    };
+    if !is_absolute_url(url_str.trim()) {
+        return PP_Var::null();
+    }
+
     parse_components(&url_str, components);
     // Return the URL as-is (already canonical enough for our purposes).
     host.vars.var_from_str(&url_str)
@@ -168,10 +293,17 @@ unsafe extern "C" fn resolve_relative_to_url(
     let Some(host) = HOST.get() else {
         return PP_Var::undefined();
     };
-    let base = host.vars.get_string(base_url).unwrap_or_default();
-    let relative = host.vars.get_string(relative_string).unwrap_or_default();
+    let Some(base) = var_to_string(host, base_url) else {
+        return PP_Var::null();
+    };
+    let Some(relative) = var_to_string(host, relative_string) else {
+        return PP_Var::null();
+    };
 
-    let resolved = resolve_url(&base, &relative);
+    let Some(resolved) = resolve_url(Some(&base), &relative) else {
+        return PP_Var::null();
+    };
+
     parse_components(&resolved, components);
     host.vars.var_from_str(&resolved)
 }
@@ -190,16 +322,17 @@ unsafe extern "C" fn resolve_relative_to_document(
         return PP_Var::undefined();
     };
 
-    // Get the instance's SWF URL as the base.
-    let base_url: String = host
-        .instances
-        .with_instance(instance, |inst| {
-            inst.swf_url.clone().unwrap_or_default()
-        })
-        .unwrap_or_default();
+    let Some(relative) = var_to_string(host, relative_string) else {
+        return PP_Var::null();
+    };
 
-    let relative = host.vars.get_string(relative_string).unwrap_or_default();
-    let resolved = resolve_url(&base_url, &relative);
+    // PPAPI uses the containing document URL as the base for this API.
+    let base_url = document_base_url(host, instance);
+
+    let Some(resolved) = resolve_url(base_url.as_deref(), &relative) else {
+        return PP_Var::null();
+    };
+
     parse_components(&resolved, components);
     host.vars.var_from_str(&resolved)
 }
@@ -213,12 +346,21 @@ unsafe extern "C" fn get_document_url(
         return PP_Var::undefined();
     };
 
-    let url: String = host
-        .instances
-        .with_instance(instance, |inst| {
-            inst.swf_url.clone().unwrap_or_else(|| "file:///".to_string())
-        })
-        .unwrap_or_else(|| "file:///".to_string());
+    let provider = host.get_url_provider();
+
+    let url: String = non_empty_url(
+        provider
+            .as_ref()
+            .and_then(|p| p.get_document_url(instance)),
+    )
+    .or_else(|| {
+        non_empty_url(
+            host.instances
+                .with_instance(instance, |inst| inst.swf_url.clone())
+                .flatten(),
+        )
+    })
+    .unwrap_or_else(|| "file:///".to_string());
 
     parse_components(&url, components);
     tracing::info!("Document URL for instance {}: {}", instance, url);
@@ -230,8 +372,36 @@ unsafe extern "C" fn get_plugin_instance_url(
     components: *mut PP_URLComponents_Dev,
 ) -> PP_Var {
     tracing::info!("PPB_URLUtil::GetPluginInstanceURL called with instance={}", instance);
-    // Same as document URL in our standalone projector.
-    get_document_url(instance, components)
+    let Some(host) = HOST.get() else {
+        return PP_Var::undefined();
+    };
+
+    let provider = host.get_url_provider();
+
+    let url: String = non_empty_url(
+        provider
+            .as_ref()
+            .and_then(|p| p.get_plugin_instance_url(instance)),
+    )
+    .or_else(|| {
+        non_empty_url(
+            host.instances
+                .with_instance(instance, |inst| inst.swf_url.clone())
+                .flatten(),
+        )
+    })
+    .or_else(|| {
+        non_empty_url(
+            provider
+                .as_ref()
+                .and_then(|p| p.get_document_url(instance)),
+        )
+    })
+    .unwrap_or_else(|| "file:///".to_string());
+
+    parse_components(&url, components);
+    tracing::info!("Plugin URL for instance {}: {}", instance, url);
+    host.vars.var_from_str(&url)
 }
 
 unsafe extern "C" fn get_plugin_referrer_url(
@@ -250,10 +420,7 @@ unsafe extern "C" fn is_same_security_origin(
     _url_a: PP_Var,
     _url_b: PP_Var,
 ) -> PP_Bool {
-    tracing::debug!("PPB_URLUtil::IsSameSecurityOrigin called");
-    tracing::debug!("URL A: {:?}, URL B: {:?}", _url_a, _url_b);
-    tracing::debug!("URL A as string: {:?}", HOST.get().and_then(|h| h.vars.get_string(_url_a)));
-    tracing::debug!("URL B as string: {:?}", HOST.get().and_then(|h| h.vars.get_string(_url_b)));
+    tracing::trace!("PPB_URLUtil::IsSameSecurityOrigin called");
     // Everything is same-origin in our projector.
     PP_TRUE
 }
@@ -262,7 +429,7 @@ unsafe extern "C" fn document_can_request(
     _instance: PP_Instance,
     _url: PP_Var,
 ) -> PP_Bool {
-    tracing::debug!("PPB_URLUtil::DocumentCanRequest called");
+    tracing::trace!("PPB_URLUtil::DocumentCanRequest called");
     PP_TRUE
 }
 
@@ -270,7 +437,7 @@ unsafe extern "C" fn document_can_access_document(
     _active: PP_Instance,
     _target: PP_Instance,
 ) -> PP_Bool {
-    tracing::debug!(
+    tracing::trace!(
         "PPB_URLUtil::DocumentCanAccessDocument called with active={} target={}",
         _active,
         _target
@@ -284,34 +451,67 @@ unsafe extern "C" fn document_can_access_document(
 
 /// Resolve a relative URL against a base URL.
 /// Handles common cases: absolute URLs, protocol-relative, path-relative.
-fn resolve_url(base: &str, relative: &str) -> String {
-    // If relative is already absolute, return it.
-    if relative.contains("://") {
-        return relative.to_string();
+fn resolve_url(base: Option<&str>, relative: &str) -> Option<String> {
+    // Absolute relative URL wins, even if base is missing/invalid.
+    if is_absolute_url(relative) {
+        return Some(relative.to_string());
     }
-    // Protocol-relative.
+
+    // We need a base URL for all non-absolute relative forms.
+    let base = base?.trim();
+
+    // Protocol-relative form (`//host/path`) inherits base scheme.
     if relative.starts_with("//") {
-        if let Some(scheme_end) = base.find("://") {
-            return format!("{}{}", &base[..scheme_end + 1], relative);
-        }
-        return relative.to_string();
+        let (scheme, _) = split_scheme(base)?;
+        return Some(format!("{}:{}", scheme, relative));
     }
-    // Absolute path.
+
+    // Non-hierarchical bases (e.g. `data:`) do not support relative path resolution.
+    let (scheme, authority, tail) = split_hierarchical_url(base)?;
+
+    // Remove fragment from base first.
+    let base_without_fragment = tail
+        .split_once('#')
+        .map(|(lhs, _)| lhs)
+        .unwrap_or(tail);
+
+    // Empty relative means "same document" (minus fragment).
+    if relative.is_empty() {
+        return Some(format!("{}://{}{}", scheme, authority, base_without_fragment));
+    }
+
+    // Fragment-only references replace fragment.
+    if relative.starts_with('#') {
+        return Some(format!("{}://{}{}{}", scheme, authority, base_without_fragment, relative));
+    }
+
+    // Query-only references keep path but replace query.
+    let base_path = base_without_fragment
+        .split_once('?')
+        .map(|(path, _)| path)
+        .unwrap_or(base_without_fragment);
+    if relative.starts_with('?') {
+        return Some(format!("{}://{}{}{}", scheme, authority, base_path, relative));
+    }
+
+    // Absolute-path reference (`/x`).
     if relative.starts_with('/') {
-        if let Some(scheme_end) = base.find("://") {
-            let authority_end = base[scheme_end + 3..]
-                .find('/')
-                .map(|i| scheme_end + 3 + i)
-                .unwrap_or(base.len());
-            return format!("{}{}", &base[..authority_end], relative);
-        }
-        return relative.to_string();
+        return Some(format!("{}://{}{}", scheme, authority, relative));
     }
-    // Relative path: strip filename from base, append relative.
-    let base_dir = if let Some(last_slash) = base.rfind('/') {
-        &base[..last_slash + 1]
+
+    // Relative path: strip filename from base path and append relative.
+    let effective_base_path = if base_path.is_empty() { "/" } else { base_path };
+    let base_dir = if effective_base_path.ends_with('/') {
+        effective_base_path.to_string()
+    } else if let Some((prefix, _)) = effective_base_path.rsplit_once('/') {
+        if prefix.is_empty() {
+            "/".to_string()
+        } else {
+            format!("{}/", prefix)
+        }
     } else {
-        base
+        "/".to_string()
     };
-    format!("{}{}", base_dir, relative)
+
+    Some(format!("{}://{}{}{}", scheme, authority, base_dir, relative))
 }

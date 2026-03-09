@@ -61,6 +61,11 @@ pub unsafe fn register(registry: &mut InterfaceRegistry) {
 // ---------------------------------------------------------------------------
 
 unsafe extern "C" fn create(instance: PP_Instance, size_in_bytes: u32) -> PP_Resource {
+    tracing::trace!(
+        "PPB_Buffer_Dev::Create(instance={}, size_in_bytes={})",
+        instance,
+        size_in_bytes
+    );
     let Some(host) = HOST.get() else {
         return 0;
     };
@@ -79,12 +84,14 @@ unsafe extern "C" fn create(instance: PP_Instance, size_in_bytes: u32) -> PP_Res
 }
 
 unsafe extern "C" fn is_buffer(resource: PP_Resource) -> PP_Bool {
+    tracing::trace!("PPB_Buffer_Dev::IsBuffer(resource={})", resource);
     HOST.get()
         .map(|h| pp_from_bool(h.resources.is_type(resource, "PPB_Buffer")))
         .unwrap_or(PP_FALSE)
 }
 
 unsafe extern "C" fn describe(resource: PP_Resource, size_in_bytes: *mut u32) -> PP_Bool {
+    tracing::trace!("PPB_Buffer_Dev::Describe(resource={}, size_in_bytes={:?})", resource, size_in_bytes);
     let Some(host) = HOST.get() else {
         return PP_FALSE;
     };
@@ -102,6 +109,7 @@ unsafe extern "C" fn describe(resource: PP_Resource, size_in_bytes: *mut u32) ->
 }
 
 unsafe extern "C" fn map(resource: PP_Resource) -> *mut c_void {
+    tracing::trace!("PPB_Buffer_Dev::Map(resource={})", resource);
     let Some(host) = HOST.get() else {
         return std::ptr::null_mut();
     };
@@ -122,6 +130,7 @@ unsafe extern "C" fn map(resource: PP_Resource) -> *mut c_void {
 }
 
 unsafe extern "C" fn unmap(resource: PP_Resource) {
+        tracing::trace!("PPB_Buffer_Dev::Unmap(resource={})", resource);
     let Some(host) = HOST.get() else {
         return;
     };

@@ -349,11 +349,12 @@ fn get_utc_offset_secs(_t: f64) -> f64 {
 unsafe extern "C" fn get_command_line_args(_module: PP_Module) -> PP_Var {
     tracing::debug!("PPB_Flash::GetCommandLineArgs(module={})", _module);
 
-    // Return empty string — no special command line args.
     let Some(host) = HOST.get() else {
         return PP_Var::undefined();
     };
-    host.vars.var_from_str("")
+    let args = host.get_flash_command_line_args();
+    tracing::trace!("PPB_Flash::GetCommandLineArgs -> {:?}", args);
+    host.vars.var_from_str(&args)
 }
 
 unsafe extern "C" fn preload_font_win(_logfontw: *const c_void) {
@@ -399,7 +400,7 @@ unsafe extern "C" fn get_setting_int(
     tracing::debug!("PPB_Flash::GetSettingInt(setting={})", setting);
     match setting {
         PP_FLASHSETTING_3DENABLED => 1,
-        PP_FLASHSETTING_INCOGNITO => 1,
+        PP_FLASHSETTING_INCOGNITO => 0,
         PP_FLASHSETTING_STAGE3DENABLED => 1,
         PP_FLASHSETTING_NUMCORES => {
             num_cpus()
@@ -419,9 +420,9 @@ unsafe extern "C" fn get_setting(
         return PP_Var::undefined();
     };
     let result = match setting {
-        PP_FLASHSETTING_3DENABLED => PP_Var::from_bool(false),
+        PP_FLASHSETTING_3DENABLED => PP_Var::from_bool(true),
         PP_FLASHSETTING_INCOGNITO => PP_Var::from_bool(false),
-        PP_FLASHSETTING_STAGE3DENABLED => PP_Var::from_bool(false),
+        PP_FLASHSETTING_STAGE3DENABLED => PP_Var::from_bool(true),
         PP_FLASHSETTING_LANGUAGE => {
             let lang = std::env::var("LANG")
                 .unwrap_or_else(|_| "en_US.UTF-8".to_string());
@@ -432,7 +433,7 @@ unsafe extern "C" fn get_setting(
         }
         PP_FLASHSETTING_NUMCORES => PP_Var::from_int(num_cpus()),
         PP_FLASHSETTING_LSORESTRICTIONS => PP_Var::from_int(PP_FLASHLSORESTRICTIONS_NONE),
-        PP_FLASHSETTING_STAGE3DBASELINEENABLED => PP_Var::from_bool(false),
+        PP_FLASHSETTING_STAGE3DBASELINEENABLED => PP_Var::from_bool(true),
         _ => PP_Var::undefined(),
     };
     tracing::debug!("PPB_Flash::GetSetting(setting={}) -> {:?}", setting, result);

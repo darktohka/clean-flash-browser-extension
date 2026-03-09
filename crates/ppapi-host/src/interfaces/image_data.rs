@@ -14,6 +14,7 @@ pub struct ImageDataResource {
     pub size: PP_Size,
     pub stride: i32,
     pub pixels: Vec<u8>,
+    pub map_count: u32,
 }
 
 impl Resource for ImageDataResource {
@@ -60,11 +61,16 @@ unsafe extern "C" fn create(
     size: *const PP_Size,
     init_to_zero: PP_Bool,
 ) -> PP_Resource {
+    let size_dbg = if size.is_null() {
+        None
+    } else {
+        Some(unsafe { *size })
+    };
     tracing::debug!(
         "PPB_ImageData::Create(instance={}, format={}, size={:?}, init_to_zero={})",
         instance,
         format,
-        unsafe { *size },
+        size_dbg,
         pp_to_bool(init_to_zero)
     );
     let Some(host) = HOST.get() else {
@@ -79,20 +85,38 @@ unsafe extern "C" fn create(
         return 0;
     }
 
-    let stride = sz.width * 4;
-    let len = (stride * sz.height) as usize;
-    let pixels = if pp_to_bool(init_to_zero) {
-        vec![0u8; len]
-    } else {
-        // Allocate uninitialized-ish (Rust initializes to 0 anyway).
-        vec![0u8; len]
+    if !pp_to_bool(is_format_supported(format)) {
+        return 0;
+    }
+
+    let Some(stride) = sz.width.checked_mul(4) else {
+        return 0;
     };
+    let Some(len_i32) = stride.checked_mul(sz.height) else {
+        return 0;
+    };
+    let Ok(len) = usize::try_from(len_i32) else {
+        return 0;
+    };
+
+    let mut pixels = Vec::new();
+    if pixels.try_reserve_exact(len).is_err() {
+        return 0;
+    }
+
+    if pp_to_bool(init_to_zero) {
+        pixels.resize(len, 0u8);
+    } else {
+        // Spec allows undefined contents, but zeroing avoids stale-data leaks.
+        pixels.resize(len, 0u8);
+    }
 
     let img = ImageDataResource {
         format,
         size: sz,
         stride,
         pixels,
+        map_count: 0,
     };
     host.resources.insert(instance, Box::new(img))
 }
@@ -107,10 +131,13 @@ unsafe extern "C" fn is_image_data(image_data: PP_Resource) -> PP_Bool {
 unsafe extern "C" fn describe(image_data: PP_Resource, desc: *mut PP_ImageDataDesc) -> PP_Bool {
     tracing::debug!("PPB_ImageData::Describe(image_data={}, desc={:?})", image_data, desc);
     let Some(host) = HOST.get() else {
+        if !desc.is_null() {
+            unsafe { *desc = PP_ImageDataDesc::default() };
+        }
         return PP_FALSE;
     };
 
-    host.resources
+    let result = host.resources
         .with_downcast::<ImageDataResource, _>(image_data, |img| {
             if !desc.is_null() {
                 unsafe {
@@ -123,7 +150,13 @@ unsafe extern "C" fn describe(image_data: PP_Resource, desc: *mut PP_ImageDataDe
             }
             PP_TRUE
         })
-        .unwrap_or(PP_FALSE)
+        .unwrap_or(PP_FALSE);
+
+    if result == PP_FALSE && !desc.is_null() {
+        unsafe { *desc = PP_ImageDataDesc::default() };
+    }
+
+    result
 }
 
 unsafe extern "C" fn map(image_data: PP_Resource) -> *mut c_void {
@@ -133,12 +166,43 @@ unsafe extern "C" fn map(image_data: PP_Resource) -> *mut c_void {
     };
 
     host.resources
-        .with_downcast_mut::<ImageDataResource, _>(image_data, |img| {
+        .with_resource_mut(image_data, |entry| {
+            let Some(img) = entry.resource.as_any_mut().downcast_mut::<ImageDataResource>() else {
+                return std::ptr::null_mut();
+            };
+
+            // Keep the resource alive while at least one mapping is outstanding.
+            if img.map_count == 0 {
+                entry.ref_count += 1;
+            }
+            img.map_count = img.map_count.saturating_add(1);
             img.pixels.as_mut_ptr() as *mut c_void
         })
         .unwrap_or(std::ptr::null_mut())
 }
 
-unsafe extern "C" fn unmap(_image_data: PP_Resource) {
-    // No-op: the pixel buffer is managed by Rust's Vec.
+unsafe extern "C" fn unmap(image_data: PP_Resource) {
+    let Some(host) = HOST.get() else {
+        return;
+    };
+
+    let release_pin = host
+        .resources
+        .with_resource_mut(image_data, |entry| {
+            let Some(img) = entry.resource.as_any_mut().downcast_mut::<ImageDataResource>() else {
+                return false;
+            };
+
+            if img.map_count == 0 {
+                return false;
+            }
+
+            img.map_count -= 1;
+            img.map_count == 0
+        })
+        .unwrap_or(false);
+
+    if release_pin {
+        host.resources.release(image_data);
+    }
 }
