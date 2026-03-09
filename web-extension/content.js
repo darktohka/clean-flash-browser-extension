@@ -454,12 +454,25 @@ function replaceFlashElement(elem) {
   canvas.style.border = "0";
 
   // Inherit dimensions from the original element.
-  const origWidth = parseInt(elem.getAttribute("width") || elem.style.width, 10) || 550;
-  const origHeight = parseInt(elem.getAttribute("height") || elem.style.height, 10) || 400;
-  canvas.width = origWidth;
+  // Detect percentage / non-pixel values — parseInt("100%") wrongly gives 100.
+  const widthRaw  = elem.getAttribute("width") || elem.style.width || "";
+  const heightRaw = elem.getAttribute("height") || elem.style.height || "";
+  const isRelativeWidth  = widthRaw && !/^\d+$/.test(widthRaw.trim()) && !/^\d+px$/i.test(widthRaw.trim());
+  const isRelativeHeight = heightRaw && !/^\d+$/.test(heightRaw.trim()) && !/^\d+px$/i.test(heightRaw.trim());
+
+  // For the CSS display size, preserve percentage / relative values.
+  const cssWidth  = isRelativeWidth  ? widthRaw.trim()  : (parseInt(widthRaw, 10) || 550) + "px";
+  const cssHeight = isRelativeHeight ? heightRaw.trim()  : (parseInt(heightRaw, 10) || 400) + "px";
+  canvas.style.width  = elem.style.width  || cssWidth;
+  canvas.style.height = elem.style.height || cssHeight;
+
+  // For the internal canvas buffer, use absolute pixels.  When the size is
+  // relative we pick a sensible default — we will correct it after DOM
+  // insertion once the actual rendered size can be measured.
+  const origWidth  = isRelativeWidth  ? 550 : (parseInt(widthRaw, 10) || 550);
+  const origHeight = isRelativeHeight ? 400 : (parseInt(heightRaw, 10) || 400);
+  canvas.width  = origWidth;
   canvas.height = origHeight;
-  canvas.style.width = elem.style.width || origWidth + "px";
-  canvas.style.height = elem.style.height || origHeight + "px";
   canvas.style.display = "inline-block";
   canvas.style.backgroundColor = "#000";
   canvas.tabIndex = 0; // Make focusable for keyboard events.
@@ -485,6 +498,7 @@ function replaceFlashElement(elem) {
     port: null,
     container,
     elem,
+    usesRelativeSize: isRelativeWidth || isRelativeHeight,
   };
   instanceMeta.set(instanceId, meta);
 
@@ -511,6 +525,27 @@ function replaceFlashElement(elem) {
   }
   elem.setAttribute("data-flash-player", instanceId);
 
+  // Now that the container is in the DOM, measure the actual rendered size.
+  // This corrects the initial dimensions when the element uses percentage or
+  // other relative CSS units (e.g. width="100%" should map to the real pixel
+  // width of the laid-out element, not parseInt("100%") == 100).
+  if (meta.usesRelativeSize) {
+    const measured = measureRenderedSize(canvas, meta.origWidth, meta.origHeight);
+    if (measured.w !== meta.origWidth || measured.h !== meta.origHeight) {
+      canvas.width  = measured.w;
+      canvas.height = measured.h;
+      meta.origWidth  = measured.w;
+      meta.origHeight = measured.h;
+      if (meta.port) {
+        meta.port.postMessage({ type: "resize", width: measured.w, height: measured.h });
+      }
+    }
+  }
+
+  // Watch for layout changes (window resize, parent container resize) so
+  // that percentage-based Flash elements stay in sync.
+  observeResize(meta);
+
   // Now that the container is in the DOM, create the debug panel if needed.
   // For <object>, the container lives *inside* the element, so anchor the
   // panel to the <object> itself so it appears outside/after it.
@@ -521,6 +556,44 @@ function replaceFlashElement(elem) {
   }
 
   return true;
+}
+
+/**
+ * Measure the actual rendered pixel size of a canvas element.
+ * Falls back to the provided defaults if the element has zero dimensions.
+ */
+function measureRenderedSize(canvas, defaultW, defaultH) {
+  const rect = canvas.getBoundingClientRect();
+  const w = Math.round(rect.width)  || defaultW;
+  const h = Math.round(rect.height) || defaultH;
+  return { w, h };
+}
+
+/**
+ * Set up a ResizeObserver on the canvas so that when the element's CSS
+ * layout size changes (e.g. percentage dimensions + window resize), the
+ * internal canvas buffer and the native host are updated.
+ */
+function observeResize(meta) {
+  if (typeof ResizeObserver === "undefined") return;
+  const ro = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      const cr = entry.contentRect;
+      const w = Math.round(cr.width);
+      const h = Math.round(cr.height);
+      if (w <= 0 || h <= 0) continue;
+      if (w === meta.canvas.width && h === meta.canvas.height) continue;
+      meta.canvas.width  = w;
+      meta.canvas.height = h;
+      meta.origWidth  = w;
+      meta.origHeight = h;
+      if (meta.port) {
+        meta.port.postMessage({ type: "resize", width: w, height: h });
+      }
+    }
+  });
+  ro.observe(meta.canvas);
+  meta._resizeObserver = ro;
 }
 
 // ---------------------------------------------------------------------------
