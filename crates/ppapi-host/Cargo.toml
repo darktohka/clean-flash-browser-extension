@@ -33,6 +33,7 @@ webpki-roots = "1.0.6"
 cpal = { version = "0.17.3", optional = true }
 arboard = { version = "3", optional = true }
 ab_glyph = "0.2.32"
+getrandom = "0.4.2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

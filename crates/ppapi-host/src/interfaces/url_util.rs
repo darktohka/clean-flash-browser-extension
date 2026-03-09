@@ -198,7 +198,8 @@ fn non_empty_url(url: Option<String>) -> Option<String> {
         if u.trim().is_empty() {
             None
         } else {
-            Some(u)
+            // Remove trailing /
+            Some(u.trim_end_matches('/').to_string())
         }
     })
 }
@@ -264,7 +265,7 @@ unsafe extern "C" fn canonicalize(
     url: PP_Var,
     components: *mut PP_URLComponents_Dev,
 ) -> PP_Var {
-    tracing::debug!("PPB_URLUtil::Canonicalize called with url={:?}", url);
+    tracing::trace!("PPB_URLUtil::Canonicalize called with url={:?}", url);
     let Some(host) = HOST.get() else {
         return PP_Var::undefined();
     };

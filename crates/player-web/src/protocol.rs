@@ -34,7 +34,7 @@
 //! messaging channel, we write to a duplicated fd/handle that was saved
 //! before the redirect.
 
-use std::io::{self, Read, Write};
+use std::io::{self, BufWriter, Read, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::OnceLock;
 
@@ -60,9 +60,15 @@ static SEQ: AtomicU32 = AtomicU32::new(0);
 // Saved stdout
 // -----------------------------------------------------------------------
 
+/// Size of the write buffer for the saved stdout handle.  256 KiB keeps
+/// syscalls to a minimum even when many small messages (cursor, state,
+/// audio control) are sent in quick succession, while still being tiny
+/// relative to the ~1 MB native-messaging chunk limit.
+const STDOUT_BUF_SIZE: usize = 256 * 1024;
+
 /// The saved stdout file, initialised by [`init_saved_stdout`] before
 /// the real stdout is redirected to `/dev/null`.
-static SAVED_STDOUT: OnceLock<parking_lot::Mutex<std::fs::File>> = OnceLock::new();
+static SAVED_STDOUT: OnceLock<parking_lot::Mutex<BufWriter<std::fs::File>>> = OnceLock::new();
 
 /// Duplicate the current stdout fd and store it for later use.
 /// Must be called **before** stdout is redirected.
@@ -72,7 +78,7 @@ pub fn init_saved_stdout() {
     assert!(raw >= 0, "failed to dup stdout");
     let file = unsafe { std::fs::File::from_raw_fd(raw) };
     SAVED_STDOUT
-        .set(parking_lot::Mutex::new(file))
+        .set(parking_lot::Mutex::new(BufWriter::with_capacity(STDOUT_BUF_SIZE, file)))
         .ok()
         .expect("init_saved_stdout called twice");
 }
@@ -109,7 +115,7 @@ pub fn init_saved_stdout() {
 
         let file = std::fs::File::from_raw_handle(dup_handle as RawHandle);
         SAVED_STDOUT
-            .set(parking_lot::Mutex::new(file))
+            .set(parking_lot::Mutex::new(BufWriter::with_capacity(STDOUT_BUF_SIZE, file)))
             .ok()
             .expect("init_saved_stdout called twice");
     }

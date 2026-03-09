@@ -36,13 +36,5 @@ unsafe extern "C" fn get_random_bytes(buffer: *mut c_char, num_bytes: u32) {
         }
     }
 
-    #[cfg(unix)]
-    {
-        use getrandom::getrandom;
-        if let Err(e) = getrandom(slice) {
-            tracing::error!("Failed to get random bytes: {}", e);
-        }
-    }
-
     tracing::trace!("PPB_Crypto(Dev)::GetRandomBytes(num_bytes={})", num_bytes);
 }

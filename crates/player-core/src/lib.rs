@@ -203,6 +203,15 @@ impl FlashPlayer {
 
         #[cfg(feature = "url-reqwest")]
         let http_client = reqwest::blocking::Client::builder()
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() >= 20 {
+                    attempt.error("too many redirects")
+                } else if attempt.previous().iter().any(|u| u.as_str() == attempt.url().as_str()) {
+                    attempt.error("redirect loop detected")
+                } else {
+                    attempt.follow()
+                }
+            }))
             .connect_timeout(std::time::Duration::from_secs(30))
             .timeout(std::time::Duration::from_secs(120))
             .build()

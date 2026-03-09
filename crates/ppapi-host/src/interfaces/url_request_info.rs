@@ -40,6 +40,7 @@ pub struct URLRequestInfoResource {
     pub record_upload_progress: bool,
     pub allow_cross_origin_requests: bool,
     pub allow_credentials: bool,
+    pub stream_to_file: bool,
     pub has_custom_referrer_url: bool,
     pub custom_referrer_url: String,
     pub has_custom_content_transfer_encoding: bool,
@@ -93,6 +94,7 @@ unsafe extern "C" fn create(instance: PP_Instance) -> PP_Resource {
         record_upload_progress: false,
         allow_cross_origin_requests: false,
         allow_credentials: false,
+        stream_to_file: false,
         has_custom_referrer_url: false,
         custom_referrer_url: String::new(),
         has_custom_content_transfer_encoding: false,
@@ -162,8 +164,11 @@ unsafe extern "C" fn set_property(
                     }
                 }
                 PP_URLREQUESTPROPERTY_STREAMTOFILE => {
-                    // StreamToFile is no longer supported and must fail.
-                    return PP_FALSE;
+                    if let Some(v) = pp_var_as_bool(value) {
+                        req.stream_to_file = v;
+                    } else {
+                        return PP_FALSE;
+                    }
                 }
                 PP_URLREQUESTPROPERTY_FOLLOWREDIRECTS => {
                     if let Some(v) = pp_var_as_bool(value) {

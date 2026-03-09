@@ -54,6 +54,7 @@ fn data_dir() -> PathBuf {
 
 /// Resolve a Flash-relative path to an absolute path, preventing traversal.
 fn resolve_path(rel: &str) -> Option<PathBuf> {
+    tracing::trace!("Resolving Flash file path: {:?}", rel);
     let root = data_dir();
     // Strip leading '/' and sanitize
     let rel = rel.trim_start_matches('/');
@@ -74,8 +75,10 @@ fn resolve_path(rel: &str) -> Option<PathBuf> {
     };
     let root_canon = root.canonicalize().unwrap_or(root);
     if canonical.starts_with(&root_canon) {
+        tracing::trace!("Resolved to absolute path: {:?}", canonical);
         Some(canonical)
     } else {
+        tracing::warn!("Attempted path traversal outside Flash data directory: {:?}", canonical);
         None
     }
 }
