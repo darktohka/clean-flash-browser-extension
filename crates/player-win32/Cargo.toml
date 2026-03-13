@@ -10,9 +10,9 @@ name = "player-win32"
 path = "src/main.rs"
 
 [dependencies]
-player-core = { workspace = true, features = ["url-reqwest"] }
+player-core = { workspace = true }
 player-ui-traits = { workspace = true }
-ppapi-host = { workspace = true, features = ["fs-os", "audio-cpal", "clipboard-arboard"] }
+ppapi-host = { workspace = true, features = ["fs-os", "audio-cpal", "clipboard-arboard", "url-reqwest"] }
 ppapi-sys = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

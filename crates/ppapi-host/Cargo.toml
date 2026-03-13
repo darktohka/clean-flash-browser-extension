@@ -18,6 +18,10 @@ fs-stub = []
 audio-cpal = ["dep:cpal"]
 ## Use arboard for cross-platform clipboard access (desktop players).
 clipboard-arboard = ["dep:arboard"]
+## Use reqwest for HTTP/HTTPS URL loading (adds native networking).
+url-reqwest = ["dep:reqwest"]
+## Stub URL loader — returns 404 for all HTTP/HTTPS requests.
+url-stub = []
 
 [dependencies]
 ppapi-sys = { workspace = true }
@@ -34,6 +38,7 @@ cpal = { version = "0.17.3", optional = true }
 arboard = { version = "3", optional = true }
 ab_glyph = "0.2.32"
 getrandom = "0.4.2"
+reqwest = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

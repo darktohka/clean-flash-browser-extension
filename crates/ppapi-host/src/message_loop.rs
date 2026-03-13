@@ -209,10 +209,22 @@ impl MessageLoop {
             self.running = false;
         }
 
-        // If should_destroy was requested, finalize destruction.
+        // If should_destroy was requested, run remaining callbacks with
+        // PP_ERROR_ABORTED so associated memory is freed, matching
+        // Chrome's QuitWhenIdle semantics.
         if self.destroyed && self.depth == 0 {
-            // Drop remaining queued items so callbacks are not leaked silently.
-            while self.receiver.try_recv().is_ok() {}
+            // Drain channel.
+            while let Ok(item) = self.receiver.try_recv() {
+                if !item.callback.is_null() {
+                    unsafe { item.callback.run(PP_ERROR_ABORTED); }
+                }
+            }
+            // Drain deferred items.
+            for item in self.deferred.drain(..) {
+                if !item.callback.is_null() {
+                    unsafe { item.callback.run(PP_ERROR_ABORTED); }
+                }
+            }
         }
 
         PP_OK

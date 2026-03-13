@@ -318,7 +318,7 @@ impl HostState {
         // method name = "QueryInterface".  Actually, Chrome calls the
         // vtable directly with method_name = "QueryInterface" for some
         // things, but for CallFunction it uses the standard Call with a
-        // string method name of "QueryInterface"… 
+        // string method name of "QueryInterface"…
         //
         // After checking: Chrome simply passes the *method name* that JS
         // used on the element.  For `elem.CallFunction(xml)`, Chrome

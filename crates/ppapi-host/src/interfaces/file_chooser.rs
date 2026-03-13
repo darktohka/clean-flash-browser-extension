@@ -85,6 +85,10 @@ unsafe extern "C" fn create(
     mode: PP_FileChooserMode_Dev,
     accept_types: PP_Var,
 ) -> PP_Resource {
+    tracing::trace!(
+        "PPB_FileChooser::Create(instance={}, mode={}, accept_types={:?})",
+        instance, mode, accept_types
+    );
     let Some(host) = HOST.get() else { return 0 };
 
     let accept_str = host.vars.get_string(accept_types).unwrap_or_default();
@@ -103,6 +107,7 @@ unsafe extern "C" fn create(
 }
 
 unsafe extern "C" fn is_file_chooser(resource: PP_Resource) -> PP_Bool {
+    tracing::trace!("PPB_FileChooser::IsFileChooser(resource={})", resource);
     let Some(host) = HOST.get() else { return PP_FALSE };
     pp_from_bool(host.resources.is_type(resource, "PPB_FileChooser"))
 }
@@ -131,6 +136,7 @@ unsafe extern "C" fn show_0_5(
 
 /// 0.5 API iterator accessor.
 unsafe extern "C" fn get_next_chosen_file_0_5(_chooser: PP_Resource) -> PP_Resource {
+    tracing::trace!("PPB_FileChooser(0.5)::GetNextChosenFile(chooser={})", _chooser);
     0
 }
 
@@ -142,6 +148,10 @@ unsafe extern "C" fn show_without_user_gesture_0_6(
     output: PP_ArrayOutput,
     callback: PP_CompletionCallback,
 ) -> i32 {
+    tracing::debug!(
+        "PPB_FileChooserTrusted::ShowWithoutUserGesture(chooser={}, save_as={}, suggested_file_name={:?})",
+        chooser, save_as, suggested_file_name
+    );
     let Some(host) = HOST.get() else { return PP_ERROR_FAILED };
     let suggested = host.vars.get_string(suggested_file_name).unwrap_or_default();
 
@@ -160,6 +170,10 @@ unsafe extern "C" fn show_without_user_gesture_0_5(
     suggested_file_name: PP_Var,
     callback: PP_CompletionCallback,
 ) -> i32 {
+    tracing::debug!(
+        "PPB_FileChooserTrusted(0.5)::ShowWithoutUserGesture(chooser={}, save_as={}, suggested_file_name={:?})",
+        chooser, save_as, suggested_file_name
+    );
     let Some(host) = HOST.get() else { return PP_ERROR_FAILED };
     let _suggested = host.vars.get_string(suggested_file_name).unwrap_or_default();
 
@@ -181,6 +195,10 @@ fn do_show(
     output: PP_ArrayOutput,
     callback: PP_CompletionCallback,
 ) -> i32 {
+    tracing::debug!(
+        "PPB_FileChooser::do_show(chooser={}, save_as={}, suggested_name={:?})",
+        chooser, save_as, suggested_name
+    );
     let Some(host) = HOST.get() else { return PP_ERROR_FAILED };
 
     // Read chooser resource data

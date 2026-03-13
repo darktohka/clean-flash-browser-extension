@@ -58,6 +58,7 @@ unsafe extern "C" fn get_device_id(
     id: *mut PP_Var,
     callback: PP_CompletionCallback,
 ) -> i32 {
+    tracing::trace!("PPB_Flash_DRM::GetDeviceID(drm={}, id={:?})", _drm, id);
     let Some(host) = HOST.get() else {
         return PP_ERROR_FAILED;
     };
@@ -74,6 +75,7 @@ unsafe extern "C" fn get_device_id(
 }
 
 unsafe extern "C" fn get_hmonitor(_drm: PP_Resource, _hmonitor: *mut i64) -> PP_Bool {
+    tracing::trace!("PPB_Flash_DRM::GetHmonitor(drm={}, hmonitor={:?})", _drm, _hmonitor);
     // Not applicable on Linux.
     PP_FALSE
 }
@@ -83,6 +85,7 @@ unsafe extern "C" fn get_voucher_file(
     _file_ref: *mut PP_Resource,
     callback: PP_CompletionCallback,
 ) -> i32 {
+    tracing::trace!("PPB_Flash_DRM::GetVoucherFile(drm={}, file_ref={:?})", _drm, _file_ref);
     // No voucher file available.
     crate::callback::complete_immediately(callback, PP_ERROR_NOINTERFACE)
 }
@@ -92,6 +95,11 @@ unsafe extern "C" fn monitor_is_external(
     is_external: *mut PP_Bool,
     callback: PP_CompletionCallback,
 ) -> i32 {
+    tracing::trace!(
+        "PPB_Flash_DRM::MonitorIsExternal(drm={}, is_external={:?})",
+        _drm,
+        is_external
+    );
     // Assume not external.
     if !is_external.is_null() {
         unsafe { *is_external = PP_FALSE };

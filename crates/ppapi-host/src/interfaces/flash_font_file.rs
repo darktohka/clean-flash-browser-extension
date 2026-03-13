@@ -210,6 +210,7 @@ unsafe extern "C" fn create(
 }
 
 unsafe extern "C" fn is_flash_font_file(resource: PP_Resource) -> PP_Bool {
+    tracing::trace!("PPB_Flash_FontFile::IsFlashFontFile(resource={})", resource);
     let Some(host) = HOST.get() else { return PP_FALSE };
     pp_from_bool(host.resources.is_type(resource, "PPB_Flash_FontFile"))
 }
@@ -280,6 +281,7 @@ unsafe extern "C" fn get_font_table(
 }
 
 unsafe extern "C" fn is_supported_for_windows() -> PP_Bool {
+    tracing::trace!("PPB_Flash_FontFile::IsSupportedForWindows()");
     // We're on Linux, but Flash checks this. Return TRUE so it proceeds.
     PP_TRUE
 }

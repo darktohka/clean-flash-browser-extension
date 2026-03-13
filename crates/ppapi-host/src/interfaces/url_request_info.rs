@@ -31,6 +31,7 @@ fn pp_var_as_i32(value: PP_Var) -> Option<i32> {
 }
 
 /// URLRequestInfo resource.
+#[derive(Debug)]
 pub struct URLRequestInfoResource {
     pub url: Option<String>,
     pub method: Option<String>,

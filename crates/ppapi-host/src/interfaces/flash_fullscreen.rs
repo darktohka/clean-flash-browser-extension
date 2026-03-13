@@ -84,10 +84,10 @@ fn do_set_fullscreen(instance: PP_Instance, fullscreen: PP_Bool) -> PP_Bool {
 
 /// Query the fullscreen provider for the screen size, or return a default.
 fn do_get_screen_size(instance: PP_Instance, size: *mut PP_Size) -> PP_Bool {
+    tracing::trace!("GetScreenSize(instance={})", instance);
     if size.is_null() {
         return PP_FALSE;
     }
-    tracing::trace!("GetScreenSize(instance={})", instance);
 
     let Some(host) = HOST.get() else { return PP_FALSE };
 

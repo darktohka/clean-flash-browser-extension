@@ -142,7 +142,7 @@ unsafe extern "C" fn create(
     instance_id: PP_Instance,
     menu_data: *const PP_Flash_Menu,
 ) -> PP_Resource {
-    tracing::debug!("PPB_Flash_Menu::Create(instance={})", instance_id);
+    tracing::trace!("PPB_Flash_Menu::Create(instance={})", instance_id);
 
     let Some(host) = HOST.get() else { return 0 };
 
@@ -162,6 +162,7 @@ unsafe extern "C" fn create(
 }
 
 unsafe extern "C" fn is_flash_menu(resource_id: PP_Resource) -> PP_Bool {
+    tracing::trace!("PPB_Flash_Menu::IsFlashMenu(resource={})", resource_id);
     let Some(host) = HOST.get() else { return PP_FALSE };
     pp_from_bool(host.resources.is_type(resource_id, "PPB_Flash_Menu"))
 }
@@ -172,6 +173,7 @@ unsafe extern "C" fn show(
     selected_id: *mut i32,
     callback: PP_CompletionCallback,
 ) -> i32 {
+    tracing::trace!("PPB_Flash_Menu::Show(menu_id={}, location={:?})", menu_id, location);
     let Some(host) = HOST.get() else { return PP_ERROR_FAILED };
 
     let loc = if location.is_null() {
@@ -179,11 +181,6 @@ unsafe extern "C" fn show(
     } else {
         unsafe { *location }
     };
-
-    tracing::debug!(
-        "PPB_Flash_Menu::Show(menu={}, location=({},{}))",
-        menu_id, loc.x, loc.y
-    );
 
     // Get the menu items
     let items = host.resources.with_downcast::<FlashMenuResource, _>(menu_id, |res| {

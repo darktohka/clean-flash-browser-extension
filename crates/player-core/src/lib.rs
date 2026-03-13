@@ -201,40 +201,12 @@ impl FlashPlayer {
             host.set_file_chooser_provider(Box::new(ArcFileChooserProvider(fcp.clone())));
         }
 
-        #[cfg(feature = "url-reqwest")]
-        let http_client = reqwest::blocking::Client::builder()
-            .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                if attempt.previous().len() >= 20 {
-                    attempt.error("too many redirects")
-                } else if attempt.previous().iter().any(|u| u.as_str() == attempt.url().as_str()) {
-                    attempt.error("redirect loop detected")
-                } else {
-                    attempt.follow()
-                }
-            }))
-            .connect_timeout(std::time::Duration::from_secs(30))
-            .timeout(std::time::Duration::from_secs(120))
-            .build()
-            .expect("failed to build HTTP client");
-
-        #[cfg(feature = "url-reqwest")]
-        let http_client_no_redirect = reqwest::blocking::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(std::time::Duration::from_secs(30))
-            .timeout(std::time::Duration::from_secs(120))
-            .build()
-            .expect("failed to build no-redirect HTTP client");
-
         host.set_callbacks(Box::new(PlayerHostCallbacks {
             shared_frame: frame_handle,
             cursor_type: self.cursor_type.clone(),
             dialog_provider: dialog,
             repaint_callback: self.repaint_callback.clone(),
             navigate_callback: self.navigate_callback.clone(),
-            #[cfg(feature = "url-reqwest")]
-            http_client,
-            #[cfg(feature = "url-reqwest")]
-            http_client_no_redirect,
         }));
 
         // If a plugin path is set, load it.
@@ -256,6 +228,12 @@ impl FlashPlayer {
                 .map_err(|e| format!("Failed to load plugin: {}", e))?
         };
 
+        // Activate the seccomp sandbox now that the plugin is loaded and
+        // initialized.  This blocks execve, mmap(PROT_EXEC), etc.
+        if let Err(e) = ppapi_host::sandbox::activate() {
+            tracing::warn!("Failed to activate seccomp sandbox: {}", e);
+        }
+
         // Initialize the module.
         let get_iface: PPB_GetInterface = Some(HostState::get_interface);
         let result = unsafe { loader.initialize_module(42, get_iface) };
@@ -269,6 +247,7 @@ impl FlashPlayer {
         }
 
         tracing::info!("Plugin module initialized successfully.");
+
         self.plugin = Some(loader);
         Ok(())
     }
@@ -910,10 +889,6 @@ struct PlayerHostCallbacks {
     dialog_provider: Option<Arc<dyn DialogProvider>>,
     repaint_callback: Arc<Mutex<Option<Box<dyn Fn() + Send + Sync>>>>,
     navigate_callback: Arc<Mutex<Option<Box<dyn Fn(&str, &str) + Send + Sync>>>>,
-    #[cfg(feature = "url-reqwest")]
-    http_client: reqwest::blocking::Client,
-    #[cfg(feature = "url-reqwest")]
-    http_client_no_redirect: reqwest::blocking::Client,
 }
 
 /// Wrapper to make `Arc<dyn FileChooserProvider>` implement the trait as a `Box`.
@@ -928,65 +903,6 @@ impl FileChooserProvider for ArcFileChooserProvider {
     ) -> Vec<String> {
         self.0.show_file_chooser(mode, accept_types, suggested_name)
     }
-}
-
-#[cfg(feature = "url-reqwest")]
-fn map_io_error_kind_to_pp(kind: std::io::ErrorKind) -> i32 {
-    use std::io::ErrorKind;
-
-    match kind {
-        ErrorKind::TimedOut => ppapi_sys::PP_ERROR_CONNECTION_TIMEDOUT,
-        ErrorKind::ConnectionRefused => ppapi_sys::PP_ERROR_CONNECTION_REFUSED,
-        ErrorKind::ConnectionReset => ppapi_sys::PP_ERROR_CONNECTION_RESET,
-        ErrorKind::ConnectionAborted => ppapi_sys::PP_ERROR_CONNECTION_ABORTED,
-        ErrorKind::NotConnected | ErrorKind::BrokenPipe | ErrorKind::UnexpectedEof => {
-            ppapi_sys::PP_ERROR_CONNECTION_CLOSED
-        }
-        ErrorKind::AddrInUse => ppapi_sys::PP_ERROR_ADDRESS_IN_USE,
-        ErrorKind::AddrNotAvailable => ppapi_sys::PP_ERROR_ADDRESS_INVALID,
-        _ => ppapi_sys::PP_ERROR_CONNECTION_FAILED,
-    }
-}
-
-#[cfg(feature = "url-reqwest")]
-fn extract_io_error_kind(
-    mut current: Option<&(dyn std::error::Error + 'static)>,
-) -> Option<std::io::ErrorKind> {
-    while let Some(err) = current {
-        if let Some(io_err) = err.downcast_ref::<std::io::Error>() {
-            return Some(io_err.kind());
-        }
-        current = err.source();
-    }
-
-    None
-}
-
-#[cfg(feature = "url-reqwest")]
-fn map_reqwest_transport_error(error: &reqwest::Error) -> i32 {
-    if error.is_timeout() {
-        return ppapi_sys::PP_ERROR_CONNECTION_TIMEDOUT;
-    }
-
-    if let Some(kind) = extract_io_error_kind(Some(error)) {
-        return map_io_error_kind_to_pp(kind);
-    }
-
-    if error.is_connect() {
-        let msg = error.to_string().to_ascii_lowercase();
-        if msg.contains("failed to lookup address")
-            || msg.contains("no such host")
-            || msg.contains("name or service not known")
-            || msg.contains("temporary failure in name resolution")
-            || msg.contains("nodename nor servname")
-            || msg.contains("dns")
-        {
-            return ppapi_sys::PP_ERROR_NAME_NOT_RESOLVED;
-        }
-        return ppapi_sys::PP_ERROR_CONNECTION_FAILED;
-    }
-
-    ppapi_sys::PP_ERROR_FAILED
 }
 
 impl HostCallbacks for PlayerHostCallbacks {
@@ -1048,165 +964,6 @@ impl HostCallbacks for PlayerHostCallbacks {
         if let Some(ref cb) = *self.repaint_callback.lock() {
             cb();
         }
-    }
-
-    fn on_url_open(
-        &self,
-        url: &str,
-        method: &str,
-        headers: &str,
-        body: Option<&[u8]>,
-        follow_redirects: bool,
-    ) -> Result<ppapi_host::UrlLoadResponse, i32> {
-        tracing::info!("URL open requested: {} {}", method, url);
-
-        // Suppress unused-variable warnings when reqwest is not enabled.
-        #[cfg(not(feature = "url-reqwest"))]
-        let _ = (headers, body, follow_redirects);
-
-        // ----- file:// or bare path → local filesystem -----
-        let path = if let Some(stripped) = url.strip_prefix("file://") {
-            stripped
-        } else {
-            url
-        };
-
-        // Try loading from the local filesystem first.
-        if let Ok(file) = std::fs::File::open(path) {
-            let meta = file.metadata().ok();
-            let len = meta.as_ref().map(|m| m.len() as i64);
-            let content_type = if path.to_ascii_lowercase().ends_with(".swf") {
-                "application/x-shockwave-flash"
-            } else {
-                "application/octet-stream"
-            };
-            let headers_str = format!(
-                "Content-Type: {}\r\n{}\r\n",
-                content_type,
-                len.map(|l| format!("Content-Length: {}\r\n", l))
-                    .unwrap_or_default(),
-            );
-            tracing::info!(
-                "URL open: serving file {} ({} bytes)",
-                path,
-                len.unwrap_or(-1)
-            );
-            return Ok(ppapi_host::UrlLoadResponse {
-                status_code: 200,
-                status_line: "OK".to_string(),
-                headers: headers_str,
-                body: Box::new(std::io::BufReader::new(file)),
-                content_length: len,
-            });
-        }
-
-        // ----- http:// / https:// → reqwest -----
-        #[cfg(feature = "url-reqwest")]
-        if url.starts_with("http://") || url.starts_with("https://") {
-            // Redirect behavior is controlled per PPB_URLLoader request.
-            let http_client = if follow_redirects {
-                self.http_client.clone()
-            } else {
-                self.http_client_no_redirect.clone()
-            };
-
-            // Build the request with the specified method.
-            let http_method = method.to_uppercase().parse::<reqwest::Method>().map_err(|e| {
-                tracing::warn!("URL open: invalid HTTP method '{}': {}", method, e);
-                ppapi_sys::PP_ERROR_FAILED
-            })?;
-            let mut req = http_client.request(http_method, url);
-
-            // Apply custom headers from the plugin.
-            for line in headers.split("\r\n").chain(headers.split('\n')) {
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
-                }
-                if let Some((key, value)) = line.split_once(':') {
-                    req = req.header(key.trim(), value.trim());
-                }
-            }
-
-            // Send the request (with optional body).
-            if let Some(body_data) = body {
-                req = req.body(body_data.to_vec());
-            }
-
-            let response = match req.send() {
-                Ok(resp) => resp,
-                Err(e) => {
-                    let pp_error = map_reqwest_transport_error(&e);
-                    tracing::warn!(
-                        "URL open: transport error for {}: {} (pp_error={})",
-                        url,
-                        e,
-                        pp_error
-                    );
-                    return Err(pp_error);
-                }
-            };
-
-            let status_code = response.status().as_u16();
-            let status_line = response
-                .status()
-                .canonical_reason()
-                .unwrap_or("Unknown")
-                .to_string();
-
-            if !(200..=299).contains(&status_code) {
-                tracing::info!(
-                    "URL open: non-2xx HTTP status {} for {} (returned as response, not transport error)",
-                    status_code,
-                    url
-                );
-            }
-
-            // Reconstruct response headers.
-            let mut resp_headers = String::new();
-            for (name, val) in response.headers().iter() {
-                resp_headers.push_str(name.as_str());
-                resp_headers.push_str(": ");
-                resp_headers.push_str(val.to_str().unwrap_or(""));
-                resp_headers.push_str("\r\n");
-            }
-            resp_headers.push_str("\r\n"); // blank line terminator
-
-            let content_length = response.content_length().map(|v| v as i64);
-
-            tracing::info!(
-                "URL open: HTTP {} {} → {} (content_length={:?})",
-                method,
-                url,
-                status_code,
-                content_length
-            );
-
-            return Ok(ppapi_host::UrlLoadResponse {
-                status_code,
-                status_line,
-                headers: resp_headers,
-                body: Box::new(response),
-                content_length,
-            });
-        }
-
-        // ----- http:// / https:// → stub (404) -----
-        #[cfg(all(feature = "url-stub", not(feature = "url-reqwest")))]
-        if url.starts_with("http://") || url.starts_with("https://") {
-            tracing::warn!("URL open: stub loader returning 404 for {}", url);
-            return Ok(ppapi_host::UrlLoadResponse {
-                status_code: 404,
-                status_line: "Not Found".to_string(),
-                headers: "Content-Length: 0\r\n\r\n".to_string(),
-                body: Box::new(std::io::empty()),
-                content_length: Some(0),
-            });
-        }
-
-        // ----- Unknown scheme / not found -----
-        tracing::warn!("Could not open URL: {} (path: {})", url, path);
-        Err(ppapi_sys::PP_ERROR_FILENOTFOUND)
     }
 
     fn show_alert(&self, message: &str) {

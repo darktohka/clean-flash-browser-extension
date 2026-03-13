@@ -49,6 +49,7 @@ pub unsafe fn register(registry: &mut InterfaceRegistry) {
 }
 
 unsafe extern "C" fn create(instance: PP_Instance) -> PP_Resource {
+    tracing::trace!("PPB_MessageLoop::Create(instance={})", instance);
     let Some(host) = HOST.get() else {
         return 0;
     };
@@ -60,16 +61,19 @@ unsafe extern "C" fn create(instance: PP_Instance) -> PP_Resource {
 }
 
 unsafe extern "C" fn get_for_main_thread() -> PP_Resource {
+    tracing::trace!("PPB_MessageLoop::GetForMainThread()");
     HOST.get()
         .map(|h| h.main_message_loop_resource.load(std::sync::atomic::Ordering::SeqCst))
         .unwrap_or(0)
 }
 
 unsafe extern "C" fn get_current() -> PP_Resource {
+    tracing::trace!("PPB_MessageLoop::GetCurrent()");
     CURRENT_LOOP.get()
 }
 
 unsafe extern "C" fn attach_to_current_thread(message_loop: PP_Resource) -> i32 {
+    tracing::trace!("PPB_MessageLoop::AttachToCurrentThread(message_loop={})", message_loop);
     let Some(host) = HOST.get() else {
         return PP_ERROR_FAILED;
     };
@@ -95,6 +99,7 @@ unsafe extern "C" fn attach_to_current_thread(message_loop: PP_Resource) -> i32 
 }
 
 unsafe extern "C" fn run(message_loop: PP_Resource) -> i32 {
+    tracing::trace!("PPB_MessageLoop::Run(message_loop={})", message_loop);
     let Some(host) = HOST.get() else {
         return PP_ERROR_FAILED;
     };
@@ -117,6 +122,12 @@ unsafe extern "C" fn post_work(
     callback: PP_CompletionCallback,
     delay_ms: i64,
 ) -> i32 {
+    tracing::trace!(
+        "PPB_MessageLoop::PostWork(message_loop={}, callback={:?}, delay_ms={})",
+        message_loop,
+        callback,
+        delay_ms
+    );
     let Some(host) = HOST.get() else {
         return PP_ERROR_FAILED;
     };
@@ -129,6 +140,11 @@ unsafe extern "C" fn post_work(
 }
 
 unsafe extern "C" fn post_quit(message_loop: PP_Resource, should_destroy: PP_Bool) -> i32 {
+    tracing::trace!(
+        "PPB_MessageLoop::PostQuit(message_loop={}, should_destroy={})",
+        message_loop,
+        should_destroy
+    );
     let Some(host) = HOST.get() else {
         return PP_ERROR_FAILED;
     };
