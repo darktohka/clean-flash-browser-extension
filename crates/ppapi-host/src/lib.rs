@@ -20,6 +20,7 @@ pub mod interfaces;
 pub mod message_loop;
 pub mod plugin_loader;
 pub mod resource;
+pub mod sandbox;
 pub mod threading;
 pub mod var;
 pub mod window_object;
@@ -63,23 +64,6 @@ pub fn tokio_runtime() -> &'static tokio::runtime::Runtime {
 // the PPAPI host (frame ready, URL load request, etc.)
 // ===========================================================================
 
-/// Response from opening a URL via [`HostCallbacks::on_url_open`].
-///
-/// Contains response metadata and a streaming body reader.  The reader
-/// is consumed in chunks by the URLLoader background thread.
-pub struct UrlLoadResponse {
-    /// HTTP status code (e.g. 200, 404).  For local files use 200.
-    pub status_code: u16,
-    /// HTTP status line (e.g. "HTTP/1.1 200 OK").
-    pub status_line: String,
-    /// Merged response headers, CRLF-delimited with a blank-line terminator.
-    pub headers: String,
-    /// The response body as a streaming reader.
-    pub body: Box<dyn std::io::Read + Send>,
-    /// Content-Length if known, or `None` for chunked / unknown size.
-    pub content_length: Option<i64>,
-}
-
 /// Trait implemented by the player/UI layer to handle host events.
 /// These callbacks are invoked from the PPAPI interface implementations
 /// when the plugin does something that needs external handling.
@@ -90,36 +74,6 @@ pub trait HostCallbacks: Send + Sync {
     fn on_flush(&self, graphics_2d: PP_Resource, pixels: &[u8],
                 width: i32, height: i32, stride: i32,
                 dirty_x: i32, dirty_y: i32, dirty_w: i32, dirty_h: i32);
-
-    /// Open a URL and return a streaming response.
-    ///
-    /// Called from a **background thread** — implementations may block
-    /// (e.g. perform HTTP I/O).  The returned reader is consumed in
-    /// chunks by the URLLoader streaming loop.
-    ///
-    /// Chromium semantics: HTTP status codes (including 4xx/5xx) are
-    /// represented as a successful URL response (`Ok(UrlLoadResponse)`),
-    /// not as transport errors. Use `Err(PP_ERROR_*)` only for failures
-    /// where no valid HTTP response is available (DNS/TCP/TLS/I/O, policy
-    /// denial, etc.).
-    ///
-    /// * `url`     — the resolved URL string.
-    /// * `method`  — HTTP method ("GET", "POST", etc.).
-    /// * `headers` — request headers, CRLF-delimited.
-    /// * `body`    — optional request body (from `AppendDataToBody`).
-    /// * `follow_redirects` — whether redirects should be followed
-    ///   automatically (`true`) or surfaced to PPB_URLLoader for auditing
-    ///   via `FollowRedirect` (`false`).
-    ///
-    /// Return `Err(PP_ERROR_*)` on failure.
-    fn on_url_open(
-        &self,
-        url: &str,
-        method: &str,
-        headers: &str,
-        body: Option<&[u8]>,
-        follow_redirects: bool,
-    ) -> Result<UrlLoadResponse, i32>;
 
     /// Show an alert dialog with a message. Blocks until dismissed.
     fn show_alert(&self, message: &str) {
