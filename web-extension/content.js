@@ -502,6 +502,7 @@ function replaceFlashElement(elem) {
   container.style.display = "inline-block";
   container.style.width = canvas.style.width;
   container.style.height = canvas.style.height;
+  container.setAttribute("data-flash-container", instanceId);
   container.appendChild(canvas);
 
   // ---- Store instance metadata for crash recovery ----
@@ -702,9 +703,51 @@ setInterval(() => {
   }
 }, 250);
 
-// Fullscreen changes.
-document.addEventListener("fullscreenchange", broadcastViewUpdate);
-document.addEventListener("webkitfullscreenchange", broadcastViewUpdate);
+// Fullscreen changes — resize the canvas to fill the screen on enter, and
+// restore its original size on exit.
+function handleFullscreenChange() {
+  const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+  for (const [, meta] of instanceMeta) {
+    const { canvas, container } = meta;
+    if (fsEl && (fsEl === container || fsEl.contains(canvas))) {
+      // Save pre-fullscreen CSS sizes so we can restore them on exit.
+      meta._preFsContainerW = container.style.width;
+      meta._preFsContainerH = container.style.height;
+      meta._preFsCanvasW = canvas.style.width;
+      meta._preFsCanvasH = canvas.style.height;
+      // Entering fullscreen — expand container and canvas to screen size.
+      container.style.width = "100vw";
+      container.style.height = "100vh";
+      container.style.backgroundColor = "#000";
+      canvas.style.width = "100%";
+      canvas.style.height = "100%";
+      const w = screen.width;
+      const h = screen.height;
+      canvas.width = w;
+      canvas.height = h;
+      canvas.focus();
+      if (meta.port) {
+        meta.port.postMessage({ type: "resize", width: w, height: h, ...collectViewInfo(canvas) });
+      }
+    } else if (!fsEl && meta._preFsContainerW != null) {
+      // Exiting fullscreen — restore original dimensions.
+      container.style.width = meta._preFsContainerW;
+      container.style.height = meta._preFsContainerH;
+      container.style.backgroundColor = "";
+      canvas.style.width = meta._preFsCanvasW;
+      canvas.style.height = meta._preFsCanvasH;
+      canvas.width = meta.origWidth;
+      canvas.height = meta.origHeight;
+      meta._preFsContainerW = null;
+      if (meta.port) {
+        meta.port.postMessage({ type: "resize", width: meta.origWidth, height: meta.origHeight, ...collectViewInfo(canvas) });
+      }
+    }
+  }
+  broadcastViewUpdate();
+}
+document.addEventListener("fullscreenchange", handleFullscreenChange);
+document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
 
 // ---------------------------------------------------------------------------
 // Instance lifecycle (start / restart)

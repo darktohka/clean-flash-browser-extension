@@ -908,8 +908,12 @@
         const enter = !!req.fullscreen;
         try {
           if (enter) {
-            // Prefer the plugin's embed/object element, fall back to documentElement.
-            const el = document.querySelector("embed, object") || document.documentElement;
+            // Target the container div that wraps the canvas (marked by
+            // content.js).  This ensures the canvas and its event listeners
+            // are inside the fullscreened subtree so mouse events keep working.
+            const el = document.querySelector("[data-flash-container]") ||
+                       document.querySelector("embed, object") ||
+                       document.documentElement;
             if (el.requestFullscreen) {
               el.requestFullscreen();
             } else if (el.webkitRequestFullscreen) {
