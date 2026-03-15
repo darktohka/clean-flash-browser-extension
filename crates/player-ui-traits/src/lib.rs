@@ -459,3 +459,57 @@ pub trait FullscreenProvider: Send + Sync {
     /// Returns `Some((width, height))` on success, `None` on failure.
     fn get_screen_size(&self) -> Option<(i32, i32)>;
 }
+
+// ===========================================================================
+// Context menu provider — abstracts Flash right-click context menus
+// ===========================================================================
+
+/// The type of a single menu item in a Flash context menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextMenuItemType {
+    /// A normal clickable item.
+    Normal,
+    /// A checkbox item (can be checked/unchecked).
+    Checkbox,
+    /// A visual separator line.
+    Separator,
+    /// A submenu that contains child items.
+    Submenu,
+}
+
+/// A single item in a Flash context menu tree.
+#[derive(Debug, Clone)]
+pub struct ContextMenuItem {
+    /// The type of this item.
+    pub item_type: ContextMenuItemType,
+    /// Display label (empty for separators).
+    pub name: String,
+    /// Unique ID assigned by Flash (used to report the selection).
+    pub id: i32,
+    /// Whether the item is clickable.
+    pub enabled: bool,
+    /// Whether the item is checked (only meaningful for `Checkbox` type).
+    pub checked: bool,
+    /// Child items (only meaningful for `Submenu` type).
+    pub submenu: Vec<ContextMenuItem>,
+}
+
+/// Provides context menu display for the PPAPI host.
+///
+/// When Flash calls `PPB_Flash_Menu::Show`, the host uses this trait to
+/// present the menu to the user and return the selected item.
+///
+/// Implementations should be thread-safe; `show_context_menu` is called
+/// from the PPAPI plugin thread and **must block** until the user selects
+/// an item or dismisses the menu.
+pub trait ContextMenuProvider: Send + Sync {
+    /// Display a context menu at the given position and wait for the user
+    /// to select an item or dismiss the menu.
+    ///
+    /// - `items`: the menu tree provided by Flash.
+    /// - `x`, `y`: position in plugin coordinates where the menu should appear.
+    ///
+    /// Returns `Some(id)` with the selected item's `id` field, or `None`
+    /// if the menu was dismissed without a selection.
+    fn show_context_menu(&self, items: &[ContextMenuItem], x: i32, y: i32) -> Option<i32>;
+}

@@ -272,6 +272,7 @@ unsafe extern "C" fn is_mouse_input_event(resource: PP_Resource) -> PP_Bool {
                             | PP_INPUTEVENT_TYPE_MOUSEMOVE
                             | PP_INPUTEVENT_TYPE_MOUSEENTER
                             | PP_INPUTEVENT_TYPE_MOUSELEAVE
+                            | PP_INPUTEVENT_TYPE_CONTEXTMENU
                     ))
                 })
         })

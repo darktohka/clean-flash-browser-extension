@@ -28,6 +28,7 @@
 //! | 0x31  | AudioInputStart | u32 stream_id                                        |
 //! | 0x32  | AudioInputStop  | u32 stream_id                                        |
 //! | 0x33  | AudioInputClose | u32 stream_id                                        |
+//! | 0x40  | ContextMenu     | u32 json_len + UTF-8 JSON                            |
 //!
 //! Because stdout/stderr are redirected to `/dev/null` (Unix) or `NUL`
 //! (Windows) to prevent the Flash plugin from corrupting the native
@@ -236,6 +237,9 @@ pub enum HostMessage<'a> {
     AudioInputClose {
         stream_id: u32,
     },
+    /// Context menu: send menu items to the UI for display.
+    /// Payload is a JSON string describing the menu tree.
+    ContextMenu(&'a str),
 }
 
 // Message type tags.
@@ -254,6 +258,7 @@ const TAG_AUDIO_INPUT_OPEN: u8 = 0x30;
 const TAG_AUDIO_INPUT_START: u8 = 0x31;
 const TAG_AUDIO_INPUT_STOP: u8 = 0x32;
 const TAG_AUDIO_INPUT_CLOSE: u8 = 0x33;
+const TAG_CONTEXT_MENU: u8 = 0x40;
 
 impl<'a> HostMessage<'a> {
     /// Serialize to a compact binary representation (little-endian).
@@ -372,6 +377,14 @@ impl<'a> HostMessage<'a> {
                 let mut buf = Vec::with_capacity(5);
                 buf.push(TAG_AUDIO_INPUT_CLOSE);
                 buf.extend_from_slice(&stream_id.to_le_bytes());
+                buf
+            }
+            HostMessage::ContextMenu(json) => {
+                let bytes = json.as_bytes();
+                let mut buf = Vec::with_capacity(1 + 4 + bytes.len());
+                buf.push(TAG_CONTEXT_MENU);
+                buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+                buf.extend_from_slice(bytes);
                 buf
             }
         }

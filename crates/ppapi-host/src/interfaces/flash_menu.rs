@@ -1,13 +1,10 @@
 //! PPB_Flash_Menu;0.2 implementation.
 //!
 //! Flash uses context menus for right-click menus (Settings, About, etc.).
-//! In a standalone player we don't need full GTK menu support. Instead we
-//! parse the menu data, store it in a resource, and when Show() is called
-//! we auto-select the first enabled normal item (or return USERCANCEL if none).
-//!
-//! This gives Flash a working code path without requiring GTK. Most Flash
-//! content only uses the context menu for "Settings..." and "About" which
-//! we can handle at the player level.
+//! When a `ContextMenuProvider` is set on the host, the menu items are
+//! forwarded to the UI layer which displays a real context menu and
+//! returns the selected item ID.  Without a provider, Show() returns
+//! PP_ERROR_USERCANCEL (the menu is silently dismissed).
 
 use crate::interface_registry::InterfaceRegistry;
 use crate::resource::Resource;
@@ -200,26 +197,82 @@ unsafe extern "C" fn show(
         );
     }
 
-    // In a standalone player without GTK, we return USERCANCEL.
-    // Flash will handle this gracefully.
-    let result;
-    if selected_id.is_null() {
-        result = PP_ERROR_USERCANCEL;
-    } else {
-        // Auto-cancel: don't auto-select any menu item.
-        // Flash context menus typically contain "Settings..." and "About"
-        // which we don't need to handle.
-        result = PP_ERROR_USERCANCEL;
-    }
+    // Try to use the context menu provider if available.
+    let provider = host.get_context_menu_provider();
 
-    // Fire the callback asynchronously
-    // SAFETY: Convert raw pointers to usize for Send safety.
-    if let Some(func) = callback.func {
-        let user_data = callback.user_data as usize;
-        crate::tokio_runtime().spawn_blocking(move || {
-            unsafe { func(user_data as *mut std::ffi::c_void, result) };
-        });
-    }
+    // Grab the main-loop poster so we can deliver the completion callback
+    // on the main thread, matching Chrome's behaviour.
+    let poster = host.main_loop_poster.lock().clone();
+
+    // Convert raw pointers to usize for Send safety.
+    let selected_id_usize = selected_id as usize;
+
+    // Signal that an interactive operation is pending so the Flash nested
+    // message loop doesn't apply its safety-net timeout.
+    host.pending_interactive_ops
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+    crate::tokio_runtime().spawn_blocking(move || {
+        let result = if let Some(ref provider) = provider {
+            let ui_items = convert_items_to_ui(&items);
+            match provider.show_context_menu(&ui_items, loc.x, loc.y) {
+                Some(id) => {
+                    if selected_id_usize != 0 {
+                        unsafe { *(selected_id_usize as *mut i32) = id };
+                    }
+                    tracing::debug!("PPB_Flash_Menu::Show: user selected item id={}", id);
+                    PP_OK
+                }
+                None => {
+                    tracing::debug!("PPB_Flash_Menu::Show: user cancelled menu");
+                    PP_ERROR_USERCANCEL
+                }
+            }
+        } else {
+            tracing::debug!("PPB_Flash_Menu::Show: no context menu provider, auto-cancel");
+            PP_ERROR_USERCANCEL
+        };
+
+        // Interactive operation complete.
+        if let Some(h) = HOST.get() {
+            h.pending_interactive_ops
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        // Post the completion callback to the main message loop so Flash
+        // receives it on the expected thread.
+        if let Some(ref poster) = poster {
+            poster.post_work(callback, 0, result);
+        } else if let Some(func) = callback.func {
+            unsafe { func(callback.user_data, result) };
+        }
+    });
 
     PP_OK_COMPLETIONPENDING
+}
+
+/// Convert internal MenuItem list to player_ui_traits ContextMenuItem list.
+fn convert_items_to_ui(items: &[MenuItem]) -> Vec<player_ui_traits::ContextMenuItem> {
+    items
+        .iter()
+        .map(|item| {
+            let item_type = match item.type_ {
+                PP_FLASH_MENUITEM_TYPE_NORMAL => player_ui_traits::ContextMenuItemType::Normal,
+                PP_FLASH_MENUITEM_TYPE_CHECKBOX => player_ui_traits::ContextMenuItemType::Checkbox,
+                PP_FLASH_MENUITEM_TYPE_SEPARATOR => {
+                    player_ui_traits::ContextMenuItemType::Separator
+                }
+                PP_FLASH_MENUITEM_TYPE_SUBMENU => player_ui_traits::ContextMenuItemType::Submenu,
+                _ => player_ui_traits::ContextMenuItemType::Normal,
+            };
+            player_ui_traits::ContextMenuItem {
+                item_type,
+                name: item.name.clone(),
+                id: item.id,
+                enabled: item.enabled,
+                checked: item.checked,
+                submenu: convert_items_to_ui(&item.submenu),
+            }
+        })
+        .collect()
 }

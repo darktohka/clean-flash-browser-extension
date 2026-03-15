@@ -41,6 +41,10 @@ pub struct FlashPlayerApp {
     dialog_state: Arc<dialogs::DialogState>,
     /// Currently active dialog (moved from shared state for rendering).
     active_dialog: Option<dialogs::ActiveDialog>,
+    /// Shared context menu state for Flash right-click menus.
+    context_menu_state: Arc<dialogs::ContextMenuState>,
+    /// Currently active Flash context menu being rendered.
+    active_context_menu: Option<dialogs::ActiveContextMenu>,
     /// Last mouse position sent (to avoid duplicate MOUSEMOVE events).
     last_mouse_pos: Option<PP_Point>,
     /// Current cursor type requested by the plugin.
@@ -90,6 +94,8 @@ impl FlashPlayerApp {
         let file_chooser_provider = Arc::new(dialogs::RfdFileChooserProvider::new());
         player.set_file_chooser_provider(file_chooser_provider);
 
+        let context_menu_state = Arc::new(dialogs::ContextMenuState::new());
+
         Self {
             player,
             frame_handle,
@@ -103,6 +109,8 @@ impl FlashPlayerApp {
             pending_open: initial_swf,
             dialog_state,
             active_dialog: None,
+            context_menu_state,
+            active_context_menu: None,
             last_mouse_pos: None,
             cursor_type,
             last_content_size: (0, 0),
@@ -180,6 +188,14 @@ impl FlashPlayerApp {
                     host.set_fullscreen_provider(Box::new(
                         dialogs::EguiFullscreenProvider::new(self.egui_ctx.clone()),
                     ));
+
+                    // Set up the egui context menu provider for Flash right-click menus.
+                    host.set_context_menu_provider(Box::new(
+                        dialogs::EguiContextMenuProvider::new(
+                            self.context_menu_state.clone(),
+                            self.egui_ctx.clone(),
+                        ),
+                    ));
                 }
                 Err(e) => {
                     self.status_message = format!("Error: {}", e);
@@ -230,6 +246,31 @@ impl FlashPlayerApp {
                 }
             }
             // While a dialog is open, keep repainting.
+            ctx.request_repaint();
+        }
+    }
+
+    /// Check for and draw a pending Flash context menu.
+    fn draw_pending_context_menu(&mut self, ctx: &egui::Context) {
+        // If we don't already have an active context menu, check for a new one.
+        if self.active_context_menu.is_none() {
+            self.active_context_menu =
+                dialogs::take_pending_context_menu(&self.context_menu_state);
+        }
+
+        // If there's an active context menu, draw it.
+        if self.active_context_menu.is_some() {
+            let result = dialogs::draw_context_menu(
+                self.active_context_menu.as_ref().unwrap(),
+                ctx,
+            );
+            if let Some(selected) = result {
+                // The user selected an item or dismissed the menu.
+                if let Some(menu) = self.active_context_menu.take() {
+                    menu.respond(selected);
+                }
+            }
+            // While the context menu is open, keep repainting.
             ctx.request_repaint();
         }
     }
@@ -801,6 +842,9 @@ impl eframe::App for FlashPlayerApp {
 
         // Check for and draw any pending dialog (alert/confirm/prompt).
         self.draw_pending_dialog(ctx);
+
+        // Check for and draw any pending Flash context menu.
+        self.draw_pending_context_menu(ctx);
 
         // Draw URL dialog if open.
         self.draw_url_dialog(ctx);

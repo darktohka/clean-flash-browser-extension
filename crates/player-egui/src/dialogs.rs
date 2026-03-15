@@ -399,3 +399,191 @@ impl player_ui_traits::FullscreenProvider for EguiFullscreenProvider {
         })
     }
 }
+
+// ===========================================================================
+// Egui context menu provider — Flash right-click menus
+// ===========================================================================
+
+/// Shared state for pending context menu requests between the PPAPI thread
+/// and the egui render loop.
+pub struct ContextMenuState {
+    /// A pending context menu request.
+    pub pending: Mutex<Option<PendingContextMenu>>,
+}
+
+impl ContextMenuState {
+    pub fn new() -> Self {
+        Self {
+            pending: Mutex::new(None),
+        }
+    }
+}
+
+/// A pending context menu request from Flash.
+pub struct PendingContextMenu {
+    pub items: Vec<player_ui_traits::ContextMenuItem>,
+    pub x: i32,
+    pub y: i32,
+    pub response_tx: mpsc::Sender<Option<i32>>,
+}
+
+/// Active context menu being rendered by egui.
+pub struct ActiveContextMenu {
+    pub items: Vec<player_ui_traits::ContextMenuItem>,
+    pub x: i32,
+    pub y: i32,
+    response_tx: mpsc::Sender<Option<i32>>,
+}
+
+impl ActiveContextMenu {
+    /// Send the selection and consume this menu.
+    pub fn respond(self, selected_id: Option<i32>) {
+        let _ = self.response_tx.send(selected_id);
+    }
+}
+
+/// Check for a new pending context menu request.
+pub fn take_pending_context_menu(state: &ContextMenuState) -> Option<ActiveContextMenu> {
+    let mut pending = state.pending.lock().unwrap();
+    pending.take().map(|p| ActiveContextMenu {
+        items: p.items,
+        x: p.x,
+        y: p.y,
+        response_tx: p.response_tx,
+    })
+}
+
+/// Context menu provider using egui popup windows.
+///
+/// Constructed with a shared `ContextMenuState` and an `egui::Context`
+/// to wake the UI thread when a menu request arrives.
+pub struct EguiContextMenuProvider {
+    state: Arc<ContextMenuState>,
+    ctx: egui::Context,
+}
+
+impl EguiContextMenuProvider {
+    pub fn new(state: Arc<ContextMenuState>, ctx: egui::Context) -> Self {
+        Self { state, ctx }
+    }
+}
+
+impl player_ui_traits::ContextMenuProvider for EguiContextMenuProvider {
+    fn show_context_menu(
+        &self,
+        items: &[player_ui_traits::ContextMenuItem],
+        x: i32,
+        y: i32,
+    ) -> Option<i32> {
+        let (tx, rx) = mpsc::channel();
+        {
+            let mut pending = self.state.pending.lock().unwrap();
+            *pending = Some(PendingContextMenu {
+                items: items.to_vec(),
+                x,
+                y,
+                response_tx: tx,
+            });
+        }
+        self.ctx.request_repaint();
+        // Block the PPAPI thread until the user selects or dismisses.
+        rx.recv().unwrap_or(None)
+    }
+}
+
+/// Draw an active context menu in the egui context.
+/// Returns `Some(selected_id)` or `Some(None)` if dismissed, `None` if still open.
+pub fn draw_context_menu(
+    menu: &ActiveContextMenu,
+    ctx: &egui::Context,
+) -> Option<Option<i32>> {
+    let mut result: Option<Option<i32>> = None;
+
+    // Use a fixed-position egui Area at the menu position.
+    let area_id = egui::Id::new("flash_context_menu");
+
+    // Detect clicks outside the menu area to dismiss.
+    let pointer_pos = ctx.input(|i| i.pointer.interact_pos());
+    let clicked_outside = ctx.input(|i| i.pointer.any_pressed());
+
+    let area_resp = egui::Area::new(area_id)
+        .order(egui::Order::Foreground)
+        .fixed_pos(egui::pos2(menu.x as f32, menu.y as f32))
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                result = draw_menu_items(ui, &menu.items);
+            });
+        });
+
+    // Check if the user clicked outside the menu.
+    if clicked_outside {
+        if let Some(pos) = pointer_pos {
+            if !area_resp.response.rect.contains(pos) {
+                result = Some(None); // dismissed
+            }
+        }
+    }
+
+    // Check for Escape key.
+    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        result = Some(None);
+    }
+
+    result
+}
+
+/// Recursively draw menu items. Returns `Some(Some(id))` if an item was clicked,
+/// `None` if the menu is still open.
+fn draw_menu_items(
+    ui: &mut egui::Ui,
+    items: &[player_ui_traits::ContextMenuItem],
+) -> Option<Option<i32>> {
+    for item in items {
+        match item.item_type {
+            player_ui_traits::ContextMenuItemType::Separator => {
+                ui.separator();
+            }
+            player_ui_traits::ContextMenuItemType::Normal
+            | player_ui_traits::ContextMenuItemType::Checkbox => {
+                let label = if item.item_type == player_ui_traits::ContextMenuItemType::Checkbox
+                    && item.checked
+                {
+                    format!("✓ {}", item.name)
+                } else {
+                    item.name.clone()
+                };
+
+                let button = egui::Button::new(&label).wrap_mode(egui::TextWrapMode::Extend);
+                let resp = ui.add_enabled(item.enabled, button);
+                if resp.clicked() {
+                    return Some(Some(item.id));
+                }
+            }
+            player_ui_traits::ContextMenuItemType::Submenu => {
+                ui.menu_button(&item.name, |ui| {
+                    if let Some(result) = draw_menu_items(ui, &item.submenu) {
+                        // Propagate the selection up.
+                        // Store in a temp so the caller can detect it.
+                        ui.memory_mut(|m| {
+                            m.data
+                                .insert_temp(egui::Id::new("flash_ctx_menu_result"), result);
+                        });
+                        ui.close();
+                    }
+                });
+                // Check if a submenu item was selected.
+                let sub_result: Option<Option<i32>> = ui.memory(|m| {
+                    m.data
+                        .get_temp(egui::Id::new("flash_ctx_menu_result"))
+                });
+                if let Some(r) = sub_result {
+                    ui.memory_mut(|m| {
+                        m.data.remove::<Option<i32>>(egui::Id::new("flash_ctx_menu_result"));
+                    });
+                    return Some(r);
+                }
+            }
+        }
+    }
+    None
+}

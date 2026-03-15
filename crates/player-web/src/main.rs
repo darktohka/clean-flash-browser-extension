@@ -204,6 +204,15 @@ fn main() {
         // are forwarded to the browser's Fullscreen API.
         let fs_bridge = SCRIPT_BRIDGE.get().expect("SCRIPT_BRIDGE not initialised").clone();
         host.set_fullscreen_provider(Box::new(WebFullscreenProvider::new(fs_bridge)));
+
+        // Set up the context menu provider so that Flash right-click menus
+        // are forwarded to the browser extension for display.
+        let ctx_menu = Arc::new(WebContextMenuProvider::new());
+        WEB_CONTEXT_MENU
+            .set(ctx_menu.clone())
+            .ok()
+            .expect("WEB_CONTEXT_MENU already initialised");
+        host.set_context_menu_provider(Box::new(WebContextMenuProviderWrapper(ctx_menu)));
     }
 
     tracing::info!("Host initialized successfully, entering main loop");
@@ -276,6 +285,9 @@ use std::sync::OnceLock;
 /// reader thread to the blocking `ScriptProvider` calls.
 static SCRIPT_BRIDGE: OnceLock<Arc<script_bridge::ScriptBridge>> = OnceLock::new();
 
+/// Global context menu provider for routing `menuResponse` messages.
+static WEB_CONTEXT_MENU: OnceLock<Arc<WebContextMenuProvider>> = OnceLock::new();
+
 /// Lazily-initialized channel that receives messages from a background reader.
 fn try_read_command() -> Option<serde_json::Value> {
     static RX: OnceLock<Mutex<mpsc::Receiver<Option<serde_json::Value>>>> = OnceLock::new();
@@ -284,6 +296,7 @@ fn try_read_command() -> Option<serde_json::Value> {
         let (tx, rx) = mpsc::channel();
         let bridge = SCRIPT_BRIDGE.get().cloned();
         let audio_input = WEB_AUDIO_INPUT.get().cloned();
+        let context_menu = WEB_CONTEXT_MENU.get().cloned();
         std::thread::Builder::new()
             .name("stdin-reader".into())
             .spawn(move || {
@@ -303,6 +316,14 @@ fn try_read_command() -> Option<serde_json::Value> {
                             if msg.get("type").and_then(|v| v.as_str()) == Some("audioInputData") {
                                 if let Some(ref ai) = audio_input {
                                     ai.handle_audio_data(&msg);
+                                }
+                                continue;
+                            }
+                            // Route menuResponse messages to the context
+                            // menu provider's pending channel.
+                            if msg.get("type").and_then(|v| v.as_str()) == Some("menuResponse") {
+                                if let Some(ref cm) = context_menu {
+                                    cm.handle_response(&msg);
                                 }
                                 continue;
                             }
@@ -408,7 +429,7 @@ fn handle_command(player: &mut FlashPlayer, cmd: &serde_json::Value) -> bool {
             }
         }
 
-        "mousedown" | "mouseup" | "mousemove" | "mouseenter" | "mouseleave" => {
+        "mousedown" | "mouseup" | "mousemove" | "mouseenter" | "mouseleave" | "contextmenu" => {
             let x = cmd["x"].as_f64().unwrap_or(0.0) as i32;
             let y = cmd["y"].as_f64().unwrap_or(0.0) as i32;
             let btn_idx = cmd["button"].as_i64().unwrap_or(-1);
@@ -420,6 +441,7 @@ fn handle_command(player: &mut FlashPlayer, cmd: &serde_json::Value) -> bool {
                 "mousemove" => PP_INPUTEVENT_TYPE_MOUSEMOVE,
                 "mouseenter" => PP_INPUTEVENT_TYPE_MOUSEENTER,
                 "mouseleave" => PP_INPUTEVENT_TYPE_MOUSELEAVE,
+                "contextmenu" => PP_INPUTEVENT_TYPE_CONTEXTMENU,
                 _ => unreachable!(),
             };
 
@@ -618,6 +640,123 @@ fn send_dirty_frame(frame_handle: &Arc<Mutex<Option<player_core::SharedFrameBuff
         stride,
         pixels: &qoi_data,
     });
+}
+
+// ===========================================================================
+// Context menu provider — sends Flash menus to the browser extension
+// ===========================================================================
+
+/// Context menu provider that sends menu items to the Chrome Extension
+/// for display as a DOM-based context menu and blocks until the user
+/// selects an item or dismisses the menu.
+struct WebContextMenuProvider {
+    /// Channel for receiving the user's menu response.
+    pending: Mutex<Option<mpsc::Sender<Option<i32>>>>,
+}
+
+impl WebContextMenuProvider {
+    fn new() -> Self {
+        Self {
+            pending: Mutex::new(None),
+        }
+    }
+
+    /// Called by the stdin reader thread when a `menuResponse` message
+    /// arrives from the browser extension.
+    fn handle_response(&self, msg: &serde_json::Value) {
+        let selected_id = msg.get("selectedId").and_then(|v| v.as_i64()).map(|v| v as i32);
+
+        let mut guard = self.pending.lock();
+        if let Some(tx) = guard.take() {
+            let _ = tx.send(selected_id);
+        } else {
+            tracing::warn!("menuResponse received but no pending request");
+        }
+    }
+}
+
+impl player_ui_traits::ContextMenuProvider for WebContextMenuProvider {
+    fn show_context_menu(
+        &self,
+        items: &[player_ui_traits::ContextMenuItem],
+        x: i32,
+        y: i32,
+    ) -> Option<i32> {
+        // Serialize items to JSON.
+        let json_items = serialize_menu_items(items);
+        let payload = serde_json::json!({
+            "items": json_items,
+            "x": x,
+            "y": y,
+        });
+        let json_str = payload.to_string();
+
+        // Register the pending waiter *before* sending.
+        let (tx, rx) = mpsc::channel();
+        *self.pending.lock() = Some(tx);
+
+        // Send via the binary protocol.
+        if let Err(e) = protocol::send_host_message(&protocol::HostMessage::ContextMenu(&json_str))
+        {
+            tracing::error!("failed to send ContextMenu message: {}", e);
+            *self.pending.lock() = None;
+            return None;
+        }
+
+        // Block until the response arrives (generous timeout: menus can
+        // stay open for a long time).
+        match rx.recv_timeout(std::time::Duration::from_secs(120)) {
+            Ok(selected) => selected,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                tracing::warn!("ContextMenu response timed out");
+                *self.pending.lock() = None;
+                None
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                tracing::warn!("ContextMenu response channel disconnected");
+                None
+            }
+        }
+    }
+}
+
+/// Thin wrapper so we can pass `Arc<WebContextMenuProvider>` as a
+/// `Box<dyn ContextMenuProvider>` to the host.
+struct WebContextMenuProviderWrapper(Arc<WebContextMenuProvider>);
+
+impl player_ui_traits::ContextMenuProvider for WebContextMenuProviderWrapper {
+    fn show_context_menu(
+        &self,
+        items: &[player_ui_traits::ContextMenuItem],
+        x: i32,
+        y: i32,
+    ) -> Option<i32> {
+        self.0.show_context_menu(items, x, y)
+    }
+}
+
+fn serialize_menu_items(items: &[player_ui_traits::ContextMenuItem]) -> serde_json::Value {
+    serde_json::Value::Array(
+        items
+            .iter()
+            .map(|item| {
+                let type_str = match item.item_type {
+                    player_ui_traits::ContextMenuItemType::Normal => "normal",
+                    player_ui_traits::ContextMenuItemType::Checkbox => "checkbox",
+                    player_ui_traits::ContextMenuItemType::Separator => "separator",
+                    player_ui_traits::ContextMenuItemType::Submenu => "submenu",
+                };
+                serde_json::json!({
+                    "type": type_str,
+                    "name": item.name,
+                    "id": item.id,
+                    "enabled": item.enabled,
+                    "checked": item.checked,
+                    "submenu": serialize_menu_items(&item.submenu),
+                })
+            })
+            .collect(),
+    )
 }
 
 // ===========================================================================

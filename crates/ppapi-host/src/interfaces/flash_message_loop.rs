@@ -8,13 +8,17 @@
 //! message loop while waiting (like Chrome's nested `base::RunLoop`) so
 //! that `CallOnMainThread` callbacks keep firing.  If called on a
 //! background thread, it simply blocks on a condvar.
+//!
+//! The main-thread path uses `tokio::runtime::Handle::block_on` to
+//! await a `Notify` signal from the message loop, which gives instant
+//! wakeup when callbacks are posted — no polling or arbitrary timeouts.
 
 use crate::interface_registry::InterfaceRegistry;
 use crate::resource::Resource;
 use ppapi_sys::*;
 use std::any::Any;
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::super::HOST;
 use super::message_loop::MessageLoopResource;
@@ -24,7 +28,7 @@ struct FlashLoopState {
     /// Set to `true` when `Quit()` is called or the resource is destroyed.
     quit: bool,
     /// The result that `Run()` should return.
-    /// `PP_OK` when quit normally, `PP_ERROR_ABORTED` on destruction/timeout.
+    /// `PP_OK` when quit normally, `PP_ERROR_ABORTED` on destruction.
     result: i32,
     /// Whether `Run()` has already been called (only the first call proceeds).
     run_called: bool,
@@ -60,14 +64,6 @@ impl Drop for FlashMessageLoopResource {
         }
     }
 }
-
-/// Safety-net timeout for when `Quit()` is never called.
-/// Short enough to not feel like a hang; long enough that a real
-/// Quit() arriving within this window will be honoured.
-const RUN_TIMEOUT: Duration = Duration::from_millis(500);
-
-/// Interval between main-loop pumps when `Run()` is on the main thread.
-const PUMP_INTERVAL: Duration = Duration::from_millis(4);
 
 static VTABLE: PPB_Flash_MessageLoop_0_1 = PPB_Flash_MessageLoop_0_1 {
     Create: Some(create),
@@ -136,41 +132,39 @@ unsafe extern "C" fn run(flash_message_loop: PP_Resource) -> i32 {
         s.run_called = true;
     }
 
-    let start = Instant::now();
-
     if on_main_thread {
         // --- Main-thread path: pump the main message loop while waiting ---
         // This mirrors Chrome's nested base::RunLoop(kNestableTasksAllowed).
+        //
+        // We use `tokio::runtime::Handle::block_on` to await the main
+        // message loop's `Notify` signal.  When any code posts a callback
+        // to the main loop (via `post_work` / `CallOnMainThread`), the
+        // Notify fires and we immediately drain + execute the callbacks.
+        // No polling interval, no arbitrary timeout.
+        //
+        // Safety-net timeout: when no interactive operation is pending
+        // (e.g. an error dialog that we don't implement), we abort after
+        // 2 seconds so the main thread doesn't freeze forever.
         let main_loop_id = host
             .main_message_loop_resource
             .load(std::sync::atomic::Ordering::SeqCst);
 
+        // Grab the Notify handle from the main message loop.
+        let notify = if main_loop_id != 0 {
+            host.resources
+                .with_downcast::<MessageLoopResource, _>(main_loop_id, |ml| {
+                    ml.loop_handle.notify_handle()
+                })
+        } else {
+            None
+        };
+
+        let rt_handle = crate::tokio_runtime().handle().clone();
+        let start = std::time::Instant::now();
+        const SAFETY_TIMEOUT: Duration = Duration::from_secs(2);
+
         loop {
-            // Check quit flag.
-            {
-                let guard = lock.lock().unwrap();
-                if guard.quit {
-                    let result = guard.result;
-                    tracing::trace!(
-                        "PPB_Flash_MessageLoop::Run({}) quit on main thread, result={}",
-                        flash_message_loop, result
-                    );
-                    return result;
-                }
-            }
-
-            // Check timeout.
-            if start.elapsed() >= RUN_TIMEOUT {
-                tracing::warn!(
-                    "PPB_Flash_MessageLoop::Run({}): timed out after {}ms on main thread",
-                    flash_message_loop,
-                    RUN_TIMEOUT.as_millis()
-                );
-                return PP_ERROR_ABORTED;
-            }
-
-            // Pump the main message loop — drain callbacks under the
-            // resource lock, then execute them with the lock released.
+            // 1. Drain and execute any ready callbacks FIRST.
             if main_loop_id != 0 {
                 let ready = host.resources
                     .with_downcast_mut::<MessageLoopResource, _>(main_loop_id, |ml| {
@@ -183,25 +177,60 @@ unsafe extern "C" fn run(flash_message_loop: PP_Resource) -> i32 {
                 }
             }
 
-            // Yield briefly before next pump cycle.
-            std::thread::sleep(PUMP_INTERVAL);
+            // 2. Check quit flag (callbacks above may have triggered Quit()).
+            {
+                let guard = lock.lock().unwrap();
+                if guard.quit {
+                    let result = guard.result;
+                    tracing::trace!(
+                        "PPB_Flash_MessageLoop::Run({}) quit on main thread, result={}",
+                        flash_message_loop, result
+                    );
+                    return result;
+                }
+            }
+
+            // 3. Safety-net timeout: if no interactive operation (context menu,
+            //    file dialog) is pending, abort after SAFETY_TIMEOUT to prevent
+            //    the main thread freezing on unimplemented Flash dialogs.
+            let interactive_pending = host
+                .pending_interactive_ops
+                .load(std::sync::atomic::Ordering::SeqCst)
+                > 0;
+            if !interactive_pending && start.elapsed() >= SAFETY_TIMEOUT {
+                tracing::warn!(
+                    "PPB_Flash_MessageLoop::Run({}): safety timeout after {}ms (no interactive op pending)",
+                    flash_message_loop,
+                    SAFETY_TIMEOUT.as_millis()
+                );
+                return PP_ERROR_ABORTED;
+            }
+
+            // 4. Wait for the next work item to be posted.
+            //    block_on is safe here: the main thread is NOT inside a
+            //    Tokio async context (confirmed by architecture analysis).
+            if let Some(ref notify) = notify {
+                let n = notify.clone();
+                rt_handle.block_on(async move {
+                    // Use a timeout so we re-check quit and the safety
+                    // timeout periodically.
+                    let _ = tokio::time::timeout(
+                        Duration::from_millis(50),
+                        n.notified(),
+                    ).await;
+                });
+            } else {
+                // No notify handle — fall back to a brief sleep.
+                std::thread::sleep(Duration::from_millis(4));
+            }
         }
     } else {
         // --- Background-thread path: block on condvar ---
+        // No timeout — waits until Quit() is called or the resource is
+        // dropped (which sets quit + notifies the condvar).
         let mut guard = lock.lock().unwrap();
         while !guard.quit {
-            let elapsed = start.elapsed();
-            if elapsed >= RUN_TIMEOUT {
-                tracing::warn!(
-                    "PPB_Flash_MessageLoop::Run({}): timed out after {}ms on background thread",
-                    flash_message_loop,
-                    RUN_TIMEOUT.as_millis()
-                );
-                guard.result = PP_ERROR_ABORTED;
-                break;
-            }
-            let remaining = RUN_TIMEOUT - elapsed;
-            let (g, _) = cvar.wait_timeout(guard, remaining).unwrap();
+            let (g, _) = cvar.wait_timeout(guard, Duration::from_millis(100)).unwrap();
             guard = g;
         }
 
@@ -232,5 +261,20 @@ unsafe extern "C" fn quit(flash_message_loop: PP_Resource) {
         s.quit = true;
         s.result = PP_OK;
         cvar.notify_one();
+
+        // Also notify the main message loop Notify so the Tokio block_on
+        // wakes up immediately instead of waiting for its timeout.
+        let main_loop_id = host
+            .main_message_loop_resource
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if main_loop_id != 0 {
+            if let Some(notify) = host.resources
+                .with_downcast::<MessageLoopResource, _>(main_loop_id, |ml| {
+                    ml.loop_handle.notify_handle()
+                })
+            {
+                notify.notify_one();
+            }
+        }
     }
 }

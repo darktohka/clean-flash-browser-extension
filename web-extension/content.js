@@ -187,6 +187,7 @@ const TAG_NAMES = {
   [0x31]: "AINPUT_START",
   [0x32]: "AINPUT_STOP",
   [0x33]: "AINPUT_CLOSE",
+  [0x40]: "CONTEXT_MENU",
 };
 
 /**
@@ -831,6 +832,7 @@ const TAG_AUDIO_INPUT_OPEN  = 0x30;
 const TAG_AUDIO_INPUT_START = 0x31;
 const TAG_AUDIO_INPUT_STOP  = 0x32;
 const TAG_AUDIO_INPUT_CLOSE = 0x33;
+const TAG_CONTEXT_MENU      = 0x40;
 
 function tagHex(tag) {
   return `0x${tag.toString(16).padStart(2, "0")}`;
@@ -1244,6 +1246,212 @@ function audioInputClose(streamId) {
   console.log("[Flash Player] Audio input stream closed:", streamId);
 }
 
+// ---------------------------------------------------------------------------
+// Flash context menu  (TAG_CONTEXT_MENU = 0x40)
+// ---------------------------------------------------------------------------
+
+/**
+ * Show a Flash context menu at the given position on top of the canvas.
+ *
+ * @param {Array} items - Menu item tree from the host.
+ * @param {number} x - X position in plugin coordinates.
+ * @param {number} y - Y position in plugin coordinates.
+ * @param {HTMLCanvasElement} canvas - The Flash canvas element.
+ * @param {Port} port - Native messaging port to send menuResponse back.
+ */
+function showFlashContextMenu(items, x, y, canvas, port) {
+  // Remove any existing Flash context menu.
+  removeFlashContextMenu();
+
+  const menu = document.createElement("div");
+  menu.className = "flash-context-menu";
+  Object.assign(menu.style, {
+    position: "fixed",
+    zIndex: "2147483647",
+    background: "#f0f0f0",
+    border: "1px solid #a0a0a0",
+    borderRadius: "3px",
+    boxShadow: "2px 2px 6px rgba(0,0,0,0.3)",
+    padding: "2px 0",
+    fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
+    fontSize: "12px",
+    color: "#1a1a1a",
+    minWidth: "160px",
+    cursor: "default",
+    userSelect: "none",
+  });
+
+  let responded = false;
+  function sendResponse(selectedId) {
+    if (responded) return;
+    responded = true;
+    port.postMessage({ type: "menuResponse", selectedId: selectedId });
+    removeFlashContextMenu();
+  }
+
+  function buildMenuItems(parentEl, itemList) {
+    for (const item of itemList) {
+      if (item.type === "separator") {
+        const sep = document.createElement("div");
+        Object.assign(sep.style, {
+          height: "1px",
+          background: "#c0c0c0",
+          margin: "3px 0",
+        });
+        parentEl.appendChild(sep);
+        continue;
+      }
+
+      const row = document.createElement("div");
+      Object.assign(row.style, {
+        padding: "4px 24px 4px 24px",
+        position: "relative",
+        whiteSpace: "nowrap",
+        color: item.enabled ? "#1a1a1a" : "#a0a0a0",
+        cursor: item.enabled ? "default" : "not-allowed",
+      });
+
+      // Checkbox indicator
+      if (item.type === "checkbox" && item.checked) {
+        const check = document.createElement("span");
+        check.textContent = "\u2713";
+        Object.assign(check.style, {
+          position: "absolute",
+          left: "6px",
+        });
+        row.appendChild(check);
+      }
+
+      const label = document.createElement("span");
+      label.textContent = item.name || "";
+      row.appendChild(label);
+
+      // Submenu arrow
+      if (item.type === "submenu") {
+        const arrow = document.createElement("span");
+        arrow.textContent = "\u25B6";
+        Object.assign(arrow.style, {
+          position: "absolute",
+          right: "8px",
+          fontSize: "10px",
+        });
+        row.appendChild(arrow);
+      }
+
+      if (item.enabled && item.type !== "submenu") {
+        row.addEventListener("mouseenter", () => {
+          row.style.background = "#0078d4";
+          row.style.color = "#fff";
+        });
+        row.addEventListener("mouseleave", () => {
+          row.style.background = "";
+          row.style.color = "#1a1a1a";
+        });
+        row.addEventListener("click", (e) => {
+          e.stopPropagation();
+          sendResponse(item.id);
+        });
+      }
+
+      // Submenu hover behavior
+      if (item.type === "submenu" && item.submenu && item.submenu.length > 0) {
+        const sub = document.createElement("div");
+        sub.className = "flash-context-submenu";
+        Object.assign(sub.style, {
+          display: "none",
+          position: "absolute",
+          left: "100%",
+          top: "0",
+          background: "#f0f0f0",
+          border: "1px solid #a0a0a0",
+          borderRadius: "3px",
+          boxShadow: "2px 2px 6px rgba(0,0,0,0.3)",
+          padding: "2px 0",
+          minWidth: "160px",
+          zIndex: "2147483647",
+        });
+        buildMenuItems(sub, item.submenu);
+        row.appendChild(sub);
+
+        row.addEventListener("mouseenter", () => {
+          sub.style.display = "block";
+          row.style.background = "#0078d4";
+          row.style.color = "#fff";
+        });
+        row.addEventListener("mouseleave", () => {
+          sub.style.display = "none";
+          row.style.background = "";
+          row.style.color = item.enabled ? "#1a1a1a" : "#a0a0a0";
+        });
+      }
+
+      parentEl.appendChild(row);
+    }
+  }
+
+  buildMenuItems(menu, items);
+
+  // Position relative to the canvas.
+  const rect = canvas.getBoundingClientRect();
+  // Account for CSS scaling (canvas might be scaled via CSS).
+  const scaleX = rect.width / (canvas.width || 1);
+  const scaleY = rect.height / (canvas.height || 1);
+  let menuX = rect.left + x * scaleX;
+  let menuY = rect.top + y * scaleY;
+
+  document.body.appendChild(menu);
+
+  // Adjust if the menu would overflow the viewport.
+  const menuRect = menu.getBoundingClientRect();
+  if (menuX + menuRect.width > window.innerWidth) {
+    menuX = window.innerWidth - menuRect.width - 2;
+  }
+  if (menuY + menuRect.height > window.innerHeight) {
+    menuY = window.innerHeight - menuRect.height - 2;
+  }
+  if (menuX < 0) menuX = 0;
+  if (menuY < 0) menuY = 0;
+
+  menu.style.left = menuX + "px";
+  menu.style.top = menuY + "px";
+
+  // Close menu on click outside or pressing Escape.
+  function onDocClick(e) {
+    if (!menu.contains(e.target)) {
+      sendResponse(null);
+    }
+  }
+  function onDocKeydown(e) {
+    if (e.key === "Escape") {
+      sendResponse(null);
+    }
+  }
+
+  // Defer event registration so the current right-click event doesn't
+  // immediately close the menu.
+  setTimeout(() => {
+    document.addEventListener("mousedown", onDocClick, true);
+    document.addEventListener("keydown", onDocKeydown, true);
+  }, 0);
+
+  // Store cleanup reference so removeFlashContextMenu can tidy up.
+  menu._flashCleanup = () => {
+    document.removeEventListener("mousedown", onDocClick, true);
+    document.removeEventListener("keydown", onDocKeydown, true);
+  };
+}
+
+/**
+ * Remove any existing Flash context menu from the DOM.
+ */
+function removeFlashContextMenu() {
+  const existing = document.querySelectorAll(".flash-context-menu");
+  for (const el of existing) {
+    if (el._flashCleanup) el._flashCleanup();
+    el.remove();
+  }
+}
+
 /**
  * Handle a fully reassembled binary message (as a base64 string).
  * The binary payload is LZ4-compressed (with prepended uncompressed size).
@@ -1451,6 +1659,22 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
     case TAG_AUDIO_INPUT_CLOSE: {
       const streamId = readU32(dv, 1);
       audioInputClose(streamId);
+      break;
+    }
+
+    case TAG_CONTEXT_MENU: {
+      // 1 byte tag + u32 json_len + UTF-8 JSON
+      const jsonLen = readU32(dv, 1);
+      const jsonBytes = bytes.subarray(5, 5 + jsonLen);
+      const jsonStr = _textDecoder.decode(jsonBytes);
+      try {
+        const menuData = JSON.parse(jsonStr);
+        showFlashContextMenu(menuData.items, menuData.x, menuData.y, canvas, port);
+      } catch (e) {
+        console.error("[Flash Player] Bad context menu data:", e, jsonStr);
+        // Send cancel response so the host doesn't hang.
+        port.postMessage({ type: "menuResponse", selectedId: null });
+      }
       break;
     }
 
@@ -1812,9 +2036,17 @@ function bindInputEvents(canvas, port) {
     port.postMessage({ type: "focus", hasFocus: false });
   });
 
-  // Prevent context menu on right-click.
+  // Prevent native context menu and notify the host so Flash can show its own.
   canvas.addEventListener("contextmenu", (e) => {
     e.preventDefault();
+    const pos = canvasPos(canvas, e);
+    port.postMessage({
+      type: "contextmenu",
+      x: pos.x,
+      y: pos.y,
+      button: mapButton(e),
+      modifiers: getModifiers(e),
+    });
   });
 }
 

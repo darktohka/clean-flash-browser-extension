@@ -3,10 +3,15 @@
 //! Each plugin thread has an associated message loop that processes
 //! `PP_CompletionCallback`s posted via `PPB_MessageLoop::PostWork`
 //! or `PPB_Core::CallOnMainThread`.
+//!
+//! Uses `tokio::sync::mpsc` for the work-item channel and
+//! `tokio::sync::Notify` for instant wakeup of nested pump loops
+//! (e.g. `PPB_Flash_MessageLoop::Run`).
 
-use crossbeam_channel::{Receiver, Sender, unbounded};
 use ppapi_sys::*;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::{mpsc, Notify};
 
 /// A work item posted to a message loop.
 struct WorkItem {
@@ -15,10 +20,13 @@ struct WorkItem {
     fire_at: Instant,
 }
 
+// Safety: PP_CompletionCallback is Send (declared in ppapi-sys).
+unsafe impl Send for WorkItem {}
+
 /// Message loop that processes completion callbacks.
 pub struct MessageLoop {
-    sender: Sender<WorkItem>,
-    receiver: Receiver<WorkItem>,
+    sender: mpsc::UnboundedSender<WorkItem>,
+    receiver: mpsc::UnboundedReceiver<WorkItem>,
     running: bool,
     depth: u32,
     /// Whether the loop has been destroyed via `PostQuit(PP_TRUE)`.
@@ -28,12 +36,15 @@ pub struct MessageLoop {
     /// Work items that were received but not yet ready (deferred/delayed).
     /// Kept here to avoid re-posting them to the channel on every poll.
     deferred: Vec<WorkItem>,
+    /// Shared notify handle — signalled on every `post_work` so that
+    /// nested pump loops (Flash message loop) wake up immediately.
+    notify: Arc<Notify>,
 }
 
 impl MessageLoop {
     /// Create a new message loop.
     pub fn new() -> Self {
-        let (sender, receiver) = unbounded();
+        let (sender, receiver) = mpsc::unbounded_channel();
         Self {
             sender,
             receiver,
@@ -42,6 +53,7 @@ impl MessageLoop {
             destroyed: false,
             is_main_thread_loop: false,
             deferred: Vec::new(),
+            notify: Arc::new(Notify::new()),
         }
     }
 
@@ -65,13 +77,12 @@ impl MessageLoop {
     ///
     /// Returns a new `MessageLoopPoster` for the fresh channel.
     pub fn reset_channel(&mut self) -> MessageLoopPoster {
-        // Drop the old receiver and sender — this disconnects all
-        // outstanding `MessageLoopPoster` clones.
-        let (sender, receiver) = unbounded();
+        let (sender, receiver) = mpsc::unbounded_channel();
         self.sender = sender;
         self.receiver = receiver;
-        // Clear deferred items from the old channel.
         self.deferred.clear();
+        // Create a fresh Notify so old posters stop waking us.
+        self.notify = Arc::new(Notify::new());
         self.poster()
     }
 
@@ -94,7 +105,16 @@ impl MessageLoop {
     pub fn poster(&self) -> MessageLoopPoster {
         MessageLoopPoster {
             sender: self.sender.clone(),
+            notify: self.notify.clone(),
         }
+    }
+
+    /// Get a clone of the `Notify` handle.
+    ///
+    /// Nested pump loops (e.g. `PPB_Flash_MessageLoop::Run`) use this
+    /// to await wakeups without polling.
+    pub fn notify_handle(&self) -> Arc<Notify> {
+        self.notify.clone()
     }
 
     /// Post a callback to be executed after `delay_ms` milliseconds.
@@ -102,11 +122,9 @@ impl MessageLoop {
     /// Returns `PP_ERROR_BADARGUMENT` if the callback is null (blocking).
     /// Returns `PP_ERROR_FAILED` if the loop has been destroyed.
     pub fn post_work(&self, callback: PP_CompletionCallback, delay_ms: i64, result: i32) -> i32 {
-        // Reject null/blocking callbacks per spec.
         if callback.is_null() {
             return PP_ERROR_BADARGUMENT;
         }
-        // Reject if the loop was destroyed via PostQuit(PP_TRUE).
         if self.destroyed {
             return PP_ERROR_FAILED;
         }
@@ -123,10 +141,13 @@ impl MessageLoop {
             fire_at,
         };
 
-        self.sender
-            .send(item)
-            .map(|_| PP_OK)
-            .unwrap_or(PP_ERROR_FAILED)
+        match self.sender.send(item) {
+            Ok(()) => {
+                self.notify.notify_one();
+                PP_OK
+            }
+            Err(_) => PP_ERROR_FAILED,
+        }
     }
 
     /// Post a "quit" sentinel to stop the run loop.
@@ -136,7 +157,6 @@ impl MessageLoop {
     ///
     /// Returns `PP_ERROR_WRONG_THREAD` if this is the main-thread loop.
     pub fn post_quit(&mut self, should_destroy: bool) -> i32 {
-        // Main thread loop cannot be quit per spec.
         if self.is_main_thread_loop {
             return PP_ERROR_WRONG_THREAD;
         }
@@ -147,14 +167,17 @@ impl MessageLoop {
 
         // Send a null callback as a quit sentinel.
         let item = WorkItem {
-            callback: PP_CompletionCallback::blocking(), // null sentinel
+            callback: PP_CompletionCallback::blocking(),
             result: 0,
             fire_at: Instant::now(),
         };
-        self.sender
-            .send(item)
-            .map(|_| PP_OK)
-            .unwrap_or(PP_ERROR_FAILED)
+        match self.sender.send(item) {
+            Ok(()) => {
+                self.notify.notify_one();
+                PP_OK
+            }
+            Err(_) => PP_ERROR_FAILED,
+        }
     }
 
     /// Run the message loop, processing callbacks until a quit message is received.
@@ -166,11 +189,9 @@ impl MessageLoop {
     /// # Safety
     /// Callbacks are executed with their user_data pointers.
     pub unsafe fn run(&mut self) -> i32 {
-        // Main thread loop is run by the system (via poll), not by plugin.
         if self.is_main_thread_loop {
             return PP_ERROR_INPROGRESS;
         }
-        // Nested run loops are not allowed per spec.
         if self.depth > 0 {
             return PP_ERROR_INPROGRESS;
         }
@@ -179,26 +200,26 @@ impl MessageLoop {
         self.depth += 1;
 
         loop {
-            match self.receiver.recv() {
+            // Block on the channel (tokio mpsc blocking_recv is not available
+            // on unbounded; use a small spin with try_recv + Notify wait).
+            match self.receiver.try_recv() {
                 Ok(item) => {
-                    // Null callback function is our quit sentinel.
                     if item.callback.is_null() {
                         break;
                     }
-
-                    // If the item has a delay, wait for it.
                     let now = Instant::now();
                     if item.fire_at > now {
                         std::thread::sleep(item.fire_at - now);
                     }
-
-                    // Execute the callback.
                     unsafe {
                         item.callback.run(item.result);
                     }
                 }
-                Err(_) => {
-                    // Channel disconnected — all senders dropped.
+                Err(mpsc::error::TryRecvError::Empty) => {
+                    // Nothing available — park briefly then retry.
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(mpsc::error::TryRecvError::Disconnected) => {
                     break;
                 }
             }
@@ -209,17 +230,12 @@ impl MessageLoop {
             self.running = false;
         }
 
-        // If should_destroy was requested, run remaining callbacks with
-        // PP_ERROR_ABORTED so associated memory is freed, matching
-        // Chrome's QuitWhenIdle semantics.
         if self.destroyed && self.depth == 0 {
-            // Drain channel.
             while let Ok(item) = self.receiver.try_recv() {
                 if !item.callback.is_null() {
                     unsafe { item.callback.run(PP_ERROR_ABORTED); }
                 }
             }
-            // Drain deferred items.
             for item in self.deferred.drain(..) {
                 if !item.callback.is_null() {
                     unsafe { item.callback.run(PP_ERROR_ABORTED); }
@@ -233,7 +249,7 @@ impl MessageLoop {
     /// Non-blocking drain: collect all ready callbacks without executing them.
     ///
     /// Returns a list of `(callback, result)` pairs that are ready to fire.
-    /// Deferred (delayed) items are re-posted to the channel.
+    /// Deferred (delayed) items are stashed for future drains.
     ///
     /// This is designed to be called while holding an external lock (e.g. the
     /// resource manager lock), so that the lock can be released before the
@@ -241,9 +257,7 @@ impl MessageLoop {
     pub fn drain_ready(&mut self) -> Vec<(PP_CompletionCallback, i32)> {
         let mut ready: Vec<(PP_CompletionCallback, i32)> = Vec::new();
 
-        // First, drain ready items from the deferred list (items from
-        // previous polls that weren't ready yet).  This avoids
-        // receiving-and-re-sending on the channel every poll cycle.
+        // First, drain ready items from the deferred list.
         let now = Instant::now();
         let mut i = 0;
         while i < self.deferred.len() {
@@ -260,19 +274,15 @@ impl MessageLoop {
             match self.receiver.try_recv() {
                 Ok(item) => {
                     if item.callback.is_null() {
-                        // Quit sentinel — ignore in poll mode.
                         continue;
                     }
-
                     if item.fire_at <= now {
                         ready.push((item.callback, item.result));
                     } else {
-                        // Not ready yet — stash for future polls.
                         self.deferred.push(item);
                     }
                 }
-                Err(crossbeam_channel::TryRecvError::Empty) => break,
-                Err(crossbeam_channel::TryRecvError::Disconnected) => break,
+                Err(_) => break,
             }
         }
         ready
@@ -281,10 +291,6 @@ impl MessageLoop {
     /// Non-blocking poll: drain all ready callbacks and execute them.
     ///
     /// Returns the number of callbacks executed.
-    ///
-    /// **WARNING**: Do not call this while holding the resource manager lock
-    /// or any other lock that callbacks may need — use `drain_ready()` +
-    /// manual execution instead.
     ///
     /// # Safety
     /// Callbacks are executed with their user_data pointers.
@@ -319,16 +325,12 @@ impl Default for MessageLoop {
 /// A cloneable handle for posting work to a `MessageLoop` from any thread.
 #[derive(Clone)]
 pub struct MessageLoopPoster {
-    sender: Sender<WorkItem>,
+    sender: mpsc::UnboundedSender<WorkItem>,
+    notify: Arc<Notify>,
 }
 
 impl MessageLoopPoster {
     /// Post a callback with an optional delay.
-    ///
-    /// Note: The poster does not track the `destroyed` state itself — it
-    /// is intended for use via `CallOnMainThread` where the host is
-    /// known-alive.  The channel `send` will fail if the receiver has
-    /// been dropped.
     pub fn post_work(&self, callback: PP_CompletionCallback, delay_ms: i64, result: i32) -> i32 {
         if callback.is_null() {
             return PP_ERROR_BADARGUMENT;
@@ -346,10 +348,13 @@ impl MessageLoopPoster {
             fire_at,
         };
 
-        self.sender
-            .send(item)
-            .map(|_| PP_OK)
-            .unwrap_or(PP_ERROR_FAILED)
+        match self.sender.send(item) {
+            Ok(()) => {
+                self.notify.notify_one();
+                PP_OK
+            }
+            Err(_) => PP_ERROR_FAILED,
+        }
     }
 
     /// Post a quit sentinel.
@@ -359,9 +364,12 @@ impl MessageLoopPoster {
             result: 0,
             fire_at: Instant::now(),
         };
-        self.sender
-            .send(item)
-            .map(|_| PP_OK)
-            .unwrap_or(PP_ERROR_FAILED)
+        match self.sender.send(item) {
+            Ok(()) => {
+                self.notify.notify_one();
+                PP_OK
+            }
+            Err(_) => PP_ERROR_FAILED,
+        }
     }
 }

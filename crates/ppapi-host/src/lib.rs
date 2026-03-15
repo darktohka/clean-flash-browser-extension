@@ -151,6 +151,13 @@ pub struct HostState {
     /// URL provider for browser-hosted URL utility queries.
     /// When set, PPB_URLUtil(Dev)::GetDocumentURL/GetPluginInstanceURL use this.
     pub url_provider: Mutex<Option<Arc<dyn player_ui_traits::UrlProvider>>>,
+    /// Context menu provider for Flash right-click menus.
+    /// When set, PPB_Flash_Menu::Show uses this to display the menu.
+    pub context_menu_provider: Mutex<Option<Arc<dyn player_ui_traits::ContextMenuProvider>>>,
+    /// Number of pending interactive operations (context menus, file dialogs)
+    /// that are waiting for user input.  While > 0, the Flash nested message
+    /// loop skips its safety-net timeout so the user has time to interact.
+    pub pending_interactive_ops: AtomicI32,
     /// Serialized command-line string exposed via
     /// `PPB_Flash::GetCommandLineArgs`.
     pub flash_command_line_args: Mutex<String>,
@@ -199,6 +206,8 @@ impl HostState {
                 clipboard_provider: Mutex::new(None),
                 fullscreen_provider: Mutex::new(None),
                 url_provider: Mutex::new(None),
+                context_menu_provider: Mutex::new(None),
+                pending_interactive_ops: AtomicI32::new(0),
                 flash_command_line_args: Mutex::new(String::new()),
                 instance_object: Mutex::new(None),
             }
@@ -268,6 +277,16 @@ impl HostState {
     /// Get a cloned `Arc` handle to the URL provider, if set.
     pub fn get_url_provider(&self) -> Option<Arc<dyn player_ui_traits::UrlProvider>> {
         self.url_provider.lock().clone()
+    }
+
+    /// Set the context menu provider for Flash right-click menus.
+    pub fn set_context_menu_provider(&self, provider: Box<dyn player_ui_traits::ContextMenuProvider>) {
+        *self.context_menu_provider.lock() = Some(Arc::from(provider));
+    }
+
+    /// Get a cloned `Arc` handle to the context menu provider, if set.
+    pub fn get_context_menu_provider(&self) -> Option<Arc<dyn player_ui_traits::ContextMenuProvider>> {
+        self.context_menu_provider.lock().clone()
     }
 
     /// Set the command-line string returned by
