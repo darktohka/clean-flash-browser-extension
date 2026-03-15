@@ -35,7 +35,7 @@ pub use threading::ThreadManager;
 pub use var::VarManager;
 
 use parking_lot::Mutex;
-use ppapi_sys::{PP_Resource, PP_Var, PP_VARTYPE_STRING};
+use ppapi_sys::{PP_GetInterface_Func, PP_Resource, PP_Var, PP_VARTYPE_STRING};
 use std::ffi::{c_char, c_void, CStr};
 use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
@@ -157,6 +157,9 @@ pub struct HostState {
     /// Print provider for Flash printing (PPB_PDF::Print, PPB_Printing).
     /// When set, printing calls delegate to this provider.
     pub print_provider: Mutex<Option<Arc<dyn player_ui_traits::PrintProvider>>>,
+    /// Video capture provider for webcam access.
+    /// When set, PPB_VideoCapture(Dev) uses this to capture from a real camera.
+    pub video_capture_provider: Mutex<Option<Arc<dyn player_ui_traits::VideoCaptureProvider>>>,
     /// Number of pending interactive operations (context menus, file dialogs)
     /// that are waiting for user input.  While > 0, the Flash nested message
     /// loop skips its safety-net timeout so the user has time to interact.
@@ -169,6 +172,9 @@ pub struct HostState {
     /// `CallFunction` invocations (ExternalInterface JS→AS direction)
     /// back into PepperFlash.
     pub instance_object: Mutex<Option<PP_Var>>,
+    /// The plugin's `PPP_GetInterface` function pointer, stored so that
+    /// interface implementations can query PPP_* callback interfaces.
+    pub plugin_get_interface: Mutex<Option<PP_GetInterface_Func>>,
 }
 
 impl HostState {
@@ -211,9 +217,11 @@ impl HostState {
                 url_provider: Mutex::new(None),
                 context_menu_provider: Mutex::new(None),
                 print_provider: Mutex::new(None),
+                video_capture_provider: Mutex::new(None),
                 pending_interactive_ops: AtomicI32::new(0),
                 flash_command_line_args: Mutex::new(String::new()),
                 instance_object: Mutex::new(None),
+                plugin_get_interface: Mutex::new(None),
             }
         })
     }
@@ -301,6 +309,16 @@ impl HostState {
     /// Get a cloned `Arc` handle to the print provider, if set.
     pub fn get_print_provider(&self) -> Option<Arc<dyn player_ui_traits::PrintProvider>> {
         self.print_provider.lock().clone()
+    }
+
+    /// Set the video capture provider for webcam access.
+    pub fn set_video_capture_provider(&self, provider: Box<dyn player_ui_traits::VideoCaptureProvider>) {
+        *self.video_capture_provider.lock() = Some(Arc::from(provider));
+    }
+
+    /// Get a cloned `Arc` handle to the video capture provider, if set.
+    pub fn get_video_capture_provider(&self) -> Option<Arc<dyn player_ui_traits::VideoCaptureProvider>> {
+        self.video_capture_provider.lock().clone()
     }
 
     /// Set the command-line string returned by

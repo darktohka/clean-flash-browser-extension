@@ -3081,6 +3081,54 @@ pub struct PPB_VideoCapture_Dev_0_3 {
 unsafe impl Send for PPB_VideoCapture_Dev_0_3 {}
 unsafe impl Sync for PPB_VideoCapture_Dev_0_3 {}
 
+// PPP_VideoCapture(Dev);0.1 — plugin-side video capture callbacks
+pub const PPP_VIDEO_CAPTURE_DEV_INTERFACE_0_1: &str = "PPP_VideoCapture(Dev);0.1\0";
+
+/// Video capture status enum.
+pub type PP_VideoCaptureStatus_Dev = u32;
+pub const PP_VIDEO_CAPTURE_STATUS_STOPPED: PP_VideoCaptureStatus_Dev = 0;
+pub const PP_VIDEO_CAPTURE_STATUS_STARTING: PP_VideoCaptureStatus_Dev = 1;
+pub const PP_VIDEO_CAPTURE_STATUS_STARTED: PP_VideoCaptureStatus_Dev = 2;
+pub const PP_VIDEO_CAPTURE_STATUS_PAUSED: PP_VideoCaptureStatus_Dev = 3;
+pub const PP_VIDEO_CAPTURE_STATUS_STOPPING: PP_VideoCaptureStatus_Dev = 4;
+
+#[repr(C)]
+pub struct PPP_VideoCapture_Dev_0_1 {
+    pub OnDeviceInfo: Option<
+        unsafe extern "C" fn(
+            instance: PP_Instance,
+            video_capture: PP_Resource,
+            info: *const PP_VideoCaptureDeviceInfo_Dev,
+            buffer_count: u32,
+            buffers: *const PP_Resource,
+        ),
+    >,
+    pub OnStatus: Option<
+        unsafe extern "C" fn(
+            instance: PP_Instance,
+            video_capture: PP_Resource,
+            status: u32,
+        ),
+    >,
+    pub OnError: Option<
+        unsafe extern "C" fn(
+            instance: PP_Instance,
+            video_capture: PP_Resource,
+            error_code: u32,
+        ),
+    >,
+    pub OnBufferReady: Option<
+        unsafe extern "C" fn(
+            instance: PP_Instance,
+            video_capture: PP_Resource,
+            buffer: u32,
+        ),
+    >,
+}
+
+unsafe impl Send for PPP_VideoCapture_Dev_0_1 {}
+unsafe impl Sync for PPP_VideoCapture_Dev_0_1 {}
+
 // ===========================================================================
 // PP_NetAddress_Private — opaque network address structure
 // ===========================================================================
@@ -4036,6 +4084,28 @@ pub struct PPB_Flash_Print_1_0 {
 
 unsafe impl Send for PPB_Flash_Print_1_0 {}
 unsafe impl Sync for PPB_Flash_Print_1_0 {}
+
+// ===========================================================================
+// PPB_DeviceRef(Dev);0.1
+// ===========================================================================
+
+pub const PPB_DEVICEREF_DEV_INTERFACE_0_1: &str = "PPB_DeviceRef(Dev);0.1\0";
+
+/// Device types used by `PPB_DeviceRef_Dev::GetType`.
+pub const PP_DEVICETYPE_DEV_INVALID: i32 = 0;
+pub const PP_DEVICETYPE_DEV_AUDIOCAPTURE: i32 = 1;
+pub const PP_DEVICETYPE_DEV_VIDEOCAPTURE: i32 = 2;
+
+/// PPB_DeviceRef(Dev);0.1 vtable.
+#[repr(C)]
+pub struct PPB_DeviceRef_Dev_0_1 {
+    pub IsDeviceRef: Option<unsafe extern "C" fn(resource: PP_Resource) -> PP_Bool>,
+    pub GetType: Option<unsafe extern "C" fn(device_ref: PP_Resource) -> i32>,
+    pub GetName: Option<unsafe extern "C" fn(device_ref: PP_Resource) -> PP_Var>,
+}
+
+unsafe impl Send for PPB_DeviceRef_Dev_0_1 {}
+unsafe impl Sync for PPB_DeviceRef_Dev_0_1 {}
 
 // ===========================================================================
 // Compile-time size assertions (match C static assertions)

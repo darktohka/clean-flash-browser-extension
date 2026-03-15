@@ -217,6 +217,15 @@ fn main() {
         // Set up the print provider so that Flash print requests are
         // forwarded to the browser (window.print()).
         host.set_print_provider(Box::new(WebPrintProvider));
+
+        // Set up the video capture provider so that Flash can capture from
+        // the browser's webcam via MediaStream / getUserMedia({ video }).
+        let video_capture = Arc::new(WebVideoCaptureProvider::new());
+        WEB_VIDEO_CAPTURE
+            .set(video_capture.clone())
+            .ok()
+            .expect("WEB_VIDEO_CAPTURE already initialised");
+        host.set_video_capture_provider(Box::new(WebVideoCaptureProviderWrapper(video_capture)));
     }
 
     tracing::info!("Host initialized successfully, entering main loop");
@@ -301,6 +310,7 @@ fn try_read_command() -> Option<serde_json::Value> {
         let bridge = SCRIPT_BRIDGE.get().cloned();
         let audio_input = WEB_AUDIO_INPUT.get().cloned();
         let context_menu = WEB_CONTEXT_MENU.get().cloned();
+        let video_capture = WEB_VIDEO_CAPTURE.get().cloned();
         std::thread::Builder::new()
             .name("stdin-reader".into())
             .spawn(move || {
@@ -320,6 +330,14 @@ fn try_read_command() -> Option<serde_json::Value> {
                             if msg.get("type").and_then(|v| v.as_str()) == Some("audioInputData") {
                                 if let Some(ref ai) = audio_input {
                                     ai.handle_audio_data(&msg);
+                                }
+                                continue;
+                            }
+                            // Route videoCaptureData messages to the video
+                            // capture provider's frame buffer.
+                            if msg.get("type").and_then(|v| v.as_str()) == Some("videoCaptureData") {
+                                if let Some(ref vc) = video_capture {
+                                    vc.handle_video_data(&msg);
                                 }
                                 continue;
                             }
@@ -1030,6 +1048,172 @@ impl player_ui_traits::AudioInputProvider for WebAudioInputProviderWrapper {
     }
     fn read_samples(&self, stream_id: u32, buffer: &mut [u8]) -> usize {
         self.0.read_samples(stream_id, buffer)
+    }
+    fn close_stream(&self, stream_id: u32) {
+        self.0.close_stream(stream_id)
+    }
+}
+
+// ===========================================================================
+// Video capture provider — captures video from the browser's webcam
+// via native messaging.
+//
+// The host sends VideoCaptureOpen/Start/Stop/Close commands to the browser.
+// The browser calls navigator.mediaDevices.getUserMedia({ video }) and sends
+// captured I420 frame data back as JSON messages of type "videoCaptureData".
+// ===========================================================================
+
+/// Global video capture provider for routing captured frames from the
+/// stdin reader thread.
+static WEB_VIDEO_CAPTURE: OnceLock<Arc<WebVideoCaptureProvider>> = OnceLock::new();
+
+/// Video capture provider that requests webcam capture from the browser
+/// and receives I420 frame data over the native messaging channel.
+struct WebVideoCaptureProvider {
+    next_stream_id: AtomicU32,
+    /// Per-stream latest frame (overwritten on each incoming frame).
+    streams: parking_lot::Mutex<std::collections::HashMap<u32, WebVideoCaptureStreamState>>,
+}
+
+struct WebVideoCaptureStreamState {
+    /// Latest captured frame (I420 data), replaced on each new frame.
+    latest_frame: Option<player_ui_traits::VideoCaptureFrame>,
+    #[allow(dead_code)]
+    width: u32,
+    #[allow(dead_code)]
+    height: u32,
+    #[allow(dead_code)]
+    fps: u32,
+}
+
+impl WebVideoCaptureProvider {
+    fn new() -> Self {
+        Self {
+            next_stream_id: AtomicU32::new(1),
+            streams: parking_lot::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// Called by the stdin reader thread when a `videoCaptureData` message
+    /// arrives from the browser extension.
+    fn handle_video_data(&self, msg: &serde_json::Value) {
+        let stream_id = msg["streamId"].as_u64().unwrap_or(0) as u32;
+        let data_b64 = msg["data"].as_str().unwrap_or("");
+        let width = msg["width"].as_u64().unwrap_or(0) as u32;
+        let height = msg["height"].as_u64().unwrap_or(0) as u32;
+
+        if stream_id == 0 || data_b64.is_empty() || width == 0 || height == 0 {
+            return;
+        }
+
+        use base64::Engine;
+        let data = match base64::engine::general_purpose::STANDARD.decode(data_b64) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!(
+                    "WebVideoCaptureProvider: bad base64 in videoCaptureData: {}",
+                    e
+                );
+                return;
+            }
+        };
+
+        let frame = player_ui_traits::VideoCaptureFrame { data, width, height };
+
+        let mut streams = self.streams.lock();
+        if let Some(state) = streams.get_mut(&stream_id) {
+            state.latest_frame = Some(frame);
+        }
+    }
+}
+
+impl player_ui_traits::VideoCaptureProvider for WebVideoCaptureProvider {
+    fn enumerate_devices(&self) -> Vec<(String, String)> {
+        vec![("browser:default".into(), "Camera".into())]
+    }
+
+    fn open_stream(
+        &self,
+        _device_id: Option<&str>,
+        width: u32,
+        height: u32,
+        frames_per_second: u32,
+    ) -> u32 {
+        let id = self.next_stream_id.fetch_add(1, Ordering::Relaxed);
+        tracing::info!(
+            "WebVideoCaptureProvider: open_stream id={}, {}x{} @ {} fps",
+            id, width, height, frames_per_second,
+        );
+
+        self.streams.lock().insert(id, WebVideoCaptureStreamState {
+            latest_frame: None,
+            width,
+            height,
+            fps: frames_per_second,
+        });
+
+        let _ = protocol::send_host_message(&protocol::HostMessage::VideoCaptureOpen {
+            stream_id: id,
+            width,
+            height,
+            frames_per_second,
+        });
+
+        id
+    }
+
+    fn start_capture(&self, stream_id: u32) -> bool {
+        tracing::debug!("WebVideoCaptureProvider: start_capture {}", stream_id);
+        let _ = protocol::send_host_message(&protocol::HostMessage::VideoCaptureStart {
+            stream_id,
+        });
+        true
+    }
+
+    fn stop_capture(&self, stream_id: u32) {
+        tracing::debug!("WebVideoCaptureProvider: stop_capture {}", stream_id);
+        let _ = protocol::send_host_message(&protocol::HostMessage::VideoCaptureStop {
+            stream_id,
+        });
+    }
+
+    fn read_frame(&self, stream_id: u32) -> Option<player_ui_traits::VideoCaptureFrame> {
+        let mut streams = self.streams.lock();
+        if let Some(state) = streams.get_mut(&stream_id) {
+            state.latest_frame.take()
+        } else {
+            None
+        }
+    }
+
+    fn close_stream(&self, stream_id: u32) {
+        tracing::debug!("WebVideoCaptureProvider: close_stream {}", stream_id);
+        self.streams.lock().remove(&stream_id);
+        let _ = protocol::send_host_message(&protocol::HostMessage::VideoCaptureClose {
+            stream_id,
+        });
+    }
+}
+
+/// Thin wrapper so we can pass `Arc<WebVideoCaptureProvider>` as a
+/// `Box<dyn VideoCaptureProvider>` to the host.
+struct WebVideoCaptureProviderWrapper(Arc<WebVideoCaptureProvider>);
+
+impl player_ui_traits::VideoCaptureProvider for WebVideoCaptureProviderWrapper {
+    fn enumerate_devices(&self) -> Vec<(String, String)> {
+        self.0.enumerate_devices()
+    }
+    fn open_stream(&self, device_id: Option<&str>, width: u32, height: u32, frames_per_second: u32) -> u32 {
+        self.0.open_stream(device_id, width, height, frames_per_second)
+    }
+    fn start_capture(&self, stream_id: u32) -> bool {
+        self.0.start_capture(stream_id)
+    }
+    fn stop_capture(&self, stream_id: u32) {
+        self.0.stop_capture(stream_id)
+    }
+    fn read_frame(&self, stream_id: u32) -> Option<player_ui_traits::VideoCaptureFrame> {
+        self.0.read_frame(stream_id)
     }
     fn close_stream(&self, stream_id: u32) {
         self.0.close_stream(stream_id)

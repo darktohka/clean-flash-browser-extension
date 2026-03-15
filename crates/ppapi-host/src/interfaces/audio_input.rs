@@ -12,6 +12,7 @@
 
 use crate::interface_registry::InterfaceRegistry;
 use crate::interfaces::audio_config::AudioConfigResource;
+use crate::interfaces::device_ref::DeviceRefResource;
 use crate::resource::Resource;
 use ppapi_sys::*;
 use std::any::Any;
@@ -291,6 +292,7 @@ unsafe extern "C" fn enumerate_devices(
                     instance,
                     name: dev_name.clone(),
                     device_index: i as u32,
+                    device_type: ppapi_sys::PP_DEVICETYPE_DEV_AUDIOCAPTURE,
                 };
                 let rid = host.resources.insert(instance, Box::new(dev_res));
                 out_slice[i] = rid;
@@ -606,34 +608,4 @@ unsafe extern "C" fn close(audio_input: PP_Resource) {
     let host = HOST.get().unwrap();
     host.resources.release(audio_input);
     tracing::debug!("ppb_audio_input_close: resource={}", audio_input);
-}
-
-// ---------------------------------------------------------------------------
-// DeviceRef — lightweight resource for device enumeration results
-// ---------------------------------------------------------------------------
-
-/// Minimal resource representing a device reference returned by
-/// `EnumerateDevices`.  Flash passes this back to `Open()` so we
-/// can identify which device was selected.
-struct DeviceRefResource {
-    #[allow(dead_code)]
-    instance: PP_Instance,
-    #[allow(dead_code)]
-    name: String,
-    #[allow(dead_code)]
-    device_index: u32,
-}
-
-impl Resource for DeviceRefResource {
-    fn resource_type(&self) -> &'static str {
-        "PPB_DeviceRef"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
 }

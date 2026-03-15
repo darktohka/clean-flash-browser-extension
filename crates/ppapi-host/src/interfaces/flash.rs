@@ -214,7 +214,7 @@ unsafe extern "C" fn draw_glyphs(
     });
 
     PP_TRUE
-}   
+}
 
 unsafe extern "C" fn get_proxy_for_url(
     _instance: PP_Instance,
@@ -272,7 +272,7 @@ unsafe extern "C" fn navigate(
 }
 
 unsafe extern "C" fn run_message_loop(_instance: PP_Instance) {
-    // Deprecated nested message loop. 
+    // Deprecated nested message loop.
     // Flash 12.6 may call this; we do a simple spin.
     tracing::warn!("PPB_Flash::RunMessageLoop called (no-op)");
 }
@@ -451,20 +451,47 @@ unsafe extern "C" fn set_crash_data(
 }
 
 unsafe extern "C" fn enumerate_video_capture_devices(
-    _instance: PP_Instance,
+    instance: PP_Instance,
     _video_capture: PP_Resource,
     devices: PP_ArrayOutput,
 ) -> i32 {
     tracing::debug!("PPB_Flash::EnumerateVideoCaptureDevices(instance={}, video_capture={})",
-        _instance, _video_capture);
-    
-    // Return an empty device list — no video capture devices available.
+        instance, _video_capture);
+
+    let host = HOST.get().unwrap();
+    let dev_list = host
+        .get_video_capture_provider()
+        .map(|p| p.enumerate_devices())
+        .unwrap_or_default();
+
+    tracing::debug!("PPB_Flash::EnumerateVideoCaptureDevices: found {} device(s)", dev_list.len());
+
     if let Some(get_data_buffer) = devices.GetDataBuffer {
-        unsafe {
-            get_data_buffer(devices.user_data, 0, std::mem::size_of::<PP_Resource>() as u32);
+        let count = dev_list.len() as u32;
+        let buf_ptr = unsafe {
+            get_data_buffer(
+                devices.user_data,
+                count,
+                std::mem::size_of::<PP_Resource>() as u32,
+            )
+        };
+        if !buf_ptr.is_null() && count > 0 {
+            let out_slice = unsafe {
+                std::slice::from_raw_parts_mut(buf_ptr as *mut PP_Resource, count as usize)
+            };
+            for (i, (_dev_id, dev_name)) in dev_list.iter().enumerate() {
+                let dev_res = crate::interfaces::device_ref::DeviceRefResource {
+                    instance,
+                    name: dev_name.clone(),
+                    device_index: i as u32,
+                    device_type: ppapi_sys::PP_DEVICETYPE_DEV_VIDEOCAPTURE,
+                };
+                let rid = host.resources.insert(instance, Box::new(dev_res));
+                out_slice[i] = rid;
+            }
         }
     }
-    
+
     PP_OK
 }
 

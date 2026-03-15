@@ -29,6 +29,11 @@
 //! | 0x32  | AudioInputStop  | u32 stream_id                                        |
 //! | 0x33  | AudioInputClose | u32 stream_id                                        |
 //! | 0x40  | ContextMenu     | u32 json_len + UTF-8 JSON                            |
+//! | 0x50  | Print           | (no payload)                                         |
+//! | 0x60  | VidCapOpen      | u32 stream_id + u32 width + u32 height + u32 fps     |
+//! | 0x61  | VidCapStart     | u32 stream_id                                        |
+//! | 0x62  | VidCapStop      | u32 stream_id                                        |
+//! | 0x63  | VidCapClose     | u32 stream_id                                        |
 //!
 //! Because stdout/stderr are redirected to `/dev/null` (Unix) or `NUL`
 //! (Windows) to prevent the Flash plugin from corrupting the native
@@ -242,6 +247,25 @@ pub enum HostMessage<'a> {
     ContextMenu(&'a str),
     /// Print: request the browser to print the current content.
     Print,
+    /// Video capture: open a capture stream.
+    VideoCaptureOpen {
+        stream_id: u32,
+        width: u32,
+        height: u32,
+        frames_per_second: u32,
+    },
+    /// Video capture: start capturing.
+    VideoCaptureStart {
+        stream_id: u32,
+    },
+    /// Video capture: stop capturing.
+    VideoCaptureStop {
+        stream_id: u32,
+    },
+    /// Video capture: close and release a capture stream.
+    VideoCaptureClose {
+        stream_id: u32,
+    },
 }
 
 // Message type tags.
@@ -262,6 +286,10 @@ const TAG_AUDIO_INPUT_STOP: u8 = 0x32;
 const TAG_AUDIO_INPUT_CLOSE: u8 = 0x33;
 const TAG_CONTEXT_MENU: u8 = 0x40;
 const TAG_PRINT: u8 = 0x50;
+const TAG_VIDEO_CAPTURE_OPEN: u8 = 0x60;
+const TAG_VIDEO_CAPTURE_START: u8 = 0x61;
+const TAG_VIDEO_CAPTURE_STOP: u8 = 0x62;
+const TAG_VIDEO_CAPTURE_CLOSE: u8 = 0x63;
 
 impl<'a> HostMessage<'a> {
     /// Serialize to a compact binary representation (little-endian).
@@ -392,6 +420,33 @@ impl<'a> HostMessage<'a> {
             }
             HostMessage::Print => {
                 vec![TAG_PRINT]
+            }
+            HostMessage::VideoCaptureOpen { stream_id, width, height, frames_per_second } => {
+                let mut buf = Vec::with_capacity(1 + 16);
+                buf.push(TAG_VIDEO_CAPTURE_OPEN);
+                buf.extend_from_slice(&stream_id.to_le_bytes());
+                buf.extend_from_slice(&width.to_le_bytes());
+                buf.extend_from_slice(&height.to_le_bytes());
+                buf.extend_from_slice(&frames_per_second.to_le_bytes());
+                buf
+            }
+            HostMessage::VideoCaptureStart { stream_id } => {
+                let mut buf = Vec::with_capacity(5);
+                buf.push(TAG_VIDEO_CAPTURE_START);
+                buf.extend_from_slice(&stream_id.to_le_bytes());
+                buf
+            }
+            HostMessage::VideoCaptureStop { stream_id } => {
+                let mut buf = Vec::with_capacity(5);
+                buf.push(TAG_VIDEO_CAPTURE_STOP);
+                buf.extend_from_slice(&stream_id.to_le_bytes());
+                buf
+            }
+            HostMessage::VideoCaptureClose { stream_id } => {
+                let mut buf = Vec::with_capacity(5);
+                buf.push(TAG_VIDEO_CAPTURE_CLOSE);
+                buf.extend_from_slice(&stream_id.to_le_bytes());
+                buf
             }
         }
     }

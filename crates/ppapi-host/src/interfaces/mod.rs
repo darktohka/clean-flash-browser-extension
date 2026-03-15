@@ -14,6 +14,7 @@ pub mod char_set;
 pub mod core;
 pub mod crypto;
 pub mod cursor_control;
+pub mod device_ref;
 pub mod file_chooser;
 pub mod file_ref;
 pub mod flash;
@@ -109,6 +110,7 @@ pub unsafe fn register_all(registry: &mut InterfaceRegistry) {
         self::file_chooser::register(registry);
         self::ime_input_event::register(registry);
         self::video_capture::register(registry);
+        self::device_ref::register(registry);
     }
     // Register stub vtables for all remaining required interfaces
     //self::stubs::register(registry);

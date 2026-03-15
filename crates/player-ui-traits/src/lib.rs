@@ -574,3 +574,69 @@ pub trait PrintProvider: Send + Sync {
         PrintSettings::default()
     }
 }
+
+// ===========================================================================
+// Video capture provider — abstracts video capture for the PPAPI host
+// ===========================================================================
+
+/// A single video frame delivered by the capture provider.
+///
+/// The pixel data is **planar I420** (YUV 4:2:0):
+///   - `width × height` Y bytes
+///   - `(width/2) × (height/2)` U bytes
+///   - `(width/2) × (height/2)` V bytes
+///
+/// Total byte length = `width * height * 3 / 2`.
+pub struct VideoCaptureFrame {
+    pub data: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Provides video capture (webcam) capabilities.
+///
+/// When set on the PPAPI host, `PPB_VideoCapture(Dev)` will use this
+/// provider to capture frames from a real camera.  On browser players
+/// this is forwarded to `getUserMedia({ video })`.
+///
+/// Frame format is **planar I420** matching the PPAPI video capture spec.
+pub trait VideoCaptureProvider: Send + Sync {
+    /// Enumerate available video capture devices.
+    ///
+    /// Returns a list of `(device_id, display_name)` pairs.
+    fn enumerate_devices(&self) -> Vec<(String, String)>;
+
+    /// Open a capture stream on the given device (or the default camera
+    /// if `device_id` is `None`).
+    ///
+    /// - `device_id`: opaque device identifier from [`enumerate_devices`],
+    ///    or `None` for the default camera.
+    /// - `width`, `height`: requested resolution.
+    /// - `frames_per_second`: requested frame rate.
+    ///
+    /// Returns an opaque stream ID (non-zero on success, 0 on failure).
+    fn open_stream(
+        &self,
+        device_id: Option<&str>,
+        width: u32,
+        height: u32,
+        frames_per_second: u32,
+    ) -> u32;
+
+    /// Start capturing video on a previously opened stream.
+    fn start_capture(&self, stream_id: u32) -> bool;
+
+    /// Stop capturing video on a stream (may be restarted later).
+    fn stop_capture(&self, stream_id: u32);
+
+    /// Read the latest captured frame from the stream.
+    ///
+    /// Returns `Some(frame)` with I420 pixel data if a new frame is
+    /// available, or `None` if no frame is ready yet.
+    ///
+    /// This is a non-blocking call.
+    fn read_frame(&self, stream_id: u32) -> Option<VideoCaptureFrame>;
+
+    /// Close and release a capture stream permanently.
+    fn close_stream(&self, stream_id: u32);
+}

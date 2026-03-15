@@ -113,6 +113,11 @@ impl PluginLoader {
             unsafe { shutdown() }
         }
     }
+
+    /// Return the raw `PPP_GetInterface` function pointer.
+    pub fn raw_get_interface(&self) -> PP_GetInterface_Func {
+        self.get_interface
+    }
 }
 
 /// Errors that can occur when loading a PPAPI plugin.

@@ -248,6 +248,13 @@ impl FlashPlayer {
 
         tracing::info!("Plugin module initialized successfully.");
 
+        // Store the plugin's PPP_GetInterface so that ppapi-host interface
+        // implementations can query PPP_* callback interfaces (e.g.
+        // PPP_VideoCapture_Dev for webcam frame delivery).
+        if let Some(host) = ppapi_host::HOST.get() {
+            *host.plugin_get_interface.lock() = Some(loader.raw_get_interface());
+        }
+
         self.plugin = Some(loader);
         Ok(())
     }
