@@ -54,11 +54,22 @@ function getFlashParams(elem) {
     }
     for (let i = 0; i < elem.children.length; i++) {
       const c = elem.children[i];
-      if (c.nodeName.toLowerCase() !== "param") continue;
-      const name = c.getAttribute("name");
-      const value = c.getAttribute("value");
-      if (name != null && value != null) {
-        params[name.toLowerCase()] = value;
+      if (c.nodeName.toLowerCase() === "param") {
+        const name = c.getAttribute("name");
+        const value = c.getAttribute("value");
+        if (name != null && value != null) {
+          params[name.toLowerCase()] = value;
+        }
+      } else if (c.tagName === "EMBED") {
+        // Merge attributes from nested <embed> fallback — fill in any
+        // keys not already set by <object> attributes or <param> tags.
+        const embedAttrs = c.attributes;
+        for (let j = 0; j < embedAttrs.length; j++) {
+          const key = embedAttrs[j].name.toLowerCase();
+          if (!(key in params)) {
+            params[key] = embedAttrs[j].value;
+          }
+        }
       }
     }
     // Fallback: the "movie" param is sometimes used instead of "data".

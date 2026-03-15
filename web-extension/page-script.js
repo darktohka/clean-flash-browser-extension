@@ -21,6 +21,297 @@
   // Flash plugin spoofing
   // ---------------------------------------------------------------------------
 
+  function installInlineModernSwfobject() {
+    if (typeof window.swfobject !== "undefined") return;
+
+    window.swfobject = (function () {
+      var FLASH_MIME = "application/x-shockwave-flash";
+      var doc = document;
+      var win = window;
+
+      var domLoadFns = [];
+      var isDomLoaded = false;
+      var autoHideShow = true;
+      var encodeURIEnabled = false;
+
+      function fireDomReady() {
+        if (isDomLoaded) return;
+        isDomLoaded = true;
+        for (var i = 0; i < domLoadFns.length; i++) {
+          domLoadFns[i]();
+        }
+        domLoadFns.length = 0;
+      }
+
+      if (doc.readyState === "complete" || doc.readyState === "interactive") {
+        setTimeout(fireDomReady, 0);
+      } else {
+        doc.addEventListener("DOMContentLoaded", fireDomReady, false);
+      }
+
+      function addDomLoadEvent(fn) {
+        if (isDomLoaded) {
+          fn();
+        } else {
+          domLoadFns.push(fn);
+        }
+      }
+
+      function addLoadEvent(fn) {
+        win.addEventListener("load", fn, false);
+      }
+
+      function isElement(id) {
+        return id && id.nodeType === 1;
+      }
+
+      function getEl(id) {
+        if (isElement(id)) return id;
+        try {
+          return doc.getElementById(id);
+        } catch (_) {
+          return null;
+        }
+      }
+
+      function getId(thing) {
+        return isElement(thing) ? thing.id : thing;
+      }
+
+      function setVisibility(id, visible) {
+        if (!autoHideShow) return;
+        var el = getEl(id);
+        if (el) {
+          el.style.visibility = visible ? "visible" : "hidden";
+        }
+      }
+
+      function createObjParam(el, name, value) {
+        var p = doc.createElement("param");
+        p.setAttribute("name", name);
+        p.setAttribute("value", value);
+        el.appendChild(p);
+      }
+
+      function createSWF(attObj, parObj, replaceElemIdStr) {
+        var el = getEl(replaceElemIdStr);
+        if (!el) return undefined;
+
+        var o = doc.createElement("object");
+
+        if (typeof attObj.id === "undefined") {
+          attObj.id = getId(replaceElemIdStr);
+        }
+
+        for (var param in parObj) {
+          if (parObj.hasOwnProperty(param) && param.toLowerCase() !== "movie") {
+            createObjParam(o, param, parObj[param]);
+          }
+        }
+
+        for (var attr in attObj) {
+          if (attObj.hasOwnProperty(attr)) {
+            var lower = attr.toLowerCase();
+            if (lower === "styleclass") {
+              o.setAttribute("class", attObj[attr]);
+            } else if (lower !== "classid" && lower !== "data") {
+              o.setAttribute(attr, attObj[attr]);
+            }
+          }
+        }
+
+        o.setAttribute("type", FLASH_MIME);
+        o.setAttribute("data", attObj.data);
+
+        el.parentNode.replaceChild(o, el);
+        return o;
+      }
+
+      function removeSWF(id) {
+        var obj = getEl(id);
+        if (obj && obj.nodeName.toUpperCase() === "OBJECT") {
+          obj.parentNode.removeChild(obj);
+        }
+      }
+
+      var styleEl = null;
+
+      function createCSS(sel, decl, media, newStyle) {
+        var head = doc.getElementsByTagName("head")[0];
+        if (!head) return;
+        if (newStyle) styleEl = null;
+        if (!styleEl) {
+          styleEl = doc.createElement("style");
+          styleEl.setAttribute("media", typeof media === "string" ? media : "screen");
+          head.appendChild(styleEl);
+        }
+        styleEl.appendChild(doc.createTextNode(sel + " {" + decl + "}"));
+      }
+
+      function getQueryParamValue(param) {
+        var q = doc.location.search || doc.location.hash;
+        if (!q) return "";
+        if (/\?/.test(q)) q = q.split("?")[1];
+        if (!param) return q;
+        var pairs = q.split("&");
+        for (var i = 0; i < pairs.length; i++) {
+          var idx = pairs[i].indexOf("=");
+          if (idx !== -1 && pairs[i].substring(0, idx) === param) {
+            return pairs[i].substring(idx + 1);
+          }
+        }
+        return "";
+      }
+
+      function getObjectById(id) {
+        var o = getEl(id);
+        if (!o) return null;
+        if (o.nodeName.toUpperCase() !== "OBJECT") return o;
+        if (typeof o.SetVariable !== "undefined") return o;
+        return o.getElementsByTagName("object")[0] || o;
+      }
+
+      return {
+        registerObject: function (objectIdStr, _swfVersionStr, _xiSwfUrlStr, callbackFn) {
+          addDomLoadEvent(function () {
+            var el = getEl(objectIdStr);
+            if (el) {
+              setVisibility(objectIdStr, true);
+              if (callbackFn) {
+                var ref = getObjectById(objectIdStr);
+                callbackFn({ success: !!ref, ref: ref || null, id: objectIdStr });
+              }
+            } else if (callbackFn) {
+              callbackFn({ success: false, id: objectIdStr });
+            }
+          });
+        },
+
+        getObjectById: function (id) {
+          return getObjectById(id);
+        },
+
+        embedSWF: function (
+          swfUrlStr,
+          replaceElemIdStr,
+          widthStr,
+          heightStr,
+          _swfVersionStr,
+          _xiSwfUrlStr,
+          flashvarsObj,
+          parObj,
+          attObj,
+          callbackFn
+        ) {
+          var id = getId(replaceElemIdStr);
+          var callbackObj = { success: false, id: id };
+
+          if (!swfUrlStr || !replaceElemIdStr || !widthStr || !heightStr) {
+            if (callbackFn) callbackFn(callbackObj);
+            return;
+          }
+
+          setVisibility(id, false);
+
+          addDomLoadEvent(function () {
+            widthStr += "";
+            heightStr += "";
+
+            var att = {};
+            if (attObj && typeof attObj === "object") {
+              for (var a in attObj) {
+                if (attObj.hasOwnProperty(a)) att[a] = attObj[a];
+              }
+            }
+            att.data = swfUrlStr;
+            att.width = widthStr;
+            att.height = heightStr;
+
+            var par = {};
+            if (parObj && typeof parObj === "object") {
+              for (var p in parObj) {
+                if (parObj.hasOwnProperty(p)) par[p] = parObj[p];
+              }
+            }
+
+            if (flashvarsObj && typeof flashvarsObj === "object") {
+              for (var k in flashvarsObj) {
+                if (flashvarsObj.hasOwnProperty(k)) {
+                  var key = encodeURIEnabled ? encodeURIComponent(k) : k;
+                  var val = encodeURIEnabled ? encodeURIComponent(flashvarsObj[k]) : flashvarsObj[k];
+                  par.flashvars = (par.flashvars ? par.flashvars + "&" : "") + key + "=" + val;
+                }
+              }
+            }
+
+            var obj = createSWF(att, par, replaceElemIdStr);
+            if (obj) {
+              if (att.id === id) setVisibility(id, true);
+              callbackObj.success = true;
+              callbackObj.ref = obj;
+              callbackObj.id = obj.id;
+            } else {
+              setVisibility(id, true);
+            }
+
+            if (callbackFn) callbackFn(callbackObj);
+          });
+        },
+
+        switchOffAutoHideShow: function () {
+          autoHideShow = false;
+        },
+
+        enableUriEncoding: function (bool) {
+          encodeURIEnabled = typeof bool === "undefined" ? true : bool;
+        },
+
+        ua: {
+          w3: true,
+          pv: [99, 0, 0],
+          wk: false,
+          ie: false,
+          win: /win/i.test(navigator.platform),
+          mac: /mac/i.test(navigator.platform)
+        },
+
+        getFlashPlayerVersion: function () {
+          return { major: 99, minor: 0, release: 0 };
+        },
+
+        hasFlashPlayerVersion: function () {
+          return true;
+        },
+
+        createSWF: function (attObj, parObj, replaceElemIdStr) {
+          return createSWF(attObj, parObj, replaceElemIdStr);
+        },
+
+        showExpressInstall: function () {
+        },
+
+        removeSWF: function (id) {
+          removeSWF(id);
+        },
+
+        createCSS: function (sel, decl, media, newStyle) {
+          createCSS(sel, decl, media, newStyle);
+        },
+
+        addDomLoadEvent: addDomLoadEvent,
+
+        addLoadEvent: addLoadEvent,
+
+        getQueryParamValue: getQueryParamValue,
+
+        expressInstallCallback: function () {
+        },
+
+        version: "2.3"
+      };
+    }());
+  }
+
   /**
    * Inject a fake "Shockwave Flash" plugin into navigator.plugins and
    * navigator.mimeTypes so that:
@@ -112,6 +403,7 @@
     }
   }
 
+  installInlineModernSwfobject();
   ppSpoofFlash();
 
   // Unique element id — must match the one in content.js.

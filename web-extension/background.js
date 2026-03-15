@@ -151,6 +151,7 @@ chrome.runtime.onConnect.addListener((port) => {
       nativePort.postMessage({
         type: "open",
         url: msg.url,
+        args: msg.args || [],
       });
 
       // Send initial resize.
