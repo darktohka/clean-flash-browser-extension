@@ -472,23 +472,23 @@ function replaceFlashElement(elem) {
 
   // Inherit dimensions from the original element.
   // Detect percentage / non-pixel values — parseInt("100%") wrongly gives 100.
-  const widthRaw  = elem.getAttribute("width") || elem.style.width || "";
+  const widthRaw = elem.getAttribute("width") || elem.style.width || "";
   const heightRaw = elem.getAttribute("height") || elem.style.height || "";
-  const isRelativeWidth  = widthRaw && !/^\d+$/.test(widthRaw.trim()) && !/^\d+px$/i.test(widthRaw.trim());
+  const isRelativeWidth = widthRaw && !/^\d+$/.test(widthRaw.trim()) && !/^\d+px$/i.test(widthRaw.trim());
   const isRelativeHeight = heightRaw && !/^\d+$/.test(heightRaw.trim()) && !/^\d+px$/i.test(heightRaw.trim());
 
   // For the CSS display size, preserve percentage / relative values.
-  const cssWidth  = isRelativeWidth  ? widthRaw.trim()  : (parseInt(widthRaw, 10) || 550) + "px";
-  const cssHeight = isRelativeHeight ? heightRaw.trim()  : (parseInt(heightRaw, 10) || 400) + "px";
-  canvas.style.width  = elem.style.width  || cssWidth;
+  const cssWidth = isRelativeWidth ? widthRaw.trim() : (parseInt(widthRaw, 10) || 550) + "px";
+  const cssHeight = isRelativeHeight ? heightRaw.trim() : (parseInt(heightRaw, 10) || 400) + "px";
+  canvas.style.width = elem.style.width || cssWidth;
   canvas.style.height = elem.style.height || cssHeight;
 
   // For the internal canvas buffer, use absolute pixels.  When the size is
   // relative we pick a sensible default — we will correct it after DOM
   // insertion once the actual rendered size can be measured.
-  const origWidth  = isRelativeWidth  ? 550 : (parseInt(widthRaw, 10) || 550);
+  const origWidth = isRelativeWidth ? 550 : (parseInt(widthRaw, 10) || 550);
   const origHeight = isRelativeHeight ? 400 : (parseInt(heightRaw, 10) || 400);
-  canvas.width  = origWidth;
+  canvas.width = origWidth;
   canvas.height = origHeight;
   canvas.style.display = "inline-block";
   canvas.style.backgroundColor = "#000";
@@ -549,12 +549,12 @@ function replaceFlashElement(elem) {
   if (meta.usesRelativeSize) {
     const measured = measureRenderedSize(canvas, meta.origWidth, meta.origHeight);
     if (measured.w !== meta.origWidth || measured.h !== meta.origHeight) {
-      canvas.width  = measured.w;
+      canvas.width = measured.w;
       canvas.height = measured.h;
-      meta.origWidth  = measured.w;
+      meta.origWidth = measured.w;
       meta.origHeight = measured.h;
       if (meta.port) {
-        meta.port.postMessage({ type: "resize", width: measured.w, height: measured.h });
+        meta.port.postMessage({ type: "resize", width: measured.w, height: measured.h, ...collectViewInfo(canvas) });
       }
     }
   }
@@ -576,12 +576,40 @@ function replaceFlashElement(elem) {
 }
 
 /**
+ * Collect current view metadata from browser APIs.
+ * Included in resize and viewUpdate messages so the native host can
+ * populate PPB_View resources with accurate values.
+ */
+function collectViewInfo(canvas) {
+  // Determine visibility by checking both page visibility and whether the
+  // canvas has a non-zero bounding rect inside the viewport.
+  const isPageVisible = document.visibilityState === "visible";
+  const isFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
+  let isVisible = isPageVisible;
+  if (isVisible && canvas) {
+    const rect = canvas.getBoundingClientRect();
+    isVisible = rect.width > 0 && rect.height > 0 &&
+      rect.bottom > 0 && rect.right > 0 &&
+      rect.top < window.innerHeight && rect.left < window.innerWidth;
+  }
+  return {
+    deviceScale: window.devicePixelRatio || 1.0,
+    cssScale: 1.0 / (window.devicePixelRatio || 1.0),
+    scrollX: Math.round(window.scrollX || 0),
+    scrollY: Math.round(window.scrollY || 0),
+    isFullscreen,
+    isVisible,
+    isPageVisible,
+  };
+}
+
+/**
  * Measure the actual rendered pixel size of a canvas element.
  * Falls back to the provided defaults if the element has zero dimensions.
  */
 function measureRenderedSize(canvas, defaultW, defaultH) {
   const rect = canvas.getBoundingClientRect();
-  const w = Math.round(rect.width)  || defaultW;
+  const w = Math.round(rect.width) || defaultW;
   const h = Math.round(rect.height) || defaultH;
   return { w, h };
 }
@@ -600,18 +628,83 @@ function observeResize(meta) {
       const h = Math.round(cr.height);
       if (w <= 0 || h <= 0) continue;
       if (w === meta.canvas.width && h === meta.canvas.height) continue;
-      meta.canvas.width  = w;
+      meta.canvas.width = w;
       meta.canvas.height = h;
-      meta.origWidth  = w;
+      meta.origWidth = w;
       meta.origHeight = h;
       if (meta.port) {
-        meta.port.postMessage({ type: "resize", width: w, height: h });
+        console.log("Resize detected for instance updating with", { width: w, height: h, ...collectViewInfo(meta.canvas) });
+        meta.port.postMessage({ type: "resize", width: w, height: h, ...collectViewInfo(meta.canvas) });
       }
     }
   });
   ro.observe(meta.canvas);
   meta._resizeObserver = ro;
 }
+
+// ---------------------------------------------------------------------------
+// Browser view-change listeners (visibility, scroll, fullscreen)
+// ---------------------------------------------------------------------------
+
+/**
+ * Send a viewUpdate message to all active Flash instances when the
+ * browser view state changes (tab visibility, scroll, fullscreen).
+ */
+function broadcastViewUpdate() {
+  for (const [, meta] of instanceMeta) {
+    if (meta.port) {
+      console.log("Broadcasting view update for instance with", collectViewInfo(meta.canvas));
+      meta.port.postMessage({ type: "viewUpdate", ...collectViewInfo(meta.canvas) });
+    }
+  }
+}
+
+function scheduleBroadcastViewUpdate(delayMs = 100) {
+  if (broadcastViewUpdate._timer) return;
+  broadcastViewUpdate._timer = setTimeout(() => {
+    broadcastViewUpdate._timer = null;
+    broadcastViewUpdate();
+  }, delayMs);
+}
+
+// Page visibility changes (tab switch, minimize).
+document.addEventListener("visibilitychange", broadcastViewUpdate);
+
+// Scroll position changes.
+window.addEventListener("scroll", () => {
+  // Throttle scroll events to avoid flooding the native host.
+  scheduleBroadcastViewUpdate(100);
+}, { passive: true });
+
+// Viewport changes (window resize and browser/page zoom).
+window.addEventListener("resize", () => {
+  scheduleBroadcastViewUpdate(50);
+}, { passive: true });
+
+// Visual viewport changes are a strong signal for zoom on mobile and desktop.
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", () => {
+    scheduleBroadcastViewUpdate(50);
+  }, { passive: true });
+  window.visualViewport.addEventListener("scroll", () => {
+    scheduleBroadcastViewUpdate(50);
+  }, { passive: true });
+}
+
+// Fallback watcher for zoom implementations that change devicePixelRatio
+// without reliably dispatching resize events.
+let lastDevicePixelRatio = window.devicePixelRatio || 1.0;
+setInterval(() => {
+  const dpr = window.devicePixelRatio || 1.0;
+  if (Math.abs(dpr - lastDevicePixelRatio) > 0.0001) {
+    lastDevicePixelRatio = dpr;
+    scheduleBroadcastViewUpdate(0);
+  }
+}, 250);
+
+// Fullscreen changes.
+document.addEventListener("fullscreenchange", broadcastViewUpdate);
+document.addEventListener("webkitfullscreenchange", broadcastViewUpdate);
 
 // ---------------------------------------------------------------------------
 // Instance lifecycle (start / restart)
@@ -636,6 +729,8 @@ function startInstance(instanceId, meta) {
     args: didCreateArgs,
     width: origWidth,
     height: origHeight,
+    language: navigator.language || "en-US",
+    ...collectViewInfo(canvas),
   });
 
   // ---- Handle messages from the native host (via background) ----
@@ -668,10 +763,10 @@ function startInstance(instanceId, meta) {
     if (canvas.parentNode) {
       canvas.parentNode.replaceChild(freshCanvas, canvas);
     }
-    bindInputEvents(freshCanvas, port);
+    bindInputEvents(freshCanvas, port, meta);
   } else {
     meta._started = true;
-    bindInputEvents(canvas, port);
+    bindInputEvents(canvas, port, meta);
   }
 }
 
@@ -833,26 +928,26 @@ function restartInstance(instanceId) {
 // ---------------------------------------------------------------------------
 
 // Message type tags (must match protocol.rs).
-const TAG_FRAME  = 0x01;
-const TAG_STATE  = 0x02;
+const TAG_FRAME = 0x01;
+const TAG_STATE = 0x02;
 const TAG_CURSOR = 0x03;
-const TAG_ERROR  = 0x04;
+const TAG_ERROR = 0x04;
 const TAG_SCRIPT = 0x10;
 const TAG_NAVIGATE = 0x05;
-const TAG_AUDIO_INIT    = 0x20;
+const TAG_AUDIO_INIT = 0x20;
 const TAG_AUDIO_SAMPLES = 0x21;
-const TAG_AUDIO_START   = 0x22;
-const TAG_AUDIO_STOP    = 0x23;
-const TAG_AUDIO_CLOSE   = 0x24;
-const TAG_AUDIO_INPUT_OPEN  = 0x30;
+const TAG_AUDIO_START = 0x22;
+const TAG_AUDIO_STOP = 0x23;
+const TAG_AUDIO_CLOSE = 0x24;
+const TAG_AUDIO_INPUT_OPEN = 0x30;
 const TAG_AUDIO_INPUT_START = 0x31;
-const TAG_AUDIO_INPUT_STOP  = 0x32;
+const TAG_AUDIO_INPUT_STOP = 0x32;
 const TAG_AUDIO_INPUT_CLOSE = 0x33;
-const TAG_CONTEXT_MENU      = 0x40;
-const TAG_PRINT             = 0x50;
-const TAG_VIDEO_CAPTURE_OPEN  = 0x60;
+const TAG_CONTEXT_MENU = 0x40;
+const TAG_PRINT = 0x50;
+const TAG_VIDEO_CAPTURE_OPEN = 0x60;
 const TAG_VIDEO_CAPTURE_START = 0x61;
-const TAG_VIDEO_CAPTURE_STOP  = 0x62;
+const TAG_VIDEO_CAPTURE_STOP = 0x62;
 const TAG_VIDEO_CAPTURE_CLOSE = 0x63;
 
 function tagHex(tag) {
@@ -990,8 +1085,8 @@ function audioInit(streamId, sampleRate, frameCount) {
     targetAhead: MIN_AHEAD,
   });
   console.log("[Flash Player] Audio stream created:", streamId,
-              "rate:", sampleRate, "frames:", frameCount,
-              "bufDur:", bufferDuration.toFixed(4) + "s");
+    "rate:", sampleRate, "frames:", frameCount,
+    "bufDur:", bufferDuration.toFixed(4) + "s");
 }
 
 /**
@@ -1016,7 +1111,7 @@ function audioWriteSamples(streamId, pcmBytes) {
     const deviation = Math.abs(interArrival - bufferDuration);
     // Exponential moving average of the absolute deviation.
     stream.jitterEma = stream.jitterEma * (1 - JITTER_ALPHA)
-                     + deviation * JITTER_ALPHA;
+      + deviation * JITTER_ALPHA;
     // Adaptive headroom: base + multiple of jitter.
     stream.targetAhead = Math.min(
       MAX_AHEAD,
@@ -1033,7 +1128,7 @@ function audioWriteSamples(streamId, pcmBytes) {
   const right = buffer.getChannelData(1);
 
   for (let i = 0; i < actualFrames; i++) {
-    left[i]  = dv.getInt16(i * 4,     true) / 32768.0;
+    left[i] = dv.getInt16(i * 4, true) / 32768.0;
     right[i] = dv.getInt16(i * 4 + 2, true) / 32768.0;
   }
 
@@ -1089,7 +1184,7 @@ function audioStop(streamId) {
 function audioClose(streamId) {
   const stream = audioStreams.get(streamId);
   if (stream) {
-    stream.ctx.close().catch(() => {});
+    stream.ctx.close().catch(() => { });
     audioStreams.delete(streamId);
     console.log("[Flash Player] Audio stream closed:", streamId);
   }
@@ -1201,11 +1296,11 @@ function audioInputOpen(streamId, sampleRate, frameCount, port) {
         streamState.capturing = true;
         streamState.pendingStart = false;
         console.log("[Flash Player] Audio input stream opened + auto-started:", streamId,
-                    "rate:", sampleRate, "frames:", frameCount);
+          "rate:", sampleRate, "frames:", frameCount);
       } else {
         await ctx.suspend();
         console.log("[Flash Player] Audio input stream opened (suspended):", streamId,
-                    "rate:", sampleRate, "frames:", frameCount);
+          "rate:", sampleRate, "frames:", frameCount);
       }
     } catch (e) {
       console.error("[Flash Player] Failed to open audio input:", e);
@@ -1262,7 +1357,7 @@ function audioInputClose(streamId) {
   if (stream.processor) stream.processor.disconnect();
   if (stream.source) stream.source.disconnect();
   if (stream.mediaStream) stream.mediaStream.getTracks().forEach(t => t.stop());
-  if (stream.ctx) stream.ctx.close().catch(() => {});
+  if (stream.ctx) stream.ctx.close().catch(() => { });
   audioInputStreams.delete(streamId);
   console.log("[Flash Player] Audio input stream closed:", streamId);
 }
@@ -1355,7 +1450,7 @@ function videoCaptureOpen(streamId, width, height, fps, port) {
   streamState.ready = (async () => {
     try {
       console.log("[Flash Player] Video capture requesting getUserMedia:", streamId,
-                  width + "x" + height, "@", fps, "fps");
+        width + "x" + height, "@", fps, "fps");
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         video: {
           width: { ideal: width },
@@ -1406,7 +1501,7 @@ function videoCaptureOpen(streamId, width, height, fps, port) {
       streamState.pendingStart = false;
       startVideoCaptureLoop(streamId, streamState);
       console.log("[Flash Player] Video capture stream opened + started:", streamId,
-                  width + "x" + height, "@", fps, "fps");
+        width + "x" + height, "@", fps, "fps");
     } catch (e) {
       console.error("[Flash Player] Failed to open video capture:", e);
     }
@@ -1453,7 +1548,7 @@ function startVideoCaptureLoop(streamId, streamState) {
     framesSent++;
     if (framesSent === 1) {
       console.log("[Flash Player] Video capture first frame sent:", streamId,
-                  width + "x" + height, "I420 bytes:", i420.length);
+        width + "x" + height, "I420 bytes:", i420.length);
     } else if (framesSent % 300 === 0) {
       console.log("[Flash Player] Video capture frames sent:", framesSent, "stream:", streamId);
     }
@@ -1671,9 +1766,15 @@ function showFlashContextMenu(items, x, y, canvas, port) {
 
   // Position relative to the canvas.
   const rect = canvas.getBoundingClientRect();
-  // Account for CSS scaling (canvas might be scaled via CSS).
-  const scaleX = rect.width / (canvas.width || 1);
-  const scaleY = rect.height / (canvas.height || 1);
+  // Map Flash view coordinates (DIPs) to CSS pixels for positioning.
+  // Use the logical Flash dimensions, not the canvas buffer size which
+  // may be at a higher device resolution.
+  const instId = canvas.getAttribute("data-flash-player");
+  const meta = instId != null ? instanceMeta.get(Number(instId)) : null;
+  const logicalW = (meta && meta.origWidth) || canvas.width;
+  const logicalH = (meta && meta.origHeight) || canvas.height;
+  const scaleX = rect.width / (logicalW || 1);
+  const scaleY = rect.height / (logicalH || 1);
   let menuX = rect.left + x * scaleX;
   let menuY = rect.top + y * scaleY;
 
@@ -1764,12 +1865,12 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
   switch (tag) {
     case TAG_FRAME: {
       // 1 byte tag + 7 x u32 header (28 bytes) + QOI-encoded RGBA pixels
-      const x       = readU32(dv, 1);
-      const y       = readU32(dv, 5);
-      const width   = readU32(dv, 9);
-      const height  = readU32(dv, 13);
-      const frameW  = readU32(dv, 17);
-      const frameH  = readU32(dv, 21);
+      const x = readU32(dv, 1);
+      const y = readU32(dv, 5);
+      const width = readU32(dv, 9);
+      const height = readU32(dv, 13);
+      const frameW = readU32(dv, 17);
+      const frameH = readU32(dv, 21);
       // stride at offset 25 — ignored for QOI
       const qoiOffset = 29; // 1 + 7*4
       const qoiLen = bytes.length - qoiOffset;
@@ -1809,8 +1910,8 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
 
     case TAG_STATE: {
       // 1 byte tag + 1 byte code + u32 width + u32 height
-      const code   = bytes[1];
-      const width  = readU32(dv, 2);
+      const code = bytes[1];
+      const width = readU32(dv, 2);
       const height = readU32(dv, 6);
       const stateNames = ["idle", "loading", "running", "error"];
       const stateName = stateNames[code] || "unknown";
@@ -1878,7 +1979,7 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
 
     case TAG_AUDIO_INIT: {
       // 1 byte tag + u32 stream_id + u32 sample_rate + u32 frame_count
-      const streamId   = readU32(dv, 1);
+      const streamId = readU32(dv, 1);
       const sampleRate = readU32(dv, 5);
       const frameCount = readU32(dv, 9);
       audioInit(streamId, sampleRate, frameCount);
@@ -1915,7 +2016,7 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
 
     case TAG_AUDIO_INPUT_OPEN: {
       // 1 byte tag + u32 stream_id + u32 sample_rate + u32 frame_count
-      const streamId   = readU32(dv, 1);
+      const streamId = readU32(dv, 1);
       const sampleRate = readU32(dv, 5);
       const frameCount = readU32(dv, 9);
       audioInputOpen(streamId, sampleRate, frameCount, port);
@@ -1945,9 +2046,9 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
     case TAG_VIDEO_CAPTURE_OPEN: {
       // 1 byte tag + u32 stream_id + u32 width + u32 height + u32 fps
       const streamId = readU32(dv, 1);
-      const width    = readU32(dv, 5);
-      const height   = readU32(dv, 9);
-      const fps      = readU32(dv, 13);
+      const width = readU32(dv, 5);
+      const height = readU32(dv, 9);
+      const fps = readU32(dv, 13);
       videoCaptureOpen(streamId, width, height, fps, port);
       break;
     }
@@ -2217,9 +2318,9 @@ function initCallFunctionBridge() {
 function getModifiers(e) {
   let m = 0;
   if (e.shiftKey) m |= 1;       // PP_INPUTEVENT_MODIFIER_SHIFTKEY
-  if (e.ctrlKey)  m |= 2;       // PP_INPUTEVENT_MODIFIER_CONTROLKEY
-  if (e.altKey)   m |= 4;       // PP_INPUTEVENT_MODIFIER_ALTKEY
-  if (e.metaKey)  m |= 8;       // PP_INPUTEVENT_MODIFIER_METAKEY
+  if (e.ctrlKey) m |= 2;       // PP_INPUTEVENT_MODIFIER_CONTROLKEY
+  if (e.altKey) m |= 4;       // PP_INPUTEVENT_MODIFIER_ALTKEY
+  if (e.metaKey) m |= 8;       // PP_INPUTEVENT_MODIFIER_METAKEY
   if (e.buttons & 1) m |= 16;   // PP_INPUTEVENT_MODIFIER_LEFTBUTTONDOWN
   if (e.buttons & 4) m |= 32;   // PP_INPUTEVENT_MODIFIER_MIDDLEBUTTONDOWN
   if (e.buttons & 2) m |= 64;   // PP_INPUTEVENT_MODIFIER_RIGHTBUTTONDOWN
@@ -2235,23 +2336,29 @@ function mapButton(e) {
 }
 
 /**
- * Compute mouse position relative to the canvas, accounting for CSS scaling.
+ * Compute mouse position relative to the canvas in Flash view coordinates
+ * (DIPs). Uses the logical Flash dimensions (meta.origWidth/origHeight)
+ * rather than canvas.width/canvas.height because Flash may render at a
+ * higher device resolution, making the canvas buffer larger than the
+ * view rect reported via DidChangeView.
  */
-function canvasPos(canvas, e) {
+function canvasPos(canvas, e, meta) {
   const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
+  const logicalW = (meta && meta.origWidth) || canvas.width;
+  const logicalH = (meta && meta.origHeight) || canvas.height;
+  const scaleX = logicalW / rect.width;
+  const scaleY = logicalH / rect.height;
   return {
     x: Math.round((e.clientX - rect.left) * scaleX),
     y: Math.round((e.clientY - rect.top) * scaleY),
   };
 }
 
-function bindInputEvents(canvas, port) {
+function bindInputEvents(canvas, port, meta) {
   canvas.addEventListener("mousedown", (e) => {
     e.preventDefault();
     canvas.focus();
-    const pos = canvasPos(canvas, e);
+    const pos = canvasPos(canvas, e, meta);
     port.postMessage({
       type: "mousedown",
       x: pos.x,
@@ -2263,7 +2370,7 @@ function bindInputEvents(canvas, port) {
 
   canvas.addEventListener("mouseup", (e) => {
     e.preventDefault();
-    const pos = canvasPos(canvas, e);
+    const pos = canvasPos(canvas, e, meta);
     port.postMessage({
       type: "mouseup",
       x: pos.x,
@@ -2283,7 +2390,7 @@ function bindInputEvents(canvas, port) {
       _moveRaf = requestAnimationFrame(() => {
         _moveRaf = 0;
         if (_pendingMove) {
-          const pos = canvasPos(canvas, _pendingMove);
+          const pos = canvasPos(canvas, _pendingMove, meta);
           port.postMessage({
             type: "mousemove",
             x: pos.x,
@@ -2342,9 +2449,9 @@ function bindInputEvents(canvas, port) {
         // Special keys that produce character events in PPAPI.
         let charCode = 0, charText = "";
         switch (e.key) {
-          case "Enter":     charCode = 13; charText = "\r"; break;
-          case "Tab":       charCode = 9;  charText = "\t"; break;
-          case "Backspace": charCode = 8;  charText = "";   break;
+          case "Enter": charCode = 13; charText = "\r"; break;
+          case "Tab": charCode = 9; charText = "\t"; break;
+          case "Backspace": charCode = 8; charText = ""; break;
         }
         if (charCode) {
           port.postMessage({
@@ -2402,7 +2509,7 @@ function bindInputEvents(canvas, port) {
   // Prevent native context menu and notify the host so Flash can show its own.
   canvas.addEventListener("contextmenu", (e) => {
     e.preventDefault();
-    const pos = canvasPos(canvas, e);
+    const pos = canvasPos(canvas, e, meta);
     port.postMessage({
       type: "contextmenu",
       x: pos.x,

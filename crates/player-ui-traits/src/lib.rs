@@ -650,3 +650,46 @@ pub trait VideoCaptureProvider: Send + Sync {
     /// Close and release a capture stream permanently.
     fn close_stream(&self, stream_id: u32);
 }
+
+// ===========================================================================
+// View info — browser-sourced view metadata for PPB_View resources
+// ===========================================================================
+
+/// Additional view metadata collected from the browser environment.
+///
+/// When the player runs inside a real browser (via the web extension), these
+/// values are sourced from browser APIs (`window.devicePixelRatio`,
+/// `document.visibilityState`, Fullscreen API, etc.) and forwarded through
+/// the native messaging protocol so that PPAPI view resources report
+/// accurate information to the plugin.
+#[derive(Debug, Clone)]
+pub struct ViewInfo {
+    /// Device pixel ratio (`window.devicePixelRatio`).
+    pub device_scale: f32,
+    /// CSS-to-DIP scale factor (accounts for page zoom).
+    pub css_scale: f32,
+    /// Horizontal scroll offset in CSS pixels (`window.scrollX`).
+    pub scroll_offset_x: i32,
+    /// Vertical scroll offset in CSS pixels (`window.scrollY`).
+    pub scroll_offset_y: i32,
+    /// Whether the plugin instance is in fullscreen mode.
+    pub is_fullscreen: bool,
+    /// Whether the plugin instance might be visible to the user.
+    pub is_visible: bool,
+    /// Whether the page containing the plugin is visible (not in a background tab).
+    pub is_page_visible: bool,
+}
+
+impl Default for ViewInfo {
+    fn default() -> Self {
+        Self {
+            device_scale: 1.0,
+            css_scale: 1.0,
+            scroll_offset_x: 0,
+            scroll_offset_y: 0,
+            is_fullscreen: false,
+            is_visible: true,
+            is_page_visible: true,
+        }
+    }
+}

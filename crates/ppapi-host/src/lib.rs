@@ -37,7 +37,7 @@ pub use var::VarManager;
 use parking_lot::Mutex;
 use ppapi_sys::{PP_GetInterface_Func, PP_Resource, PP_Var, PP_VARTYPE_STRING};
 use std::ffi::{c_char, c_void, CStr};
-use std::sync::atomic::AtomicI32;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 
@@ -175,6 +175,12 @@ pub struct HostState {
     /// The plugin's `PPP_GetInterface` function pointer, stored so that
     /// interface implementations can query PPP_* callback interfaces.
     pub plugin_get_interface: Mutex<Option<PP_GetInterface_Func>>,
+    /// Whether the browser is in incognito/private browsing mode.
+    /// Used by `PPB_Flash::GetSetting(PP_FLASHSETTING_INCOGNITO)`.
+    pub flash_incognito: AtomicBool,
+    /// The browser UI language (e.g. "en-US").
+    /// Used by `PPB_Flash::GetSetting(PP_FLASHSETTING_LANGUAGE)`.
+    pub flash_language: Mutex<String>,
 }
 
 impl HostState {
@@ -222,6 +228,8 @@ impl HostState {
                 flash_command_line_args: Mutex::new(String::new()),
                 instance_object: Mutex::new(None),
                 plugin_get_interface: Mutex::new(None),
+                flash_incognito: AtomicBool::new(false),
+                flash_language: Mutex::new(String::new()),
             }
         })
     }
@@ -330,6 +338,34 @@ impl HostState {
     /// Get the command-line string exposed to Flash.
     pub fn get_flash_command_line_args(&self) -> String {
         self.flash_command_line_args.lock().clone()
+    }
+
+    /// Set whether the browser is in incognito/private browsing mode.
+    pub fn set_flash_incognito(&self, incognito: bool) {
+        self.flash_incognito.store(incognito, Ordering::Relaxed);
+    }
+
+    /// Get the incognito mode flag.
+    pub fn get_flash_incognito(&self) -> bool {
+        self.flash_incognito.load(Ordering::Relaxed)
+    }
+
+    /// Set the browser UI language (e.g. "en-US").
+    pub fn set_flash_language(&self, lang: impl Into<String>) {
+        *self.flash_language.lock() = lang.into();
+    }
+
+    /// Get the browser UI language. Falls back to `$LANG` env var.
+    pub fn get_flash_language(&self) -> String {
+        let lang = self.flash_language.lock().clone();
+        if !lang.is_empty() {
+            return lang;
+        }
+        // Fallback to env var.
+        let lang = std::env::var("LANG")
+            .unwrap_or_else(|_| "en_US.UTF-8".to_string());
+        let lang = lang.split('.').next().unwrap_or("en_US");
+        lang.replace('_', "-")
     }
 
     /// Get a cloned `Arc` handle to the scripting provider, if set.

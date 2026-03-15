@@ -522,7 +522,7 @@ impl FlashPlayerApp {
             *last = (w, h);
             let player = self.player.borrow();
             if player.is_running() {
-                player.notify_view_change(w, h);
+                player.notify_view_change(w, h, None);
             }
         }
     }
@@ -821,7 +821,7 @@ impl FlashPlayerApp {
                 let (_, _, w, h) = self.get_content_rect();
                 if w > 0 && h > 0 {
                     *self.last_content_size.borrow_mut() = (w, h);
-                    player.notify_view_change(w, h);
+                    player.notify_view_change(w, h, None);
                 }
                 self.timer.start();
                 self.timer_disabled.store(0, Ordering::Relaxed);

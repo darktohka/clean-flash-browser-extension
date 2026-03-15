@@ -40,7 +40,7 @@ mod script_bridge;
 
 use parking_lot::Mutex;
 use player_core::FlashPlayer;
-use player_ui_traits::EmbedArg;
+use player_ui_traits::{EmbedArg, ViewInfo};
 use ppapi_sys::*;
 use serde_json::json;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -427,6 +427,22 @@ fn parse_open_embed_args(cmd: &serde_json::Value) -> Vec<EmbedArg> {
         .collect()
 }
 
+/// Extract browser-sourced view metadata from a JSON command.
+///
+/// Used by `resize` and `viewUpdate` commands. Missing fields fall back
+/// to sensible defaults.
+fn parse_view_info(cmd: &serde_json::Value) -> ViewInfo {
+    ViewInfo {
+        device_scale: cmd["deviceScale"].as_f64().unwrap_or(1.0) as f32,
+        css_scale: cmd["cssScale"].as_f64().unwrap_or(1.0) as f32,
+        scroll_offset_x: cmd["scrollX"].as_i64().unwrap_or(0) as i32,
+        scroll_offset_y: cmd["scrollY"].as_i64().unwrap_or(0) as i32,
+        is_fullscreen: cmd["isFullscreen"].as_bool().unwrap_or(false),
+        is_visible: cmd["isVisible"].as_bool().unwrap_or(true),
+        is_page_visible: cmd["isPageVisible"].as_bool().unwrap_or(true),
+    }
+}
+
 /// Handle one incoming JSON command. Returns `false` to signal shutdown.
 fn handle_command(player: &mut FlashPlayer, cmd: &serde_json::Value) -> bool {
     let msg_type = cmd["type"].as_str().unwrap_or("");
@@ -441,10 +457,34 @@ fn handle_command(player: &mut FlashPlayer, cmd: &serde_json::Value) -> bool {
                 return true;
             }
             let embed_args = parse_open_embed_args(cmd);
+
+            // Store browser-sourced flash settings (incognito, language).
+            if let Some(host) = ppapi_host::HOST.get() {
+                if let Some(incognito) = cmd["incognito"].as_bool() {
+                    host.set_flash_incognito(incognito);
+                    tracing::info!("Browser incognito mode: {}", incognito);
+                }
+                if let Some(lang) = cmd["language"].as_str() {
+                    if !lang.is_empty() {
+                        host.set_flash_language(lang);
+                        tracing::info!("Browser language: {}", lang);
+                    }
+                }
+            }
+
             tracing::info!("Opening SWF: {}", url);
             tracing::info!("Open command includes {} DidCreate args", embed_args.len());
             match player.open_swf_with_args(url, &embed_args) {
                 Ok(()) => {
+                    // Apply initial view metadata sent in the start/open message
+                    // so PPB_View reflects browser state from the very beginning.
+                    let w = cmd["width"].as_i64().unwrap_or(0) as i32;
+                    let h = cmd["height"].as_i64().unwrap_or(0) as i32;
+                    if w > 0 && h > 0 {
+                        let view_info = parse_view_info(cmd);
+                        player.notify_view_change(w, h, Some(&view_info));
+                    }
+
                     let _ = protocol::send_host_message(&protocol::HostMessage::State {
                         code: 2, // running
                         width: 0,
@@ -463,7 +503,26 @@ fn handle_command(player: &mut FlashPlayer, cmd: &serde_json::Value) -> bool {
             let w = cmd["width"].as_i64().unwrap_or(0) as i32;
             let h = cmd["height"].as_i64().unwrap_or(0) as i32;
             if w > 0 && h > 0 {
-                player.notify_view_change(w, h);
+                let view_info = parse_view_info(cmd);
+                player.notify_view_change(w, h, Some(&view_info));
+            }
+        }
+
+        "viewUpdate" => {
+            // View metadata changed (visibility, scroll, fullscreen) without resize.
+            // Re-send DidChangeView with current dimensions + updated view info.
+            if let Some(host) = ppapi_host::HOST.get() {
+                if let Some(instance_id) = player.instance_id() {
+                    let rect = host.instances.with_instance(instance_id, |inst| inst.view_rect);
+                    if let Some(rect) = rect {
+                        let w = rect.size.width;
+                        let h = rect.size.height;
+                        if w > 0 && h > 0 {
+                            let view_info = parse_view_info(cmd);
+                            player.notify_view_change(w, h, Some(&view_info));
+                        }
+                    }
+                }
             }
         }
 

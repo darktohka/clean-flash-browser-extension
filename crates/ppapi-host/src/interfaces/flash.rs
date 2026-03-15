@@ -400,7 +400,11 @@ unsafe extern "C" fn get_setting_int(
     tracing::debug!("PPB_Flash::GetSettingInt(setting={})", setting);
     match setting {
         PP_FLASHSETTING_3DENABLED => 1,
-        PP_FLASHSETTING_INCOGNITO => 0,
+        PP_FLASHSETTING_INCOGNITO => {
+            HOST.get()
+                .map(|h| if h.get_flash_incognito() { 1 } else { 0 })
+                .unwrap_or(0)
+        }
         PP_FLASHSETTING_STAGE3DENABLED => 1,
         PP_FLASHSETTING_NUMCORES => {
             num_cpus()
@@ -421,14 +425,14 @@ unsafe extern "C" fn get_setting(
     };
     let result = match setting {
         PP_FLASHSETTING_3DENABLED => PP_Var::from_bool(true),
-        PP_FLASHSETTING_INCOGNITO => PP_Var::from_bool(false),
+        PP_FLASHSETTING_INCOGNITO => {
+            PP_Var::from_bool(
+                host.get_flash_incognito()
+            )
+        }
         PP_FLASHSETTING_STAGE3DENABLED => PP_Var::from_bool(true),
         PP_FLASHSETTING_LANGUAGE => {
-            let lang = std::env::var("LANG")
-                .unwrap_or_else(|_| "en_US.UTF-8".to_string());
-            // Convert "en_US.UTF-8" → "en-US"
-            let lang = lang.split('.').next().unwrap_or("en_US");
-            let lang = lang.replace('_', "-");
+            let lang = host.get_flash_language();
             host.vars.var_from_str(&lang)
         }
         PP_FLASHSETTING_NUMCORES => PP_Var::from_int(num_cpus()),

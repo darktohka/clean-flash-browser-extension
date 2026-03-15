@@ -4,7 +4,7 @@
 //! (player-ui-traits) to form the complete Flash player logic.
 
 use parking_lot::Mutex;
-use player_ui_traits::{DialogProvider, EmbedArg, FileChooserProvider, PlayerState};
+use player_ui_traits::{DialogProvider, EmbedArg, FileChooserProvider, PlayerState, ViewInfo};
 use ppapi_host::{HostCallbacks, HostState, PluginLoader};
 use ppapi_sys::*;
 use std::ffi::CString;
@@ -532,7 +532,7 @@ impl FlashPlayer {
     }
 
     /// Notify the plugin of a view change (resize).
-    pub fn notify_view_change(&self, width: i32, height: i32) {
+    pub fn notify_view_change(&self, width: i32, height: i32, view_info: Option<&ViewInfo>) {
         tracing::debug!("notify_view_change: width={}, height={}", width, height);
         let Some(instance_id) = self.instance_id else {
             return;
@@ -553,7 +553,21 @@ impl FlashPlayer {
             point: PP_Point { x: 0, y: 0 },
             size: PP_Size { width, height },
         };
-        let view_res = ViewResource::new(rect);
+        let mut view_res = ViewResource::new(rect);
+
+        // Apply browser-sourced view metadata if provided.
+        if let Some(info) = view_info {
+            view_res.device_scale = info.device_scale;
+            view_res.css_scale = info.css_scale;
+            view_res.scroll_offset = PP_Point {
+                x: info.scroll_offset_x,
+                y: info.scroll_offset_y,
+            };
+            view_res.is_fullscreen = info.is_fullscreen;
+            view_res.is_visible = info.is_visible;
+            view_res.is_page_visible = info.is_page_visible;
+        }
+
         let view_id = host.resources.insert(instance_id, Box::new(view_res));
 
         // Query PPP_Instance and call DidChangeView.

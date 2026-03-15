@@ -227,7 +227,7 @@ impl FlashPlayerApp {
             Ok(()) => {
                 self.status_message = format!("Playing: {}", path);
                 let (width, height) = self.last_content_size;
-                self.player.notify_view_change(width, height);
+                self.player.notify_view_change(width, height, None);
             }
             Err(e) => {
                 self.status_message = format!("Error opening {}: {}", path, e);
@@ -412,7 +412,7 @@ impl FlashPlayerApp {
         if (new_w, new_h) != self.last_content_size && new_w > 0 && new_h > 0 {
             self.last_content_size = (new_w, new_h);
             if self.player.is_running() {
-                self.player.notify_view_change(new_w, new_h);
+                self.player.notify_view_change(new_w, new_h, None);
             }
         }
 

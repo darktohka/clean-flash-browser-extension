@@ -145,6 +145,9 @@ chrome.runtime.onConnect.addListener((port) => {
       instanceId = msg.instanceId;
       instances.set(instanceId, port);
 
+      // Detect incognito mode from the sender tab.
+      const incognito = !!(port.sender && port.sender.tab && port.sender.tab.incognito);
+
       // Create a native host for this instance and send the open command.
       nativePort = createNativePort(instanceId, port);
       if (!nativePort) return;
@@ -152,14 +155,32 @@ chrome.runtime.onConnect.addListener((port) => {
         type: "open",
         url: msg.url,
         args: msg.args || [],
+        incognito,
+        language: msg.language || "",
+        deviceScale: msg.deviceScale,
+        cssScale: msg.cssScale,
+        scrollX: msg.scrollX,
+        scrollY: msg.scrollY,
+        isFullscreen: msg.isFullscreen,
+        isVisible: msg.isVisible,
+        isPageVisible: msg.isPageVisible,
+        width: msg.width,
+        height: msg.height,
       });
 
-      // Send initial resize.
+      // Send initial resize with view info.
       if (msg.width && msg.height) {
         nativePort.postMessage({
           type: "resize",
           width: msg.width,
           height: msg.height,
+          deviceScale: msg.deviceScale,
+          cssScale: msg.cssScale,
+          scrollX: msg.scrollX,
+          scrollY: msg.scrollY,
+          isFullscreen: msg.isFullscreen,
+          isVisible: msg.isVisible,
+          isPageVisible: msg.isPageVisible,
         });
       }
     } else {
