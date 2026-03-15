@@ -196,6 +196,11 @@ impl FlashPlayerApp {
                             self.egui_ctx.clone(),
                         ),
                     ));
+
+                    // Set up the print provider for Flash printing (PPB_PDF::Print).
+                    host.set_print_provider(Box::new(
+                        dialogs::EguiPrintProvider::new(self.frame_handle.clone()),
+                    ));
                 }
                 Err(e) => {
                     self.status_message = format!("Error: {}", e);
@@ -544,6 +549,20 @@ impl FlashPlayerApp {
                             0,
                             pp_modifiers,
                         );
+
+                        // Synthesize a context menu event for right-click,
+                        // matching browser behaviour (player-web gets this
+                        // from the DOM "contextmenu" event).  Flash uses
+                        // this to trigger PPB_Flash_Menu::Show.
+                        if button == egui::PointerButton::Secondary {
+                            self.player.send_mouse_event(
+                                PP_INPUTEVENT_TYPE_CONTEXTMENU,
+                                PP_INPUTEVENT_MOUSEBUTTON_RIGHT,
+                                pp_pos,
+                                0,
+                                pp_modifiers,
+                            );
+                        }
                     }
                 }
             }

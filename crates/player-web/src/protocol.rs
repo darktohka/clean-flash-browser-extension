@@ -240,6 +240,8 @@ pub enum HostMessage<'a> {
     /// Context menu: send menu items to the UI for display.
     /// Payload is a JSON string describing the menu tree.
     ContextMenu(&'a str),
+    /// Print: request the browser to print the current content.
+    Print,
 }
 
 // Message type tags.
@@ -259,6 +261,7 @@ const TAG_AUDIO_INPUT_START: u8 = 0x31;
 const TAG_AUDIO_INPUT_STOP: u8 = 0x32;
 const TAG_AUDIO_INPUT_CLOSE: u8 = 0x33;
 const TAG_CONTEXT_MENU: u8 = 0x40;
+const TAG_PRINT: u8 = 0x50;
 
 impl<'a> HostMessage<'a> {
     /// Serialize to a compact binary representation (little-endian).
@@ -386,6 +389,9 @@ impl<'a> HostMessage<'a> {
                 buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
                 buf.extend_from_slice(bytes);
                 buf
+            }
+            HostMessage::Print => {
+                vec![TAG_PRINT]
             }
         }
     }

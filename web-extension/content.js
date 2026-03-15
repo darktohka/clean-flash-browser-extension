@@ -188,6 +188,7 @@ const TAG_NAMES = {
   [0x32]: "AINPUT_STOP",
   [0x33]: "AINPUT_CLOSE",
   [0x40]: "CONTEXT_MENU",
+  [0x50]: "PRINT",
 };
 
 /**
@@ -833,6 +834,7 @@ const TAG_AUDIO_INPUT_START = 0x31;
 const TAG_AUDIO_INPUT_STOP  = 0x32;
 const TAG_AUDIO_INPUT_CLOSE = 0x33;
 const TAG_CONTEXT_MENU      = 0x40;
+const TAG_PRINT             = 0x50;
 
 function tagHex(tag) {
   return `0x${tag.toString(16).padStart(2, "0")}`;
@@ -1674,6 +1676,61 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
         console.error("[Flash Player] Bad context menu data:", e, jsonStr);
         // Send cancel response so the host doesn't hang.
         port.postMessage({ type: "menuResponse", selectedId: null });
+      }
+      break;
+    }
+
+    case TAG_PRINT: {
+      // 1 byte tag, no payload — print the Flash canvas content only.
+      // Use a hidden iframe to avoid popup-blocker restrictions (this
+      // message arrives from native messaging, not a user gesture).
+      console.log("[Flash Player] Print requested by Flash content");
+      try {
+        const dataUrl = canvas.toDataURL("image/png");
+        const iframe = document.createElement("iframe");
+        iframe.style.position = "fixed";
+        iframe.style.left = "-9999px";
+        iframe.style.top = "-9999px";
+        iframe.style.width = canvas.width + "px";
+        iframe.style.height = canvas.height + "px";
+        iframe.style.border = "none";
+        document.body.appendChild(iframe);
+
+        const doc = iframe.contentDocument || iframe.contentWindow.document;
+        doc.open();
+        doc.write(
+          "<!DOCTYPE html><html><head><title>Print Flash Content</title>" +
+          "<style>@page { margin: 0; } body { margin: 0; }</style>" +
+          "</head><body style='margin:0'>" +
+          "<img src='" + dataUrl + "' style='max-width:100%;height:auto'>" +
+          "</body></html>"
+        );
+        doc.close();
+
+        // Wait for the image to load before printing.
+        const img = doc.querySelector("img");
+        const doPrint = () => {
+          try {
+            iframe.contentWindow.focus();
+            iframe.contentWindow.print();
+          } catch (e) {
+            console.error("[Flash Player] Print failed:", e);
+          }
+          // Clean up after a delay to let the print dialog finish.
+          setTimeout(() => { iframe.remove(); }, 5000);
+        };
+
+        if (img.complete) {
+          doPrint();
+        } else {
+          img.onload = doPrint;
+          img.onerror = () => {
+            console.error("[Flash Player] Failed to load canvas image for printing");
+            iframe.remove();
+          };
+        }
+      } catch (e) {
+        console.error("[Flash Player] Print error:", e);
       }
       break;
     }

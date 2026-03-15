@@ -1761,7 +1761,7 @@ pub struct PPB_Flash_12_4 {
 unsafe impl Send for PPB_Flash_12_4 {}
 unsafe impl Sync for PPB_Flash_12_4 {}
 
-/// PPB_Flash;13.0 vtable — 12 functions.  
+/// PPB_Flash;13.0 vtable — 12 functions.
 /// Does NOT have RunMessageLoop / QuitMessageLoop (those were removed).
 #[repr(C)]
 pub struct PPB_Flash_13_0 {
@@ -4021,6 +4021,21 @@ pub struct PPB_Flash_Menu_0_2 {
 
 unsafe impl Send for PPB_Flash_Menu_0_2 {}
 unsafe impl Sync for PPB_Flash_Menu_0_2 {}
+
+// ===========================================================================
+// PPB_Flash_Print;1.0
+// ===========================================================================
+
+pub const PPB_FLASH_PRINT_INTERFACE_1_0: &str = "PPB_Flash_Print;1.0\0";
+
+/// PPB_Flash_Print;1.0 vtable — single function.
+#[repr(C)]
+pub struct PPB_Flash_Print_1_0 {
+    pub InvokePrinting: Option<unsafe extern "C" fn(instance: PP_Instance)>,
+}
+
+unsafe impl Send for PPB_Flash_Print_1_0 {}
+unsafe impl Sync for PPB_Flash_Print_1_0 {}
 
 // ===========================================================================
 // Compile-time size assertions (match C static assertions)

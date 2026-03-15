@@ -154,6 +154,9 @@ pub struct HostState {
     /// Context menu provider for Flash right-click menus.
     /// When set, PPB_Flash_Menu::Show uses this to display the menu.
     pub context_menu_provider: Mutex<Option<Arc<dyn player_ui_traits::ContextMenuProvider>>>,
+    /// Print provider for Flash printing (PPB_PDF::Print, PPB_Printing).
+    /// When set, printing calls delegate to this provider.
+    pub print_provider: Mutex<Option<Arc<dyn player_ui_traits::PrintProvider>>>,
     /// Number of pending interactive operations (context menus, file dialogs)
     /// that are waiting for user input.  While > 0, the Flash nested message
     /// loop skips its safety-net timeout so the user has time to interact.
@@ -207,6 +210,7 @@ impl HostState {
                 fullscreen_provider: Mutex::new(None),
                 url_provider: Mutex::new(None),
                 context_menu_provider: Mutex::new(None),
+                print_provider: Mutex::new(None),
                 pending_interactive_ops: AtomicI32::new(0),
                 flash_command_line_args: Mutex::new(String::new()),
                 instance_object: Mutex::new(None),
@@ -287,6 +291,16 @@ impl HostState {
     /// Get a cloned `Arc` handle to the context menu provider, if set.
     pub fn get_context_menu_provider(&self) -> Option<Arc<dyn player_ui_traits::ContextMenuProvider>> {
         self.context_menu_provider.lock().clone()
+    }
+
+    /// Set the print provider for Flash printing.
+    pub fn set_print_provider(&self, provider: Box<dyn player_ui_traits::PrintProvider>) {
+        *self.print_provider.lock() = Some(Arc::from(provider));
+    }
+
+    /// Get a cloned `Arc` handle to the print provider, if set.
+    pub fn get_print_provider(&self) -> Option<Arc<dyn player_ui_traits::PrintProvider>> {
+        self.print_provider.lock().clone()
     }
 
     /// Set the command-line string returned by

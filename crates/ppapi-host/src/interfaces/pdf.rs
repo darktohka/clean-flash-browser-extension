@@ -11,6 +11,8 @@ use crate::interface_registry::InterfaceRegistry;
 use ppapi_sys::*;
 use std::ffi::c_void;
 
+use super::super::HOST;
+
 // ---------------------------------------------------------------------------
 // VTable
 // ---------------------------------------------------------------------------
@@ -130,7 +132,17 @@ unsafe extern "C" fn save_as(instance: PP_Instance) {
 }
 
 unsafe extern "C" fn print(instance: PP_Instance) {
-    tracing::trace!("ppb_pdf_print: instance={}", instance);
+    tracing::debug!("ppb_pdf_print: instance={}", instance);
+    let Some(host) = HOST.get() else {
+        tracing::warn!("ppb_pdf_print: HOST not initialised");
+        return;
+    };
+    if let Some(provider) = host.get_print_provider() {
+        let ok = provider.print();
+        tracing::debug!("ppb_pdf_print: provider returned {}", ok);
+    } else {
+        tracing::debug!("ppb_pdf_print: no print provider set, ignoring");
+    }
 }
 
 unsafe extern "C" fn is_feature_enabled(
@@ -142,13 +154,27 @@ unsafe extern "C" fn is_feature_enabled(
         PP_PDFFEATURE_PRINTING => "PRINTING",
         _ => "UNKNOWN",
     };
+
+    let result = match feature {
+        PP_PDFFEATURE_PRINTING => {
+            // Report printing as enabled when a print provider is available.
+            let has_provider = HOST
+                .get()
+                .and_then(|h| h.get_print_provider())
+                .is_some();
+            if has_provider { PP_TRUE } else { PP_FALSE }
+        }
+        _ => PP_FALSE,
+    };
+
     tracing::trace!(
-        "ppb_pdf_is_feature_enabled: instance={}, feature={}({}) -> PP_FALSE",
+        "ppb_pdf_is_feature_enabled: instance={}, feature={}({}) -> {}",
         instance,
         name,
-        feature
+        feature,
+        if result == PP_TRUE { "PP_TRUE" } else { "PP_FALSE" },
     );
-    PP_FALSE
+    result
 }
 
 unsafe extern "C" fn set_selected_text(

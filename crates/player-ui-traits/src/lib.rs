@@ -513,3 +513,64 @@ pub trait ContextMenuProvider: Send + Sync {
     /// if the menu was dismissed without a selection.
     fn show_context_menu(&self, items: &[ContextMenuItem], x: i32, y: i32) -> Option<i32>;
 }
+
+// ===========================================================================
+// Print provider — abstracts printing for the PPAPI host
+// ===========================================================================
+
+/// Default print settings returned by the print provider.
+///
+/// Mirrors the fields Flash expects from `PPB_Printing::GetDefaultPrintSettings`.
+/// All dimensions are in points (1/72 inch).
+#[derive(Debug, Clone, Copy)]
+pub struct PrintSettings {
+    /// The printable area of the page (origin + size in points).
+    pub printable_area: (i32, i32, i32, i32),
+    /// The content area of the page (origin + size in points).
+    pub content_area: (i32, i32, i32, i32),
+    /// Physical paper size in points (width, height).
+    pub paper_size: (i32, i32),
+    /// Printer DPI.
+    pub dpi: i32,
+}
+
+impl Default for PrintSettings {
+    fn default() -> Self {
+        // US Letter (8.5 × 11 in) with 0.25-inch margins, 72 DPI.
+        // 8.5 in = 612 pt, 11 in = 792 pt, 0.25 in = 18 pt margin.
+        Self {
+            printable_area: (18, 18, 576, 756),
+            content_area: (18, 18, 576, 756),
+            paper_size: (612, 792),
+            dpi: 72,
+        }
+    }
+}
+
+/// Provides printing capabilities for the PPAPI host.
+///
+/// When Flash calls `PPB_PDF::Print()` the host uses this trait to
+/// trigger the platform's print flow.  `get_default_print_settings`
+/// is called by `PPB_Printing::GetDefaultPrintSettings` so that Flash
+/// receives realistic page dimensions.
+///
+/// Implementations should be thread-safe; methods may be called from the
+/// PPAPI plugin thread.
+pub trait PrintProvider: Send + Sync {
+    /// Trigger a print operation for the current Flash content.
+    ///
+    /// In a browser context this typically delegates to `window.print()`.
+    /// In a desktop context this captures the current frame and sends it
+    /// to the OS print subsystem.
+    ///
+    /// Returns `true` if the print request was accepted.
+    fn print(&self) -> bool;
+
+    /// Return the default print settings (paper size, DPI, etc.).
+    ///
+    /// Implementations may query the OS default printer or return
+    /// sensible defaults (US Letter, 72 DPI).
+    fn get_default_print_settings(&self) -> PrintSettings {
+        PrintSettings::default()
+    }
+}

@@ -55,7 +55,7 @@ fn main() {
     // Set up logging: write to log file ONLY.
     // stdout is reserved for native messaging; stderr is silenced so that
     // libpepflashplayer.so cannot corrupt the native messaging channel.
-    let filter = 
+    let filter =
                 EnvFilter::new("trace");
                 //EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
@@ -213,6 +213,10 @@ fn main() {
             .ok()
             .expect("WEB_CONTEXT_MENU already initialised");
         host.set_context_menu_provider(Box::new(WebContextMenuProviderWrapper(ctx_menu)));
+
+        // Set up the print provider so that Flash print requests are
+        // forwarded to the browser (window.print()).
+        host.set_print_provider(Box::new(WebPrintProvider));
     }
 
     tracing::info!("Host initialized successfully, entering main loop");
@@ -1258,5 +1262,18 @@ impl player_ui_traits::UrlProvider for WebUrlProvider {
         Self::decode_string_value(self.bridge.request(serde_json::json!({
             "op": "getPluginUrl",
         })))
+    }
+}
+
+// ===========================================================================
+// Print provider — delegates printing to the browser via native messaging
+// ===========================================================================
+
+struct WebPrintProvider;
+
+impl player_ui_traits::PrintProvider for WebPrintProvider {
+    fn print(&self) -> bool {
+        tracing::debug!("WebPrintProvider::print — sending Print message to browser");
+        protocol::send_host_message(&protocol::HostMessage::Print).is_ok()
     }
 }

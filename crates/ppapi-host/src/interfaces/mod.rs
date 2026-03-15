@@ -25,6 +25,7 @@ pub mod flash_font_file;
 pub mod flash_fullscreen;
 pub mod flash_menu;
 pub mod flash_message_loop;
+pub mod flash_print;
 pub mod graphics2d;
 pub mod graphics3d;
 pub mod image_data;
@@ -93,6 +94,7 @@ pub unsafe fn register_all(registry: &mut InterfaceRegistry) {
         self::flash_font_file::register(registry);
         self::flash_menu::register(registry);
         self::flash_message_loop::register(registry);
+        self::flash_print::register(registry);
         self::opengles2::register(registry);
         self::printing::register(registry);
         self::url_util::register(registry);

@@ -7,6 +7,7 @@
 //! the dialog and the user responds.
 
 use std::sync::{mpsc, Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use player_ui_traits::DialogProvider;
 
@@ -352,8 +353,6 @@ fn parse_accept_types(accept_types: &str) -> Vec<String> {
 // Egui fullscreen provider — uses eframe ViewportCommand
 // ===========================================================================
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
 /// Fullscreen provider that toggles eframe's native fullscreen mode via
 /// `egui::ViewportCommand::Fullscreen`.
 ///
@@ -586,4 +585,193 @@ fn draw_menu_items(
         }
     }
     None
+}
+
+// ===========================================================================
+// Print provider — captures the current frame and prints via OS facilities
+// ===========================================================================
+
+/// Provides printing for the desktop egui player.
+///
+/// Captures the current Flash frame from the shared buffer and writes it
+/// to a temporary BMP file, then launches the platform's print command.
+pub struct EguiPrintProvider {
+    frame_handle: Arc<parking_lot::Mutex<Option<player_core::SharedFrameBuffer>>>,
+}
+
+impl EguiPrintProvider {
+    pub fn new(
+        frame_handle: Arc<parking_lot::Mutex<Option<player_core::SharedFrameBuffer>>>,
+    ) -> Self {
+        Self { frame_handle }
+    }
+
+    /// Capture the current frame as RGBA pixel data, returns (width, height, rgba_pixels).
+    fn capture_frame(&self) -> Option<(u32, u32, Vec<u8>)> {
+        let guard = self.frame_handle.lock();
+        let fb = guard.as_ref()?;
+        if fb.width == 0 || fb.height == 0 || fb.pixels.is_empty() {
+            return None;
+        }
+        // Convert BGRA_PREMUL to RGBA.
+        let pixel_count = (fb.width * fb.height) as usize;
+        let mut rgba = Vec::with_capacity(pixel_count * 4);
+        for i in 0..pixel_count {
+            let offset = i * 4;
+            if offset + 3 < fb.pixels.len() {
+                let b = fb.pixels[offset];
+                let g = fb.pixels[offset + 1];
+                let r = fb.pixels[offset + 2];
+                let a = fb.pixels[offset + 3];
+                // Un-premultiply alpha.
+                if a == 0 {
+                    rgba.extend_from_slice(&[0, 0, 0, 0]);
+                } else if a == 255 {
+                    rgba.extend_from_slice(&[r, g, b, 255]);
+                } else {
+                    let af = a as f32 / 255.0;
+                    let ur = ((r as f32 / af).min(255.0)) as u8;
+                    let ug = ((g as f32 / af).min(255.0)) as u8;
+                    let ub = ((b as f32 / af).min(255.0)) as u8;
+                    rgba.extend_from_slice(&[ur, ug, ub, a]);
+                }
+            }
+        }
+        Some((fb.width, fb.height, rgba))
+    }
+
+    /// Write a minimal BMP file from RGBA pixel data.
+    fn write_bmp(width: u32, height: u32, rgba: &[u8], path: &std::path::Path) -> std::io::Result<()> {
+        use std::io::Write;
+        let row_bytes = width * 3;
+        let row_padding = (4 - (row_bytes % 4)) % 4;
+        let padded_row = row_bytes + row_padding;
+        let pixel_data_size = padded_row * height;
+        let file_size = 54 + pixel_data_size;
+
+        let mut f = std::fs::File::create(path)?;
+        // BMP file header (14 bytes)
+        f.write_all(b"BM")?;
+        f.write_all(&file_size.to_le_bytes())?;
+        f.write_all(&0u16.to_le_bytes())?; // reserved
+        f.write_all(&0u16.to_le_bytes())?; // reserved
+        f.write_all(&54u32.to_le_bytes())?; // pixel data offset
+
+        // DIB header (BITMAPINFOHEADER, 40 bytes)
+        f.write_all(&40u32.to_le_bytes())?; // header size
+        f.write_all(&(width as i32).to_le_bytes())?;
+        f.write_all(&(height as i32).to_le_bytes())?; // positive = bottom-up
+        f.write_all(&1u16.to_le_bytes())?; // planes
+        f.write_all(&24u16.to_le_bytes())?; // bpp
+        f.write_all(&0u32.to_le_bytes())?; // compression (none)
+        f.write_all(&pixel_data_size.to_le_bytes())?;
+        f.write_all(&2835u32.to_le_bytes())?; // h-res (72 DPI)
+        f.write_all(&2835u32.to_le_bytes())?; // v-res
+        f.write_all(&0u32.to_le_bytes())?; // colors
+        f.write_all(&0u32.to_le_bytes())?; // important colors
+
+        // Pixel data (bottom-up, BGR)
+        let pad = vec![0u8; row_padding as usize];
+        for y in (0..height).rev() {
+            for x in 0..width {
+                let i = ((y * width + x) * 4) as usize;
+                let r = rgba[i];
+                let g = rgba[i + 1];
+                let b = rgba[i + 2];
+                f.write_all(&[b, g, r])?;
+            }
+            if row_padding > 0 {
+                f.write_all(&pad)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl player_ui_traits::PrintProvider for EguiPrintProvider {
+    fn print(&self) -> bool {
+        let (width, height, rgba) = match self.capture_frame() {
+            Some(f) => f,
+            None => {
+                tracing::warn!("EguiPrintProvider::print: no frame available");
+                return false;
+            }
+        };
+
+        // Write to a temporary BMP file.
+        let tmp_dir = std::env::temp_dir();
+        let bmp_path = tmp_dir.join("flash_player_print.bmp");
+
+        if let Err(e) = Self::write_bmp(width, height, &rgba, &bmp_path) {
+            tracing::error!("EguiPrintProvider: failed to write BMP: {}", e);
+            return false;
+        }
+
+        tracing::debug!(
+            "EguiPrintProvider: wrote {}x{} frame to {:?}",
+            width,
+            height,
+            bmp_path
+        );
+
+        // Platform-specific print command.
+        #[cfg(target_os = "linux")]
+        {
+            // Try xdg-open first (opens in default image viewer which usually has print),
+            // fall back to lpr for direct printing.
+            match std::process::Command::new("lpr").arg(&bmp_path).status() {
+                Ok(status) if status.success() => {
+                    tracing::debug!("EguiPrintProvider: lpr succeeded");
+                    return true;
+                }
+                Ok(status) => {
+                    tracing::warn!("EguiPrintProvider: lpr exited with {}", status);
+                }
+                Err(e) => {
+                    tracing::warn!("EguiPrintProvider: lpr failed: {}", e);
+                }
+            }
+            // Fallback: open the file so the user can print from their viewer.
+            let _ = std::process::Command::new("xdg-open").arg(&bmp_path).spawn();
+            true
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            // ShellExecute "print" verb.
+            match std::process::Command::new("rundll32")
+                .args(&[
+                    "shimgvw.dll,ImageView_PrintTo",
+                    &bmp_path.to_string_lossy(),
+                ])
+                .creation_flags(CREATE_NO_WINDOW)
+                .status()
+            {
+                Ok(_) => true,
+                Err(e) => {
+                    tracing::error!("EguiPrintProvider: Windows print failed: {}", e);
+                    false
+                }
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            match std::process::Command::new("lpr").arg(&bmp_path).status() {
+                Ok(status) => status.success(),
+                Err(e) => {
+                    tracing::error!("EguiPrintProvider: lpr failed: {}", e);
+                    false
+                }
+            }
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+        {
+            tracing::warn!("EguiPrintProvider: printing not supported on this platform");
+            false
+        }
+    }
 }
