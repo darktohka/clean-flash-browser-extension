@@ -163,7 +163,11 @@ impl FlashPlayer {
         self.cursor_type.clone()
     }
 
-    /// Initialize the PPAPI host and load the plugin.
+    /// Initialize the PPAPI host **without** loading the plugin.
+    ///
+    /// After calling this, set up any providers (file chooser, etc.) on
+    /// the host, then call [`load_plugin`](Self::load_plugin) to load the
+    /// Flash plugin and activate the seccomp sandbox.
     pub fn init_host(&mut self) -> Result<(), String> {
         // Initialize the global host state (registers all PPB interfaces).
         let host = HostState::init();
@@ -209,16 +213,25 @@ impl FlashPlayer {
             navigate_callback: self.navigate_callback.clone(),
         }));
 
-        // If a plugin path is set, load it.
-        if let Some(path) = self.plugin_path.clone() {
-            self.load_plugin(&path)?;
-        }
-
         Ok(())
     }
 
+    /// Load the PepperFlash plugin and activate the seccomp sandbox.
+    ///
+    /// **Must be called after [`init_host`](Self::init_host)** and after
+    /// all providers have been set up.  The seccomp filter is per-thread,
+    /// so any worker threads spawned before this call (e.g. the rfd
+    /// file-chooser thread) are not affected.
+    pub fn load_plugin(&mut self) -> Result<(), String> {
+        let path = self
+            .plugin_path
+            .clone()
+            .ok_or_else(|| "no plugin path set".to_string())?;
+        self.load_plugin_inner(&path)
+    }
+
     /// Load the PepperFlash plugin from the given path.
-    fn load_plugin(&mut self, path: &str) -> Result<(), String> {
+    fn load_plugin_inner(&mut self, path: &str) -> Result<(), String> {
         *self.state.lock() = PlayerState::Loading {
             source: path.to_string(),
         };
@@ -229,7 +242,9 @@ impl FlashPlayer {
         };
 
         // Activate the seccomp sandbox now that the plugin is loaded and
-        // initialized.  This blocks execve, mmap(PROT_EXEC), etc.
+        // initialized.  This blocks execve, mmap(PROT_EXEC), memfd_create on
+        // the calling thread.  The rfd file-chooser worker thread was spawned
+        // earlier (before this call) and is therefore NOT sandboxed.
         if let Err(e) = ppapi_host::sandbox::activate() {
             tracing::warn!("Failed to activate seccomp sandbox: {}", e);
         }

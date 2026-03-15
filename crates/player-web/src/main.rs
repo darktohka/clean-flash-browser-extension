@@ -227,14 +227,21 @@ fn main() {
             .expect("WEB_VIDEO_CAPTURE already initialised");
         host.set_video_capture_provider(Box::new(WebVideoCaptureProviderWrapper(video_capture)));
 
-        // Set up the file chooser provider so that Flash file picker dialogs
-        // are forwarded to the browser extension.
-        let file_chooser = Arc::new(WebFileChooserProvider::new());
-        WEB_FILE_CHOOSER
-            .set(file_chooser.clone())
-            .ok()
-            .expect("WEB_FILE_CHOOSER already initialised");
-        host.set_file_chooser_provider(Box::new(WebFileChooserProviderWrapper(file_chooser)));
+        // Set up the file chooser provider using native OS dialogs (rfd).
+        // This spawns a worker thread that must exist BEFORE load_plugin()
+        // activates the seccomp sandbox.
+        host.set_file_chooser_provider(Box::new(
+            player_ui_traits::RfdFileChooserProvider::new(),
+        ));
+    }
+
+    // Load the Flash plugin now that all providers are set up.
+    // This activates the seccomp sandbox on the current thread.
+    if let Err(e) = player.load_plugin() {
+        let _ = protocol::send_host_message(&protocol::HostMessage::Error(
+            &format!("Failed to load plugin: {}", e),
+        ));
+        std::process::exit(1);
     }
 
     tracing::info!("Host initialized successfully, entering main loop");
@@ -310,9 +317,6 @@ static SCRIPT_BRIDGE: OnceLock<Arc<script_bridge::ScriptBridge>> = OnceLock::new
 /// Global context menu provider for routing `menuResponse` messages.
 static WEB_CONTEXT_MENU: OnceLock<Arc<WebContextMenuProvider>> = OnceLock::new();
 
-/// Global file chooser provider for routing `fileChooserResponse` messages.
-static WEB_FILE_CHOOSER: OnceLock<Arc<WebFileChooserProvider>> = OnceLock::new();
-
 /// Lazily-initialized channel that receives messages from a background reader.
 fn try_read_command() -> Option<serde_json::Value> {
     static RX: OnceLock<Mutex<mpsc::Receiver<Option<serde_json::Value>>>> = OnceLock::new();
@@ -323,7 +327,6 @@ fn try_read_command() -> Option<serde_json::Value> {
         let audio_input = WEB_AUDIO_INPUT.get().cloned();
         let context_menu = WEB_CONTEXT_MENU.get().cloned();
         let video_capture = WEB_VIDEO_CAPTURE.get().cloned();
-        let file_chooser = WEB_FILE_CHOOSER.get().cloned();
         std::thread::Builder::new()
             .name("stdin-reader".into())
             .spawn(move || {
@@ -359,14 +362,6 @@ fn try_read_command() -> Option<serde_json::Value> {
                             if msg.get("type").and_then(|v| v.as_str()) == Some("menuResponse") {
                                 if let Some(ref cm) = context_menu {
                                     cm.handle_response(&msg);
-                                }
-                                continue;
-                            }
-                            // Route fileChooserResponse messages to the
-                            // file chooser provider's pending channel.
-                            if msg.get("type").and_then(|v| v.as_str()) == Some("fileChooserResponse") {
-                                if let Some(ref fc) = file_chooser {
-                                    fc.handle_response(&msg);
                                 }
                                 continue;
                             }
@@ -800,109 +795,6 @@ fn serialize_menu_items(items: &[player_ui_traits::ContextMenuItem]) -> serde_js
             })
             .collect(),
     )
-}
-
-// ===========================================================================
-// File chooser provider — shows <input type="file"> in the browser
-// ===========================================================================
-
-/// File chooser provider that requests the browser extension to show a
-/// file input dialog and blocks until the user selects files or cancels.
-struct WebFileChooserProvider {
-    /// Channel for receiving the user's file selection response.
-    pending: Mutex<Option<mpsc::Sender<Vec<String>>>>,
-}
-
-impl WebFileChooserProvider {
-    fn new() -> Self {
-        Self {
-            pending: Mutex::new(None),
-        }
-    }
-
-    /// Called by the stdin reader thread when a `fileChooserResponse`
-    /// message arrives from the browser extension.
-    fn handle_response(&self, msg: &serde_json::Value) {
-        let files: Vec<String> = msg
-            .get("files")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let mut guard = self.pending.lock();
-        if let Some(tx) = guard.take() {
-            let _ = tx.send(files);
-        } else {
-            tracing::warn!("fileChooserResponse received but no pending request");
-        }
-    }
-}
-
-impl player_ui_traits::FileChooserProvider for WebFileChooserProvider {
-    fn show_file_chooser(
-        &self,
-        mode: player_ui_traits::FileChooserMode,
-        accept_types: &str,
-        suggested_name: &str,
-    ) -> Vec<String> {
-        let mode_str = match mode {
-            player_ui_traits::FileChooserMode::Open => "open",
-            player_ui_traits::FileChooserMode::OpenMultiple => "openMultiple",
-            player_ui_traits::FileChooserMode::Save => "save",
-        };
-
-        let payload = serde_json::json!({
-            "mode": mode_str,
-            "acceptTypes": accept_types,
-            "suggestedName": suggested_name,
-        });
-        let json_str = payload.to_string();
-
-        // Register the pending waiter *before* sending.
-        let (tx, rx) = mpsc::channel();
-        *self.pending.lock() = Some(tx);
-
-        if let Err(e) = protocol::send_host_message(&protocol::HostMessage::FileChooser(&json_str))
-        {
-            tracing::error!("failed to send FileChooser message: {}", e);
-            *self.pending.lock() = None;
-            return Vec::new();
-        }
-
-        // Block until the response arrives — file dialogs can stay open
-        // for a long time.
-        match rx.recv_timeout(std::time::Duration::from_secs(300)) {
-            Ok(files) => files,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                tracing::warn!("FileChooser response timed out");
-                *self.pending.lock() = None;
-                Vec::new()
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                tracing::warn!("FileChooser response channel disconnected");
-                Vec::new()
-            }
-        }
-    }
-}
-
-/// Thin wrapper so we can pass `Arc<WebFileChooserProvider>` as a
-/// `Box<dyn FileChooserProvider>` to the host.
-struct WebFileChooserProviderWrapper(Arc<WebFileChooserProvider>);
-
-impl player_ui_traits::FileChooserProvider for WebFileChooserProviderWrapper {
-    fn show_file_chooser(
-        &self,
-        mode: player_ui_traits::FileChooserMode,
-        accept_types: &str,
-        suggested_name: &str,
-    ) -> Vec<String> {
-        self.0.show_file_chooser(mode, accept_types, suggested_name)
-    }
 }
 
 // ===========================================================================

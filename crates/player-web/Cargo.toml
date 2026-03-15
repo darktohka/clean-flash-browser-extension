@@ -11,7 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 player-core = { workspace = true }
-player-ui-traits = { workspace = true }
+player-ui-traits = { workspace = true, features = ["rfd"] }
 ppapi-host = { workspace = true, features = ["fs-os", "url-reqwest"] }
 ppapi-sys = { workspace = true }
 tracing = { workspace = true }

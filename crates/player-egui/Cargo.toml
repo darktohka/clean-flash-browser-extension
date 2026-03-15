@@ -7,12 +7,11 @@ description = "egui/eframe frontend for the Flash player"
 
 [dependencies]
 player-core = { workspace = true }
-player-ui-traits = { workspace = true }
+player-ui-traits = { workspace = true, features = ["rfd"] }
 ppapi-host = { workspace = true, features = ["fs-os", "audio-cpal", "clipboard-arboard", "url-reqwest"] }
 ppapi-sys = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 eframe = "0.33"
 egui = "0.33"
-rfd = "0.17"
 parking_lot = "0.12"

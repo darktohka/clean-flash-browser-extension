@@ -193,7 +193,6 @@ const TAG_NAMES = {
   [0x61]: "VIDCAP_START",
   [0x62]: "VIDCAP_STOP",
   [0x63]: "VIDCAP_CLOSE",
-  [0x70]: "FILE_CHOOSER",
 };
 
 /**
@@ -844,7 +843,6 @@ const TAG_VIDEO_CAPTURE_OPEN  = 0x60;
 const TAG_VIDEO_CAPTURE_START = 0x61;
 const TAG_VIDEO_CAPTURE_STOP  = 0x62;
 const TAG_VIDEO_CAPTURE_CLOSE = 0x63;
-const TAG_FILE_CHOOSER        = 0x70;
 
 function tagHex(tag) {
   return `0x${tag.toString(16).padStart(2, "0")}`;
@@ -1721,183 +1719,6 @@ function removeFlashContextMenu() {
   }
 }
 
-// ---------------------------------------------------------------------------
-// File chooser dialog  (TAG_FILE_CHOOSER = 0x70)
-//
-// The native host sends a FileChooser request when Flash calls
-// PPB_FileChooser::Show or PPB_FileChooserTrusted::ShowWithoutUserGesture.
-// We create a hidden <input type="file"> element, programmatically click it,
-// and send the chosen file name(s) back as a fileChooserResponse message.
-//
-// Note: In a web context we cannot read actual file *paths* — the browser
-// only exposes file names.  The native host treats these as display names
-// for the PPB_FileRef resources.
-// ---------------------------------------------------------------------------
-
-/**
- * Convert a comma-separated accept types string (MIME types and/or extensions)
- * into the format expected by showOpenFilePicker / showSaveFilePicker.
- * Example input: "image/png,.jpg,.gif" or ".txt;.rtf"
- * @param {string} acceptTypes
- * @returns {Array<{description: string, accept: Object}>}
- */
-function buildPickerAcceptTypes(acceptTypes) {
-  if (!acceptTypes) return [];
-  // Split on comma or semicolon.
-  const parts = acceptTypes.split(/[,;]/).map(s => s.trim()).filter(Boolean);
-  // Group extensions under their MIME type or a generic bucket.
-  const mimeMap = {};
-  const extensions = [];
-  for (const part of parts) {
-    if (part.startsWith(".")) {
-      extensions.push(part);
-    } else if (part.includes("/")) {
-      // It's a MIME type.  The picker accept map needs at least one extension.
-      if (!mimeMap[part]) mimeMap[part] = [];
-    }
-  }
-  const result = [];
-  // If we have explicit MIME types, create entries for them.
-  for (const [mime, exts] of Object.entries(mimeMap)) {
-    // Attach any matching extensions to the MIME type.
-    result.push({ description: mime, accept: { [mime]: exts.length > 0 ? exts : extensions } });
-  }
-  // If we only have extensions (no MIME types), bundle them.
-  if (result.length === 0 && extensions.length > 0) {
-    result.push({ description: "Files", accept: { "*/*": extensions } });
-  }
-  return result;
-}
-
-/**
- * Show a file chooser dialog in the browser.
- * @param {Object} reqData - { mode: "open"|"openMultiple"|"save", acceptTypes: string, suggestedName: string }
- * @param {chrome.runtime.Port} port - native messaging port to send the response
- */
-function showFileChooser(reqData, port) {
-  const mode = reqData.mode || "open";
-  const acceptTypes = reqData.acceptTypes || "";
-  const suggestedName = reqData.suggestedName || "";
-
-  console.log("[Flash Player] File chooser request:", mode, "accept:", acceptTypes, "suggested:", suggestedName);
-
-  // For save mode, use the File System Access API (showSaveFilePicker)
-  // to show a real native save dialog.
-  if (mode === "save") {
-    if (typeof window.showSaveFilePicker === "function") {
-      const opts = {};
-      if (suggestedName) opts.suggestedName = suggestedName;
-
-      // Build file type filters from acceptTypes if provided.
-      if (acceptTypes) {
-        try {
-          const types = buildPickerAcceptTypes(acceptTypes);
-          if (types.length > 0) opts.types = types;
-        } catch (e) {
-          // Ignore malformed accept types — let the picker show all files.
-        }
-      }
-
-      window.showSaveFilePicker(opts).then((handle) => {
-        console.log("[Flash Player] Save picker result:", handle.name);
-        port.postMessage({ type: "fileChooserResponse", files: [handle.name] });
-      }).catch((err) => {
-        if (err.name === "AbortError") {
-          console.log("[Flash Player] Save picker cancelled");
-          port.postMessage({ type: "fileChooserResponse", files: [] });
-        } else {
-          console.error("[Flash Player] Save picker error:", err);
-          port.postMessage({ type: "fileChooserResponse", files: [] });
-        }
-      });
-    } else {
-      // Fallback: return the suggested name if showSaveFilePicker is unavailable.
-      const fileName = suggestedName || "download";
-      console.log("[Flash Player] showSaveFilePicker unavailable — returning suggested name:", fileName);
-      port.postMessage({ type: "fileChooserResponse", files: [fileName] });
-    }
-    return;
-  }
-
-  // Create a hidden file input element.
-  const input = document.createElement("input");
-  input.type = "file";
-  input.style.position = "fixed";
-  input.style.left = "-9999px";
-  input.style.top = "-9999px";
-  input.style.opacity = "0";
-
-  // Set accept attribute from MIME types / extensions.
-  if (acceptTypes) {
-    // Accept types may be comma-separated MIME types or extensions.
-    // The browser <input accept="..."> can handle both.
-    input.accept = acceptTypes;
-  }
-
-  // Allow multiple file selection for openMultiple mode.
-  if (mode === "openMultiple") {
-    input.multiple = true;
-  }
-
-  let responded = false;
-
-  input.addEventListener("change", () => {
-    if (responded) return;
-    responded = true;
-
-    const files = [];
-    if (input.files) {
-      for (let i = 0; i < input.files.length; i++) {
-        files.push(input.files[i].name);
-      }
-    }
-
-    console.log("[Flash Player] File chooser result:", files);
-    port.postMessage({ type: "fileChooserResponse", files: files });
-
-    // Clean up.
-    input.remove();
-  });
-
-  // If the user cancels the dialog, the input won't fire "change".
-  // We detect cancellation via a focus event on the window (the focus
-  // returns to the page when the dialog closes).
-  const onFocusCancel = () => {
-    // Small delay to let the "change" event fire first if a file was selected.
-    setTimeout(() => {
-      if (!responded) {
-        responded = true;
-        console.log("[Flash Player] File chooser cancelled");
-        port.postMessage({ type: "fileChooserResponse", files: [] });
-        input.remove();
-      }
-    }, 300);
-  };
-
-  // Use "focus" on window as a fallback cancel detector.
-  window.addEventListener("focus", onFocusCancel, { once: true });
-
-  // Also handle the cancel event (supported in modern browsers).
-  input.addEventListener("cancel", () => {
-    if (!responded) {
-      responded = true;
-      window.removeEventListener("focus", onFocusCancel);
-      console.log("[Flash Player] File chooser cancelled (cancel event)");
-      port.postMessage({ type: "fileChooserResponse", files: [] });
-      input.remove();
-    }
-  });
-
-  document.body.appendChild(input);
-
-  // Trigger the file dialog.
-  input.click();
-}
-
-// ---------------------------------------------------------------------------
-// End file chooser
-// ---------------------------------------------------------------------------
-
 /**
  * Handle a fully reassembled binary message (as a base64 string).
  * The binary payload is LZ4-compressed (with prepended uncompressed size).
@@ -2205,21 +2026,6 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
         }
       } catch (e) {
         console.error("[Flash Player] Print error:", e);
-      }
-      break;
-    }
-
-    case TAG_FILE_CHOOSER: {
-      // 1 byte tag + u32 json_len + UTF-8 JSON
-      const jsonLen = readU32(dv, 1);
-      const jsonBytes = bytes.subarray(5, 5 + jsonLen);
-      const jsonStr = _textDecoder.decode(jsonBytes);
-      try {
-        const reqData = JSON.parse(jsonStr);
-        showFileChooser(reqData, port);
-      } catch (e) {
-        console.error("[Flash Player] Bad file chooser data:", e, jsonStr);
-        port.postMessage({ type: "fileChooserResponse", files: [] });
       }
       break;
     }

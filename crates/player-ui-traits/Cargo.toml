@@ -5,4 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Abstract UI traits for the Flash player frontend"
 
+[features]
+default = []
+rfd = ["dep:rfd"]
+
 [dependencies]
+rfd = { version = "0.17", optional = true }

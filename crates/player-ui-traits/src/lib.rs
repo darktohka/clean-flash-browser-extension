@@ -1,6 +1,16 @@
 //! Player UI traits — abstracts the GUI layer so the player core doesn't
 //! depend on any specific UI framework (egui, GTK, etc.).
 
+#[cfg(feature = "rfd")]
+mod rfd_file_chooser;
+#[cfg(feature = "rfd")]
+pub use rfd_file_chooser::RfdFileChooserProvider;
+
+/// Re-export `rfd` so consumers that enable the `rfd` feature can use the
+/// crate without adding a direct dependency.
+#[cfg(feature = "rfd")]
+pub use rfd;
+
 /// The current state of the player, communicated from core to the UI.
 #[derive(Debug, Clone)]
 pub enum PlayerState {

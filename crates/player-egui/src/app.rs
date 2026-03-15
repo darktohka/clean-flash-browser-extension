@@ -153,7 +153,7 @@ impl FlashPlayerApp {
     /// Handle the "Open" file dialog.
     fn handle_open_file(&mut self) {
         // Use rfd for native file dialogs.
-        if let Some(path) = rfd::FileDialog::new()
+        if let Some(path) = player_ui_traits::rfd::FileDialog::new()
             .add_filter("SWF Files", &["swf"])
             .add_filter("All Files", &["*"])
             .pick_file()
@@ -201,6 +201,14 @@ impl FlashPlayerApp {
                     host.set_print_provider(Box::new(
                         dialogs::EguiPrintProvider::new(self.frame_handle.clone()),
                     ));
+
+                    // Load the Flash plugin now that all providers are set
+                    // up.  This activates the seccomp sandbox on the
+                    // current thread.
+                    if let Err(e) = self.player.load_plugin() {
+                        self.status_message = format!("Error loading plugin: {}", e);
+                        return;
+                    }
                 }
                 Err(e) => {
                     self.status_message = format!("Error: {}", e);

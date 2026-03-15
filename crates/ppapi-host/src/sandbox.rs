@@ -198,6 +198,8 @@ mod inner {
 ///
 /// On Linux x86-64 this installs a BPF filter that blocks dangerous syscalls
 /// (`execve`, `execveat`, `memfd_create`, `mmap` with `PROT_EXEC`).
+/// The filter is per-thread (flag 0, not `SECCOMP_FILTER_FLAG_TSYNC`), so
+/// threads spawned before this call are **not** affected.
 ///
 /// On other platforms this is a no-op.
 pub fn activate() -> std::io::Result<()> {

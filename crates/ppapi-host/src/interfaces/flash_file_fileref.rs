@@ -69,6 +69,7 @@ unsafe extern "C" fn open_file(
 
     let _flags = pp_mode_to_provider_flags(mode);
     let fs = filesystem::get_filesystem();
+    tracing::trace!("PPB_Flash_File_FileRef::OpenFile: opening path '{}' with mode 0x{:x}", path, mode);
     match fs.open_file(&path, mode) {
         Ok(handle) => {
             unsafe { *file = handle };
@@ -107,11 +108,13 @@ unsafe extern "C" fn query_file(
 
     let fi = if file_type == super::file_ref::FileRefType::Name {
         let path_str = path.as_deref().unwrap_or("");
+        tracing::trace!("PPB_Flash_File_FileRef::QueryFile: querying path '{}'", path_str);
         match fs.query_file(path_str) {
             Ok(fi) => fi,
             Err(e) => return e,
         }
     } else if let Some(fd_val) = fd {
+        tracing::trace!("PPB_Flash_File_FileRef::QueryFile: querying fd {}", fd_val);
         match fs.fstat_handle(fd_val) {
             Ok(fi) => fi,
             Err(e) => return e,
