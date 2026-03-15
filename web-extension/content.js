@@ -189,6 +189,11 @@ const TAG_NAMES = {
   [0x33]: "AINPUT_CLOSE",
   [0x40]: "CONTEXT_MENU",
   [0x50]: "PRINT",
+  [0x60]: "VIDCAP_OPEN",
+  [0x61]: "VIDCAP_START",
+  [0x62]: "VIDCAP_STOP",
+  [0x63]: "VIDCAP_CLOSE",
+  [0x70]: "FILE_CHOOSER",
 };
 
 /**
@@ -835,6 +840,11 @@ const TAG_AUDIO_INPUT_STOP  = 0x32;
 const TAG_AUDIO_INPUT_CLOSE = 0x33;
 const TAG_CONTEXT_MENU      = 0x40;
 const TAG_PRINT             = 0x50;
+const TAG_VIDEO_CAPTURE_OPEN  = 0x60;
+const TAG_VIDEO_CAPTURE_START = 0x61;
+const TAG_VIDEO_CAPTURE_STOP  = 0x62;
+const TAG_VIDEO_CAPTURE_CLOSE = 0x63;
+const TAG_FILE_CHOOSER        = 0x70;
 
 function tagHex(tag) {
   return `0x${tag.toString(16).padStart(2, "0")}`;
@@ -1249,6 +1259,263 @@ function audioInputClose(streamId) {
 }
 
 // ---------------------------------------------------------------------------
+// Web Video Capture — uses getUserMedia({ video }) + canvas to capture
+// video frames and send I420 YUV data back to the host.
+// ---------------------------------------------------------------------------
+
+/**
+ * Active video capture streams.
+ * stream_id -> {
+ *   video,        // HTMLVideoElement (hidden)
+ *   canvas,       // OffscreenCanvas or HTMLCanvasElement for frame extraction
+ *   canvasCtx,    // 2D rendering context
+ *   mediaStream,  // MediaStream from getUserMedia
+ *   port,         // native messaging port for sending data back
+ *   width,        // requested width
+ *   height,       // requested height
+ *   fps,          // requested frames per second
+ *   capturing,    // boolean
+ *   intervalId,   // setInterval ID for frame capture loop
+ *   ready,        // Promise that resolves when the stream is set up
+ *   pendingStart, // true if videoCaptureStart was called before ready
+ * }
+ */
+const videoCaptureStreams = new Map();
+
+/**
+ * Convert RGBA pixel data to planar I420 (YUV 4:2:0).
+ * @param {Uint8ClampedArray} rgba - RGBA pixel data (width * height * 4 bytes).
+ * @param {number} width
+ * @param {number} height
+ * @returns {Uint8Array} I420 data (width * height * 3 / 2 bytes).
+ */
+function rgbaToI420(rgba, width, height) {
+  const ySize = width * height;
+  const uvSize = (width >> 1) * (height >> 1);
+  const i420 = new Uint8Array(ySize + uvSize * 2);
+
+  let yIdx = 0;
+  let uIdx = ySize;
+  let vIdx = ySize + uvSize;
+
+  for (let row = 0; row < height; row++) {
+    for (let col = 0; col < width; col++) {
+      const idx = (row * width + col) * 4;
+      const r = rgba[idx];
+      const g = rgba[idx + 1];
+      const b = rgba[idx + 2];
+
+      // ITU-R BT.601 conversion.
+      i420[yIdx++] = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
+
+      // Subsample U and V for every 2x2 block.
+      if ((row & 1) === 0 && (col & 1) === 0) {
+        i420[uIdx++] = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
+        i420[vIdx++] = ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
+      }
+    }
+  }
+
+  return i420;
+}
+
+/**
+ * Open a new video capture stream.
+ * Requests camera permission and sets up the video element + canvas,
+ * but does not start sending frames until videoCaptureStart() is called.
+ */
+function videoCaptureOpen(streamId, width, height, fps, port) {
+  // Close any existing stream with the same id.
+  videoCaptureClose(streamId);
+
+  const streamState = {
+    video: null,
+    canvas: null,
+    canvasCtx: null,
+    mediaStream: null,
+    port,
+    width,
+    height,
+    fps,
+    capturing: false,
+    intervalId: null,
+    ready: null,
+    pendingStart: false,
+  };
+
+  streamState.ready = (async () => {
+    try {
+      console.log("[Flash Player] Video capture requesting getUserMedia:", streamId,
+                  width + "x" + height, "@", fps, "fps");
+      const mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: width },
+          height: { ideal: height },
+          frameRate: { ideal: fps },
+        },
+      });
+
+      // Create a hidden video element to receive the camera stream.
+      const video = document.createElement("video");
+      video.srcObject = mediaStream;
+      video.width = width;
+      video.height = height;
+      video.muted = true;
+      video.playsInline = true;
+      video.style.position = "fixed";
+      video.style.left = "-9999px";
+      video.style.top = "-9999px";
+      document.body.appendChild(video);
+      await video.play();
+
+      // Wait until the video has decoded at least one frame so that
+      // drawImage produces actual pixel data instead of a blank frame.
+      if (video.readyState < 2) {
+        await new Promise((resolve) => {
+          video.addEventListener("loadeddata", resolve, { once: true });
+        });
+      }
+
+      // Create a canvas for extracting pixel data.
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const canvasCtx = canvas.getContext("2d", { willReadFrequently: true });
+
+      streamState.video = video;
+      streamState.canvas = canvas;
+      streamState.canvasCtx = canvasCtx;
+      streamState.mediaStream = mediaStream;
+
+      // Always auto-start capture once the stream is ready.
+      // The Rust side sends Start shortly after Open, but due to the async
+      // getUserMedia + video.play() pipeline the Start message may arrive
+      // before or after we reach this point.  Starting eagerly avoids a
+      // race where the Start message is processed while video is still null
+      // and gets queued, or arrives before the stream entry exists.
+      streamState.capturing = true;
+      streamState.pendingStart = false;
+      startVideoCaptureLoop(streamId, streamState);
+      console.log("[Flash Player] Video capture stream opened + started:", streamId,
+                  width + "x" + height, "@", fps, "fps");
+    } catch (e) {
+      console.error("[Flash Player] Failed to open video capture:", e);
+    }
+  })();
+
+  videoCaptureStreams.set(streamId, streamState);
+}
+
+/**
+ * Start the periodic frame capture loop for a video stream.
+ */
+function startVideoCaptureLoop(streamId, streamState) {
+  if (streamState.intervalId !== null) return;
+
+  const intervalMs = Math.max(1, Math.round(1000 / streamState.fps));
+  let framesSent = 0;
+
+  streamState.intervalId = setInterval(() => {
+    if (!streamState.capturing || !streamState.video || !streamState.canvasCtx) return;
+
+    const { video, canvasCtx, canvas, width, height, port: p } = streamState;
+
+    // Skip frames until the video has decoded actual pixel data.
+    if (video.readyState < 2) return;
+
+    // Draw current video frame to canvas.
+    canvasCtx.drawImage(video, 0, 0, width, height);
+    const imageData = canvasCtx.getImageData(0, 0, width, height);
+
+    // Convert RGBA to I420.
+    const i420 = rgbaToI420(imageData.data, width, height);
+
+    // Encode as base64 and send to the host.
+    const b64 = uint8ToB64(i420);
+
+    p.postMessage({
+      type: "videoCaptureData",
+      streamId,
+      width,
+      height,
+      data: b64,
+    });
+
+    framesSent++;
+    if (framesSent === 1) {
+      console.log("[Flash Player] Video capture first frame sent:", streamId,
+                  width + "x" + height, "I420 bytes:", i420.length);
+    } else if (framesSent % 300 === 0) {
+      console.log("[Flash Player] Video capture frames sent:", framesSent, "stream:", streamId);
+    }
+  }, intervalMs);
+}
+
+/**
+ * Start capturing on a video capture stream.
+ */
+function videoCaptureStart(streamId) {
+  const stream = videoCaptureStreams.get(streamId);
+  if (!stream) {
+    console.warn("[Flash Player] videoCaptureStart: stream not found:", streamId);
+    return;
+  }
+
+  if (!stream.video) {
+    stream.pendingStart = true;
+    console.log("[Flash Player] Video capture start queued (still opening):", streamId);
+    return;
+  }
+
+  // May already be capturing if auto-started in videoCaptureOpen.
+  if (stream.capturing) {
+    console.log("[Flash Player] Video capture already running:", streamId);
+    return;
+  }
+
+  stream.capturing = true;
+  startVideoCaptureLoop(streamId, stream);
+  console.log("[Flash Player] Video capture started:", streamId);
+}
+
+/**
+ * Stop capturing on a video capture stream.
+ */
+function videoCaptureStop(streamId) {
+  const stream = videoCaptureStreams.get(streamId);
+  if (!stream) return;
+  stream.capturing = false;
+  stream.pendingStart = false;
+  if (stream.intervalId !== null) {
+    clearInterval(stream.intervalId);
+    stream.intervalId = null;
+  }
+  console.log("[Flash Player] Video capture stopped:", streamId);
+}
+
+/**
+ * Close and release a video capture stream.
+ */
+function videoCaptureClose(streamId) {
+  const stream = videoCaptureStreams.get(streamId);
+  if (!stream) return;
+  stream.capturing = false;
+  stream.pendingStart = false;
+  if (stream.intervalId !== null) {
+    clearInterval(stream.intervalId);
+    stream.intervalId = null;
+  }
+  if (stream.video) {
+    stream.video.pause();
+    stream.video.srcObject = null;
+    if (stream.video.parentNode) stream.video.parentNode.removeChild(stream.video);
+  }
+  if (stream.mediaStream) stream.mediaStream.getTracks().forEach(t => t.stop());
+  videoCaptureStreams.delete(streamId);
+  console.log("[Flash Player] Video capture stream closed:", streamId);
+}
+
+// ---------------------------------------------------------------------------
 // Flash context menu  (TAG_CONTEXT_MENU = 0x40)
 // ---------------------------------------------------------------------------
 
@@ -1453,6 +1720,183 @@ function removeFlashContextMenu() {
     el.remove();
   }
 }
+
+// ---------------------------------------------------------------------------
+// File chooser dialog  (TAG_FILE_CHOOSER = 0x70)
+//
+// The native host sends a FileChooser request when Flash calls
+// PPB_FileChooser::Show or PPB_FileChooserTrusted::ShowWithoutUserGesture.
+// We create a hidden <input type="file"> element, programmatically click it,
+// and send the chosen file name(s) back as a fileChooserResponse message.
+//
+// Note: In a web context we cannot read actual file *paths* — the browser
+// only exposes file names.  The native host treats these as display names
+// for the PPB_FileRef resources.
+// ---------------------------------------------------------------------------
+
+/**
+ * Convert a comma-separated accept types string (MIME types and/or extensions)
+ * into the format expected by showOpenFilePicker / showSaveFilePicker.
+ * Example input: "image/png,.jpg,.gif" or ".txt;.rtf"
+ * @param {string} acceptTypes
+ * @returns {Array<{description: string, accept: Object}>}
+ */
+function buildPickerAcceptTypes(acceptTypes) {
+  if (!acceptTypes) return [];
+  // Split on comma or semicolon.
+  const parts = acceptTypes.split(/[,;]/).map(s => s.trim()).filter(Boolean);
+  // Group extensions under their MIME type or a generic bucket.
+  const mimeMap = {};
+  const extensions = [];
+  for (const part of parts) {
+    if (part.startsWith(".")) {
+      extensions.push(part);
+    } else if (part.includes("/")) {
+      // It's a MIME type.  The picker accept map needs at least one extension.
+      if (!mimeMap[part]) mimeMap[part] = [];
+    }
+  }
+  const result = [];
+  // If we have explicit MIME types, create entries for them.
+  for (const [mime, exts] of Object.entries(mimeMap)) {
+    // Attach any matching extensions to the MIME type.
+    result.push({ description: mime, accept: { [mime]: exts.length > 0 ? exts : extensions } });
+  }
+  // If we only have extensions (no MIME types), bundle them.
+  if (result.length === 0 && extensions.length > 0) {
+    result.push({ description: "Files", accept: { "*/*": extensions } });
+  }
+  return result;
+}
+
+/**
+ * Show a file chooser dialog in the browser.
+ * @param {Object} reqData - { mode: "open"|"openMultiple"|"save", acceptTypes: string, suggestedName: string }
+ * @param {chrome.runtime.Port} port - native messaging port to send the response
+ */
+function showFileChooser(reqData, port) {
+  const mode = reqData.mode || "open";
+  const acceptTypes = reqData.acceptTypes || "";
+  const suggestedName = reqData.suggestedName || "";
+
+  console.log("[Flash Player] File chooser request:", mode, "accept:", acceptTypes, "suggested:", suggestedName);
+
+  // For save mode, use the File System Access API (showSaveFilePicker)
+  // to show a real native save dialog.
+  if (mode === "save") {
+    if (typeof window.showSaveFilePicker === "function") {
+      const opts = {};
+      if (suggestedName) opts.suggestedName = suggestedName;
+
+      // Build file type filters from acceptTypes if provided.
+      if (acceptTypes) {
+        try {
+          const types = buildPickerAcceptTypes(acceptTypes);
+          if (types.length > 0) opts.types = types;
+        } catch (e) {
+          // Ignore malformed accept types — let the picker show all files.
+        }
+      }
+
+      window.showSaveFilePicker(opts).then((handle) => {
+        console.log("[Flash Player] Save picker result:", handle.name);
+        port.postMessage({ type: "fileChooserResponse", files: [handle.name] });
+      }).catch((err) => {
+        if (err.name === "AbortError") {
+          console.log("[Flash Player] Save picker cancelled");
+          port.postMessage({ type: "fileChooserResponse", files: [] });
+        } else {
+          console.error("[Flash Player] Save picker error:", err);
+          port.postMessage({ type: "fileChooserResponse", files: [] });
+        }
+      });
+    } else {
+      // Fallback: return the suggested name if showSaveFilePicker is unavailable.
+      const fileName = suggestedName || "download";
+      console.log("[Flash Player] showSaveFilePicker unavailable — returning suggested name:", fileName);
+      port.postMessage({ type: "fileChooserResponse", files: [fileName] });
+    }
+    return;
+  }
+
+  // Create a hidden file input element.
+  const input = document.createElement("input");
+  input.type = "file";
+  input.style.position = "fixed";
+  input.style.left = "-9999px";
+  input.style.top = "-9999px";
+  input.style.opacity = "0";
+
+  // Set accept attribute from MIME types / extensions.
+  if (acceptTypes) {
+    // Accept types may be comma-separated MIME types or extensions.
+    // The browser <input accept="..."> can handle both.
+    input.accept = acceptTypes;
+  }
+
+  // Allow multiple file selection for openMultiple mode.
+  if (mode === "openMultiple") {
+    input.multiple = true;
+  }
+
+  let responded = false;
+
+  input.addEventListener("change", () => {
+    if (responded) return;
+    responded = true;
+
+    const files = [];
+    if (input.files) {
+      for (let i = 0; i < input.files.length; i++) {
+        files.push(input.files[i].name);
+      }
+    }
+
+    console.log("[Flash Player] File chooser result:", files);
+    port.postMessage({ type: "fileChooserResponse", files: files });
+
+    // Clean up.
+    input.remove();
+  });
+
+  // If the user cancels the dialog, the input won't fire "change".
+  // We detect cancellation via a focus event on the window (the focus
+  // returns to the page when the dialog closes).
+  const onFocusCancel = () => {
+    // Small delay to let the "change" event fire first if a file was selected.
+    setTimeout(() => {
+      if (!responded) {
+        responded = true;
+        console.log("[Flash Player] File chooser cancelled");
+        port.postMessage({ type: "fileChooserResponse", files: [] });
+        input.remove();
+      }
+    }, 300);
+  };
+
+  // Use "focus" on window as a fallback cancel detector.
+  window.addEventListener("focus", onFocusCancel, { once: true });
+
+  // Also handle the cancel event (supported in modern browsers).
+  input.addEventListener("cancel", () => {
+    if (!responded) {
+      responded = true;
+      window.removeEventListener("focus", onFocusCancel);
+      console.log("[Flash Player] File chooser cancelled (cancel event)");
+      port.postMessage({ type: "fileChooserResponse", files: [] });
+      input.remove();
+    }
+  });
+
+  document.body.appendChild(input);
+
+  // Trigger the file dialog.
+  input.click();
+}
+
+// ---------------------------------------------------------------------------
+// End file chooser
+// ---------------------------------------------------------------------------
 
 /**
  * Handle a fully reassembled binary message (as a base64 string).
@@ -1664,6 +2108,36 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
       break;
     }
 
+    // ---- Video capture messages ----
+
+    case TAG_VIDEO_CAPTURE_OPEN: {
+      // 1 byte tag + u32 stream_id + u32 width + u32 height + u32 fps
+      const streamId = readU32(dv, 1);
+      const width    = readU32(dv, 5);
+      const height   = readU32(dv, 9);
+      const fps      = readU32(dv, 13);
+      videoCaptureOpen(streamId, width, height, fps, port);
+      break;
+    }
+
+    case TAG_VIDEO_CAPTURE_START: {
+      const streamId = readU32(dv, 1);
+      videoCaptureStart(streamId);
+      break;
+    }
+
+    case TAG_VIDEO_CAPTURE_STOP: {
+      const streamId = readU32(dv, 1);
+      videoCaptureStop(streamId);
+      break;
+    }
+
+    case TAG_VIDEO_CAPTURE_CLOSE: {
+      const streamId = readU32(dv, 1);
+      videoCaptureClose(streamId);
+      break;
+    }
+
     case TAG_CONTEXT_MENU: {
       // 1 byte tag + u32 json_len + UTF-8 JSON
       const jsonLen = readU32(dv, 1);
@@ -1731,6 +2205,21 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
         }
       } catch (e) {
         console.error("[Flash Player] Print error:", e);
+      }
+      break;
+    }
+
+    case TAG_FILE_CHOOSER: {
+      // 1 byte tag + u32 json_len + UTF-8 JSON
+      const jsonLen = readU32(dv, 1);
+      const jsonBytes = bytes.subarray(5, 5 + jsonLen);
+      const jsonStr = _textDecoder.decode(jsonBytes);
+      try {
+        const reqData = JSON.parse(jsonStr);
+        showFileChooser(reqData, port);
+      } catch (e) {
+        console.error("[Flash Player] Bad file chooser data:", e, jsonStr);
+        port.postMessage({ type: "fileChooserResponse", files: [] });
       }
       break;
     }

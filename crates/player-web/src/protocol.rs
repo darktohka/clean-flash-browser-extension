@@ -34,6 +34,7 @@
 //! | 0x61  | VidCapStart     | u32 stream_id                                        |
 //! | 0x62  | VidCapStop      | u32 stream_id                                        |
 //! | 0x63  | VidCapClose     | u32 stream_id                                        |
+//! | 0x70  | FileChooser     | u32 json_len + UTF-8 JSON                            |
 //!
 //! Because stdout/stderr are redirected to `/dev/null` (Unix) or `NUL`
 //! (Windows) to prevent the Flash plugin from corrupting the native
@@ -266,6 +267,9 @@ pub enum HostMessage<'a> {
     VideoCaptureClose {
         stream_id: u32,
     },
+    /// File chooser: request the browser to show a file picker.
+    /// Payload is a JSON string describing mode, accept types, and suggested name.
+    FileChooser(&'a str),
 }
 
 // Message type tags.
@@ -290,6 +294,7 @@ const TAG_VIDEO_CAPTURE_OPEN: u8 = 0x60;
 const TAG_VIDEO_CAPTURE_START: u8 = 0x61;
 const TAG_VIDEO_CAPTURE_STOP: u8 = 0x62;
 const TAG_VIDEO_CAPTURE_CLOSE: u8 = 0x63;
+const TAG_FILE_CHOOSER: u8 = 0x70;
 
 impl<'a> HostMessage<'a> {
     /// Serialize to a compact binary representation (little-endian).
@@ -446,6 +451,14 @@ impl<'a> HostMessage<'a> {
                 let mut buf = Vec::with_capacity(5);
                 buf.push(TAG_VIDEO_CAPTURE_CLOSE);
                 buf.extend_from_slice(&stream_id.to_le_bytes());
+                buf
+            }
+            HostMessage::FileChooser(json) => {
+                let bytes = json.as_bytes();
+                let mut buf = Vec::with_capacity(1 + 4 + bytes.len());
+                buf.push(TAG_FILE_CHOOSER);
+                buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+                buf.extend_from_slice(bytes);
                 buf
             }
         }
