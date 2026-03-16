@@ -180,7 +180,7 @@ impl GlState {
             let raw_display = RawDisplayHandle::AppKit(
                 raw_window_handle::AppKitDisplayHandle::new(),
             );
-            match unsafe { Display::new(raw_display, DisplayApiPreference::Egl) } {
+            match unsafe { Display::new(raw_display, DisplayApiPreference::Cgl) } {
                 Ok(d) => {
                     tracing::info!("glutin: created EGL display via AppKit handle");
                     return Ok(d);
