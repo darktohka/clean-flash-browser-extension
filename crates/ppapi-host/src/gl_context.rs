@@ -15,8 +15,11 @@ use glow::HasContext;
 use glutin::config::ConfigSurfaceTypes;
 use glutin::config::ConfigTemplateBuilder;
 use glutin::context::{ContextApi, ContextAttributesBuilder, NotCurrentGlContext, Version};
-use glutin::display::{Display, DisplayApiPreference, GlDisplay};
+use glutin::display::{Display, GlDisplay};
 use glutin::surface::{PbufferSurface, Surface, SurfaceAttributesBuilder};
+#[cfg(not(target_os = "windows"))]
+use glutin::display::DisplayApiPreference;
+#[cfg(not(target_os = "windows"))]
 use raw_window_handle::RawDisplayHandle;
 
 // GL constants
@@ -115,22 +118,26 @@ impl GlState {
             }
         }
 
-        // Attempt 2: EGL via Android handle (maps to EGL_DEFAULT_DISPLAY).
+        // Attempt 2: EGL via Wayland handle.
         #[cfg(not(target_os = "windows"))]
         {
-            let raw_display = RawDisplayHandle::Android(
-                raw_window_handle::AndroidDisplayHandle::new(),
+            let raw_display = RawDisplayHandle::Wayland(
+                raw_window_handle::WaylandDisplayHandle::new(),
             );
             match unsafe { Display::new(raw_display, DisplayApiPreference::Egl) } {
                 Ok(d) => {
-                    tracing::info!("glutin: created EGL display via default handle");
+                    tracing::info!("glutin: created EGL display via Wayland handle");
                     return Ok(d);
                 }
                 Err(e) => {
-                    tracing::debug!("glutin: default EGL display failed: {}", e);
+                    tracing::debug!("glutin: Wayland EGL display failed: {}", e);
                 }
             }
         }
+        
+        // TODO: maybe support DRM here? Could be nice...
+        // But also, forcing DRM would make things awkward if DRM works but nothing else is available
+        // since it would pretty much destroy the current screen during initialization
 
         Err("Failed to create any EGL display".into())
     }
