@@ -56,13 +56,17 @@ impl VarManager {
             CString::new(v).expect("truncated string should be valid")
         });
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.strings.lock().insert(
+        let mut map = self.strings.lock();
+        map.insert(
             id,
             VarStringEntry {
                 data: cstring,
                 ref_count: 1,
             },
         );
+        let count = map.len();
+        drop(map);
+        tracing::trace!("VarManager: new string id={} — live strings: {}", id, count);
         PP_Var::from_string_id(id)
     }
 
@@ -132,6 +136,11 @@ impl VarManager {
                 };
                 if should_remove {
                     map.remove(&id);
+                    tracing::trace!(
+                        "VarManager: released string id={} — live strings: {}",
+                        id,
+                        map.len()
+                    );
                 }
             }
             PP_VARTYPE_OBJECT => {

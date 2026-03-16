@@ -119,6 +119,9 @@ function buildDidCreateArgs(params, swfUrl) {
   push("src", swfUrl);
   push("movie", swfUrl);
   push("data", swfUrl);
+  // Flash uses the "base" param to resolve relative URLs internally.
+  // Without it, it falls back to loaderInfo.url (the SWF origin).
+  push("base", document.baseURI);
 
   return args;
 }
@@ -748,6 +751,18 @@ function handleFullscreenChange() {
 }
 document.addEventListener("fullscreenchange", handleFullscreenChange);
 document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
+
+// Pointer lock changes — notify the native host so Flash knows if the
+// cursor was locked or unlocked (e.g. user pressed Escape).
+function handlePointerLockChange() {
+  const locked = !!document.pointerLockElement;
+  for (const [, meta] of instanceMeta) {
+    if (meta.port) {
+      meta.port.postMessage({ type: "cursorLockChanged", locked });
+    }
+  }
+}
+document.addEventListener("pointerlockchange", handlePointerLockChange);
 
 // ---------------------------------------------------------------------------
 // Instance lifecycle (start / restart)
@@ -2256,7 +2271,7 @@ function getMetaForPort(port) {
  * Handle a scripting request from the native host.
  * Forwards to the MAIN-world page script and sends the response back.
  */
-function handleScriptRequest(req, port) {
+async function handleScriptRequest(req, port) {
   const id = req.id;
   const op = req.op;
 
@@ -2276,6 +2291,92 @@ function handleScriptRequest(req, port) {
       sendScriptResponse(port, id, { type: "string", v: meta.swfUrl });
     } else {
       sendScriptResponse(port, id, { type: "undefined" });
+    }
+    return;
+  }
+
+  // ---------------------------------------------------------------
+  // Clipboard: use the async Clipboard API (navigator.clipboard)
+  // when available so we always read the real system clipboard and
+  // never steal focus.  Fall back to the page-script.js handler.
+  // ---------------------------------------------------------------
+
+  if (op === "clipboardRead") {
+    const fmt = req.format; // "plaintext" | "html"
+    // Try the modern async Clipboard API first.
+    if (fmt === "plaintext" && navigator.clipboard && navigator.clipboard.readText) {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text != null) {
+          sendScriptResponse(port, id, { type: "string", v: text });
+          return;
+        }
+      } catch (_) { /* permission denied or not focused — fall through */ }
+    }
+    if (fmt === "html" && navigator.clipboard && navigator.clipboard.read) {
+      try {
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+          if (item.types.includes("text/html")) {
+            const blob = await item.getType("text/html");
+            const html = await blob.text();
+            if (html) {
+              sendScriptResponse(port, id, { type: "string", v: html });
+              return;
+            }
+          }
+        }
+      } catch (_) { /* fall through */ }
+    }
+    // Fall back to page-script.js (internal buffer + execCommand).
+    const resp = sendToPageScript(req);
+    if (resp && resp.value) {
+      sendScriptResponse(port, id, resp.value);
+    } else {
+      sendScriptResponse(port, id, { type: "null" });
+    }
+    return;
+  }
+
+  if (op === "clipboardWrite") {
+    // Forward to page‑script.js to update its internal buffer and
+    // attempt a legacy write.
+    const resp = sendToPageScript(req);
+    // Also write via the async Clipboard API (doesn't steal focus).
+    const text = req.plaintext || req.html || "";
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+    if (resp && resp.value) {
+      sendScriptResponse(port, id, resp.value);
+    } else {
+      sendScriptResponse(port, id, { type: "bool", v: true });
+    }
+    return;
+  }
+
+  if (op === "clipboardIsAvailable") {
+    const fmt = req.format;
+    if (fmt === "rtf") {
+      sendScriptResponse(port, id, { type: "bool", v: false });
+      return;
+    }
+    // Try the async Clipboard API first.
+    if (fmt === "plaintext" && navigator.clipboard && navigator.clipboard.readText) {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text != null && text.length > 0) {
+          sendScriptResponse(port, id, { type: "bool", v: true });
+          return;
+        }
+      } catch (_) { /* fall through */ }
+    }
+    // Fall back to page-script.js.
+    const resp = sendToPageScript(req);
+    if (resp && resp.value) {
+      sendScriptResponse(port, id, resp.value);
+    } else {
+      sendScriptResponse(port, id, { type: "bool", v: false });
     }
     return;
   }

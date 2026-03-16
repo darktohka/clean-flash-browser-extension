@@ -307,7 +307,7 @@ unsafe extern "C" fn flush(graphics_2d: PP_Resource, callback: PP_CompletionCall
     // Check that this graphics resource is bound to the instance.
     let is_bound = host
         .instances
-        .with_instance(instance_id, |inst| inst.bound_graphics == graphics_2d)
+        .with_instance(instance_id, |inst| inst.bound_graphics_2d == graphics_2d)
         .unwrap_or(false);
 
     if !is_bound {
@@ -318,7 +318,7 @@ unsafe extern "C" fn flush(graphics_2d: PP_Resource, callback: PP_CompletionCall
     // Check for double-flush (only one in-flight at a time).
     let already_in_progress = host
         .instances
-        .with_instance(instance_id, |inst| inst.graphics_in_progress)
+        .with_instance(instance_id, |inst| inst.graphics_2d_in_progress)
         .unwrap_or(false);
 
     if already_in_progress {
@@ -327,33 +327,46 @@ unsafe extern "C" fn flush(graphics_2d: PP_Resource, callback: PP_CompletionCall
 
     // Mark flush as in-progress.
     host.instances.with_instance_mut(instance_id, |inst| {
-        inst.graphics_in_progress = true;
+        inst.graphics_2d_in_progress = true;
     });
 
     // Read the dirty rect and pixel data, then notify host callbacks.
-    // Use with_downcast_mut to atomically read+clear the dirty rect.
-    let callbacks_guard = host.host_callbacks.lock();
-    host.resources
-        .with_downcast_mut::<Graphics2DResource, _>(graphics_2d, |g| {
-            if let Some((dx, dy, dw, dh)) = g.dirty_rect.take() {
-                if dw > 0 && dh > 0 {
-                    if let Some(cb) = callbacks_guard.as_ref() {
-                        cb.on_flush(
-                            graphics_2d, &g.pixels,
-                            g.size.width, g.size.height, g.stride,
-                            dx, dy, dw, dh,
-                        );
+    // When a Graphics3D context is also bound, the 2D content is composited
+    // on top of the 3D frame during SwapBuffers — skip direct delivery here.
+    let has_3d = host.instances.with_instance(instance_id, |inst| {
+        inst.bound_graphics_3d != 0
+    }).unwrap_or(false);
+
+    if !has_3d {
+        let callbacks_guard = host.host_callbacks.lock();
+        host.resources
+            .with_downcast_mut::<Graphics2DResource, _>(graphics_2d, |g| {
+                if let Some((dx, dy, dw, dh)) = g.dirty_rect.take() {
+                    if dw > 0 && dh > 0 {
+                        if let Some(cb) = callbacks_guard.as_ref() {
+                            cb.on_flush(
+                                graphics_2d, &g.pixels,
+                                g.size.width, g.size.height, g.stride,
+                                dx, dy, dw, dh,
+                            );
+                        }
                     }
                 }
-            }
-        });
-    drop(callbacks_guard);
+            });
+        drop(callbacks_guard);
+    } else {
+        // Just clear the dirty rect; 3D SwapBuffers will pick up the pixels.
+        host.resources
+            .with_downcast_mut::<Graphics2DResource, _>(graphics_2d, |g| {
+                g.dirty_rect.take();
+            });
+    }
 
     // Clear in-progress and fire the callback asynchronously via the main
     // message loop.  The PPAPI spec requires Flush to return
     // PP_OK_COMPLETIONPENDING and fire the callback later.
     host.instances.with_instance_mut(instance_id, |inst| {
-        inst.graphics_in_progress = false;
+        inst.graphics_2d_in_progress = false;
     });
 
     if !callback.is_null() {

@@ -79,10 +79,17 @@ impl Resource for VideoCaptureResource {
 
 impl Drop for VideoCaptureResource {
     fn drop(&mut self) {
+        // Signal the pump thread to stop, then join it.
+        // NOTE: We are called from ResourceManager::release() which holds
+        // the resource lock.  The pump thread also acquires that lock in
+        // its frame loop.  To avoid a deadlock we must NOT join here.
+        // Instead we just signal and detach — the pump thread will observe
+        // `capturing == false`, call OnStatus(STOPPED), release the buffer
+        // resources, and exit on its own.
         self.capturing.store(false, Ordering::SeqCst);
-        if let Some(handle) = self.capture_thread.take() {
-            let _ = handle.join();
-        }
+        // Detach: drop the JoinHandle without joining.
+        let _ = self.capture_thread.take();
+
         if self.provider_stream_id != 0 {
             if let Some(provider) = HOST.get().and_then(|h| h.get_video_capture_provider()) {
                 provider.close_stream(self.provider_stream_id);
@@ -577,11 +584,14 @@ unsafe extern "C" fn start_capture(video_capture: PP_Resource) -> i32 {
         }
     };
 
-    let result = host.resources.with_downcast_mut::<VideoCaptureResource, _>(
+    // Gather fields from the resource while holding the lock, but do NOT
+    // call PPP callbacks or join threads inside the lock — the plugin
+    // callback could re-enter PPAPI and try to acquire the same lock.
+    let setup = host.resources.with_downcast_mut::<VideoCaptureResource, _>(
         video_capture,
         |vc| {
             if vc.capturing.load(Ordering::SeqCst) {
-                return PP_OK;
+                return Err(PP_OK); // already capturing
             }
 
             if vc.provider_stream_id == 0 {
@@ -589,14 +599,14 @@ unsafe extern "C" fn start_capture(video_capture: PP_Resource) -> i32 {
                     "ppb_video_capture_start_capture: resource {} not opened",
                     video_capture
                 );
-                return PP_ERROR_FAILED;
+                return Err(PP_ERROR_FAILED);
             }
 
             let provider = match host.get_video_capture_provider() {
                 Some(p) => p,
                 None => {
                     tracing::error!("ppb_video_capture_start_capture: no provider");
-                    return PP_ERROR_FAILED;
+                    return Err(PP_ERROR_FAILED);
                 }
             };
 
@@ -605,22 +615,12 @@ unsafe extern "C" fn start_capture(video_capture: PP_Resource) -> i32 {
                     "ppb_video_capture_start_capture: provider failed to start stream {}",
                     vc.provider_stream_id
                 );
-                return PP_ERROR_FAILED;
+                return Err(PP_ERROR_FAILED);
             }
 
             vc.capturing.store(true, Ordering::SeqCst);
 
-            if let Some(on_status) = ppp.OnStatus {
-                unsafe {
-                    on_status(
-                        vc.instance,
-                        video_capture,
-                        PP_VIDEO_CAPTURE_STATUS_STARTING,
-                    );
-                }
-            }
-
-            let ctx = CapturePumpContext {
+            Ok(CapturePumpContext {
                 instance: vc.instance,
                 video_capture_resource: video_capture,
                 capturing: vc.capturing.clone(),
@@ -631,26 +631,51 @@ unsafe extern "C" fn start_capture(video_capture: PP_Resource) -> i32 {
                 frames_per_second: vc.frames_per_second,
                 buffer_count: vc.buffer_count,
                 ppp,
-            };
-
-            let handle = std::thread::Builder::new()
-                .name(format!("video-capture-pump-{}", vc.provider_stream_id))
-                .spawn(move || capture_pump_loop(ctx))
-                .ok();
-
-            vc.capture_thread = handle;
-
-            tracing::info!(
-                "ppb_video_capture_start_capture: started (resource={}, stream={})",
-                video_capture,
-                vc.provider_stream_id,
-            );
-
-            PP_OK
+            })
         },
     );
 
-    result.unwrap_or(PP_ERROR_BADRESOURCE)
+    let Some(setup_result) = setup else {
+        return PP_ERROR_BADRESOURCE;
+    };
+
+    let ctx = match setup_result {
+        Ok(ctx) => ctx,
+        Err(code) => return code,
+    };
+
+    // Call OnStatus(STARTING) outside the resource lock so the plugin
+    // callback can safely call back into PPAPI.
+    if let Some(on_status) = ppp.OnStatus {
+        unsafe {
+            on_status(
+                ctx.instance,
+                video_capture,
+                PP_VIDEO_CAPTURE_STATUS_STARTING,
+            );
+        }
+    }
+
+    let stream_id = ctx.provider_stream_id;
+
+    let handle = std::thread::Builder::new()
+        .name(format!("video-capture-pump-{}", stream_id))
+        .spawn(move || capture_pump_loop(ctx))
+        .ok();
+
+    // Store the thread handle back on the resource.
+    let _ = host.resources.with_downcast_mut::<VideoCaptureResource, _>(
+        video_capture,
+        |vc| { vc.capture_thread = handle; },
+    );
+
+    tracing::info!(
+        "ppb_video_capture_start_capture: started (resource={}, stream={})",
+        video_capture,
+        stream_id,
+    );
+
+    PP_OK
 }
 
 unsafe extern "C" fn reuse_buffer(video_capture: PP_Resource, buffer: u32) -> i32 {
@@ -690,27 +715,34 @@ unsafe extern "C" fn stop_capture(video_capture: PP_Resource) -> i32 {
     tracing::trace!("ppb_video_capture_stop_capture called for resource {}", video_capture);
     let host = HOST.get().unwrap();
 
-    let result = host.resources.with_downcast_mut::<VideoCaptureResource, _>(
+    // Signal the pump thread to stop and tell the provider to cease capture.
+    //
+    // We must NOT join the pump thread here because Flash can (and does)
+    // call StopCapture from within a PPP callback (OnBufferReady / OnStatus)
+    // that runs on the pump thread itself — joining the current thread
+    // would deadlock instantly.  Instead we just set the flag; the pump
+    // thread will see `capturing == false`, call OnStatus(STOPPED), release
+    // its buffer refs, and exit on its own.
+    let extracted = host.resources.with_downcast_mut::<VideoCaptureResource, _>(
         video_capture,
         |vc| {
             vc.capturing.store(false, Ordering::SeqCst);
-
-            if let Some(handle) = vc.capture_thread.take() {
-                let _ = handle.join();
-            }
-
-            if vc.provider_stream_id != 0 {
-                if let Some(provider) = host.get_video_capture_provider() {
-                    provider.stop_capture(vc.provider_stream_id);
-                }
-            }
-
-            tracing::debug!("ppb_video_capture_stop_capture: resource={}", video_capture);
-            PP_OK
+            vc.provider_stream_id
         },
     );
 
-    result.unwrap_or(PP_ERROR_BADRESOURCE)
+    let Some(stream_id) = extracted else {
+        return PP_ERROR_BADRESOURCE;
+    };
+
+    if stream_id != 0 {
+        if let Some(provider) = host.get_video_capture_provider() {
+            provider.stop_capture(stream_id);
+        }
+    }
+
+    tracing::debug!("ppb_video_capture_stop_capture: resource={}", video_capture);
+    PP_OK
 }
 
 unsafe extern "C" fn close(video_capture: PP_Resource) {

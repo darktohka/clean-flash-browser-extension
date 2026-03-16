@@ -250,11 +250,9 @@ unsafe extern "C" fn browser_get_all_property_names(
     let host = HOST.get().unwrap();
     let count = names.len() as u32;
     // PPAPI expects the caller to free names with PPB_Memory::MemFree.
-    // Allocate with libc-compatible malloc so the plugin can free it.
-    let buf = unsafe {
-        std::alloc::alloc(std::alloc::Layout::array::<PP_Var>(names.len()).unwrap())
-            as *mut PP_Var
-    };
+    let buf = crate::interfaces::memory::ppb_mem_alloc(
+        std::mem::size_of::<PP_Var>() * names.len(),
+    ) as *mut PP_Var;
     if buf.is_null() {
         return;
     }

@@ -67,22 +67,81 @@ unsafe extern "C" fn set_cursor(
     PP_TRUE
 }
 
-unsafe extern "C" fn lock_cursor(_instance: PP_Instance) -> PP_Bool {
-    tracing::trace!("PPB_CursorControl::LockCursor (no-op)");
-    PP_TRUE
-}
+unsafe extern "C" fn lock_cursor(instance: PP_Instance) -> PP_Bool {
+    let Some(host) = HOST.get() else {
+        return PP_FALSE;
+    };
 
-unsafe extern "C" fn unlock_cursor(_instance: PP_Instance) -> PP_Bool {
-    tracing::trace!("PPB_CursorControl::UnlockCursor (no-op)");
-    PP_TRUE
-}
+    if !host.instances.exists(instance) {
+        tracing::warn!("PPB_CursorControl::LockCursor: bad instance {}", instance);
+        return PP_FALSE;
+    }
 
-unsafe extern "C" fn has_cursor_lock(_instance: PP_Instance) -> PP_Bool {
+    tracing::debug!("PPB_CursorControl::LockCursor: instance={}", instance);
+
+    if let Some(provider) = host.get_cursor_lock_provider() {
+        if provider.lock_cursor() {
+            host.instances.with_instance_mut(instance, |inst| {
+                inst.has_cursor_lock = true;
+            });
+            return PP_TRUE;
+        }
+    }
+
     PP_FALSE
 }
 
-unsafe extern "C" fn can_lock_cursor(_instance: PP_Instance) -> PP_Bool {
-    PP_TRUE
+unsafe extern "C" fn unlock_cursor(instance: PP_Instance) -> PP_Bool {
+    let Some(host) = HOST.get() else {
+        return PP_FALSE;
+    };
+
+    if !host.instances.exists(instance) {
+        tracing::warn!("PPB_CursorControl::UnlockCursor: bad instance {}", instance);
+        return PP_FALSE;
+    }
+
+    tracing::debug!("PPB_CursorControl::UnlockCursor: instance={}", instance);
+
+    if let Some(provider) = host.get_cursor_lock_provider() {
+        if provider.unlock_cursor() {
+            host.instances.with_instance_mut(instance, |inst| {
+                inst.has_cursor_lock = false;
+            });
+            return PP_TRUE;
+        }
+    }
+
+    PP_FALSE
+}
+
+unsafe extern "C" fn has_cursor_lock(instance: PP_Instance) -> PP_Bool {
+    let Some(host) = HOST.get() else {
+        return PP_FALSE;
+    };
+
+    let locked = host.instances.with_instance(instance, |inst| inst.has_cursor_lock)
+        .unwrap_or(false);
+
+    if locked { PP_TRUE } else { PP_FALSE }
+}
+
+unsafe extern "C" fn can_lock_cursor(instance: PP_Instance) -> PP_Bool {
+    let Some(host) = HOST.get() else {
+        return PP_FALSE;
+    };
+
+    if !host.instances.exists(instance) {
+        return PP_FALSE;
+    }
+
+    if let Some(provider) = host.get_cursor_lock_provider() {
+        if provider.can_lock_cursor() {
+            return PP_TRUE;
+        }
+    }
+
+    PP_FALSE
 }
 
 // ---------------------------------------------------------------------------

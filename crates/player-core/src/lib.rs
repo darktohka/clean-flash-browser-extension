@@ -321,8 +321,26 @@ impl FlashPlayer {
         // Create an instance.
         let instance_id = host.instances.create_instance();
         tracing::info!("open_swf: created instance {}", instance_id);
+        // Eagerly query the page URL from the provider so it's cached
+        // on the instance before DidCreate fires.  PepperFlash calls
+        // GetDocumentURL / ResolveRelativeToDocument during DidCreate and
+        // the answer must be the *page* URL, not the SWF URL.
+        let page_url = host.get_url_provider()
+            .and_then(|p| p.get_document_base_url(instance_id))
+            .or_else(|| host.get_url_provider().and_then(|p| p.get_document_url(instance_id)));
+        // Trim the last / character if it is a /
+        let page_url = page_url.map(|url| {
+            if url.ends_with('/') {
+                url[..url.len() - 1].to_string()
+            } else {
+                url
+            }
+        });
+        tracing::info!("open_swf: cached page_url = {:?}", page_url);
+
         host.instances.with_instance_mut(instance_id, |inst| {
             inst.swf_url = Some(instance_url.clone());
+            inst.page_url = page_url;
         });
 
         // ---- Step 1: Query PPP_Instance;1.1 from the plugin -----------
@@ -367,6 +385,19 @@ impl FlashPlayer {
         for key in ["src", "movie", "data"] {
             if !has_embed_arg(&did_create_args, key) {
                 did_create_args.push((key.to_string(), instance_url.clone()));
+            }
+        }
+        // Flash uses the "base" embed param to resolve relative URLs.
+        // Set it to the page URL so cross-origin SWFs resolve against
+        // the embedding page, not the CDN serving the SWF binary.
+        // Query the provider directly (not the trimmed page_url) so
+        // the trailing slash is preserved — Flash needs a directory URL.
+        if !has_embed_arg(&did_create_args, "base") {
+            let base_val = host.get_url_provider()
+                .and_then(|p| p.get_document_base_url(instance_id))
+                .or_else(|| host.get_url_provider().and_then(|p| p.get_document_url(instance_id)));
+            if let Some(base) = base_val {
+                did_create_args.push(("base".to_string(), base));
             }
         }
 

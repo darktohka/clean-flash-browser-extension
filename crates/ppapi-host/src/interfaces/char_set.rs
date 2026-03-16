@@ -12,14 +12,15 @@
 //!  - GetDefaultCharSet: returns "UTF-8" since modern Linux systems
 //!    predominantly use UTF-8.
 //!
-//! The memory returned is allocated with `std::alloc` and must be freed
-//! by the plugin via PPB_Memory::MemFree.
+//! The memory returned is allocated with `PPB_Memory::MemAlloc` and must be
+//! freed by the plugin via `PPB_Memory::MemFree`.
 
 use crate::interface_registry::InterfaceRegistry;
 use ppapi_sys::*;
 use std::ffi::{c_char, CStr};
 
 use super::super::HOST;
+use super::memory::ppb_mem_alloc;
 
 // ---------------------------------------------------------------------------
 // Vtable
@@ -41,21 +42,10 @@ pub unsafe fn register(registry: &mut InterfaceRegistry) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Allocate `size` bytes with 8-byte alignment, zero-initialized.
-/// This matches the layout used by PPB_Memory::MemAlloc so the plugin
-/// can free it with PPB_Memory::MemFree (which is currently a no-op/leak,
-/// but the sizes here are small).
+/// Allocate `size` bytes, zero-initialized, using the PPB_Memory allocator
+/// so the plugin can free it with PPB_Memory::MemFree.
 fn ppb_alloc(size: usize) -> *mut u8 {
-    if size == 0 {
-        return std::ptr::null_mut();
-    }
-    let layout = std::alloc::Layout::from_size_align(size, 8).expect("invalid layout");
-    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-    if ptr.is_null() {
-        std::ptr::null_mut()
-    } else {
-        ptr
-    }
+    ppb_mem_alloc(size)
 }
 
 // ---------------------------------------------------------------------------

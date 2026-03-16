@@ -11,8 +11,10 @@ use std::sync::atomic::{AtomicI32, Ordering};
 pub struct PluginInstance {
     /// The instance ID.
     pub id: PP_Instance,
-    /// Bound graphics resource (from BindGraphics).
-    pub bound_graphics: PP_Resource,
+    /// Bound Graphics2D resource (from BindGraphics).
+    pub bound_graphics_2d: PP_Resource,
+    /// Bound Graphics3D resource (from BindGraphics).
+    pub bound_graphics_3d: PP_Resource,
     /// View rect (set by DidChangeView).
     pub view_rect: PP_Rect,
     /// Whether the instance has focus.
@@ -23,10 +25,18 @@ pub struct PluginInstance {
     pub filtering_input_events: u32,
     /// Whether the instance is in fullscreen mode.
     pub is_fullscreen: bool,
+    /// Whether the cursor is currently locked (pointer lock active).
+    pub has_cursor_lock: bool,
     /// The SWF URL being loaded.
     pub swf_url: Option<String>,
+    /// The page URL (document URL) for relative URL resolution.
+    /// Eagerly cached at instance creation so it's always available
+    /// even if the url_provider becomes unreachable.
+    pub page_url: Option<String>,
     /// Whether a Graphics2D flush is in progress (only one at a time).
-    pub graphics_in_progress: bool,
+    pub graphics_2d_in_progress: bool,
+    /// Whether a Graphics3D swap is in progress (only one at a time).
+    pub graphics_3d_in_progress: bool,
     /// Stored completion callback for the in-flight flush.
     pub flush_callback: Option<PP_CompletionCallback>,
 }
@@ -35,15 +45,29 @@ impl PluginInstance {
     pub fn new(id: PP_Instance) -> Self {
         Self {
             id,
-            bound_graphics: 0,
+            bound_graphics_2d: 0,
+            bound_graphics_3d: 0,
             view_rect: PP_Rect::default(),
             has_focus: false,
             requested_input_events: 0,
             filtering_input_events: 0,
             is_fullscreen: false,
+            has_cursor_lock: false,
             swf_url: None,
-            graphics_in_progress: false,
+            page_url: None,
+            graphics_2d_in_progress: false,
+            graphics_3d_in_progress: false,
             flush_callback: None,
+        }
+    }
+
+    /// Returns the "primary" bound graphics resource for legacy callers.
+    /// Prefers 3D if both are bound, since 3D is the display surface.
+    pub fn bound_graphics(&self) -> PP_Resource {
+        if self.bound_graphics_3d != 0 {
+            self.bound_graphics_3d
+        } else {
+            self.bound_graphics_2d
         }
     }
 }

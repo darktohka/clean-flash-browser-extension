@@ -42,6 +42,20 @@ impl Resource for InputEventResource {
     }
 }
 
+impl Drop for InputEventResource {
+    fn drop(&mut self) {
+        // Release any ref-counted vars owned by this event.
+        if let Some(host) = HOST.get() {
+            if self.character_text.type_ == PP_VARTYPE_STRING {
+                host.vars.release(self.character_text);
+            }
+            if self.code.type_ == PP_VARTYPE_STRING {
+                host.vars.release(self.code);
+            }
+        }
+    }
+}
+
 impl InputEventResource {
     pub fn new_mouse(
         event_type: PP_InputEvent_Type,
@@ -329,6 +343,13 @@ unsafe extern "C" fn create_keyboard(
     let Some(host) = HOST.get() else {
         return 0;
     };
+    // AddRef the incoming vars — the caller retains its own reference.
+    if character_text.type_ == PP_VARTYPE_STRING {
+        host.vars.add_ref(character_text);
+    }
+    if code.type_ == PP_VARTYPE_STRING {
+        host.vars.add_ref(code);
+    }
     let ev = InputEventResource::new_keyboard(type_, time_stamp, modifiers, key_code, character_text, code);
     host.resources.insert(instance, Box::new(ev))
 }
@@ -363,7 +384,13 @@ unsafe extern "C" fn get_character_text(character_event: PP_Resource) -> PP_Var 
     HOST.get()
         .and_then(|h| {
             h.resources
-                .with_downcast::<InputEventResource, _>(character_event, |e| e.character_text)
+                .with_downcast::<InputEventResource, _>(character_event, |e| {
+                    // AddRef for the caller per PPAPI convention.
+                    if e.character_text.type_ == PP_VARTYPE_STRING {
+                        h.vars.add_ref(e.character_text);
+                    }
+                    e.character_text
+                })
         })
         .unwrap_or_else(PP_Var::undefined)
 }
@@ -372,7 +399,13 @@ unsafe extern "C" fn get_code(key_event: PP_Resource) -> PP_Var {
     HOST.get()
         .and_then(|h| {
             h.resources
-                .with_downcast::<InputEventResource, _>(key_event, |e| e.code)
+                .with_downcast::<InputEventResource, _>(key_event, |e| {
+                    // AddRef for the caller per PPAPI convention.
+                    if e.code.type_ == PP_VARTYPE_STRING {
+                        h.vars.add_ref(e.code);
+                    }
+                    e.code
+                })
         })
         .unwrap_or_else(PP_Var::undefined)
 }

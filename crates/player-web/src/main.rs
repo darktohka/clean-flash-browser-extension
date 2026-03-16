@@ -205,6 +205,11 @@ fn main() {
         let fs_bridge = SCRIPT_BRIDGE.get().expect("SCRIPT_BRIDGE not initialised").clone();
         host.set_fullscreen_provider(Box::new(WebFullscreenProvider::new(fs_bridge)));
 
+        // Set up the cursor lock provider so that Flash cursor lock requests
+        // are forwarded to the browser's Pointer Lock API.
+        let cl_bridge = SCRIPT_BRIDGE.get().expect("SCRIPT_BRIDGE not initialised").clone();
+        host.set_cursor_lock_provider(Box::new(WebCursorLockProvider::new(cl_bridge)));
+
         // Set up the context menu provider so that Flash right-click menus
         // are forwarded to the browser extension for display.
         let ctx_menu = Arc::new(WebContextMenuProvider::new());
@@ -672,6 +677,18 @@ fn handle_command(player: &mut FlashPlayer, cmd: &serde_json::Value) -> bool {
                 // returned undefined (fire-and-forget).  If synchronous
                 // return values are needed in the future, send the result
                 // back to the extension here.
+            }
+        }
+
+        "cursorLockChanged" => {
+            // Browser reports that pointer lock state changed (e.g. user
+            // pressed Escape, or requestPointerLock succeeded/failed).
+            let locked = cmd["locked"].as_bool().unwrap_or(false);
+            tracing::debug!("cursorLockChanged: locked={}", locked);
+            if let Some(host) = ppapi_host::HOST.get() {
+                if let Some(instance_id) = player.instance_id() {
+                    host.set_cursor_lock_state(instance_id, locked);
+                }
             }
         }
 
@@ -1478,6 +1495,66 @@ impl player_ui_traits::FullscreenProvider for WebFullscreenProvider {
         let w = obj.get("w")?.as_i64()? as i32;
         let h = obj.get("h")?.as_i64()? as i32;
         Some((w, h))
+    }
+}
+
+// ===========================================================================
+// Web cursor lock provider — uses the script bridge for Pointer Lock API
+// ===========================================================================
+
+struct WebCursorLockProvider {
+    bridge: Arc<script_bridge::ScriptBridge>,
+}
+
+impl WebCursorLockProvider {
+    fn new(bridge: Arc<script_bridge::ScriptBridge>) -> Self {
+        Self { bridge }
+    }
+}
+
+impl player_ui_traits::CursorLockProvider for WebCursorLockProvider {
+    fn lock_cursor(&self) -> bool {
+        let resp = self.bridge.request(serde_json::json!({
+            "op": "cursorLock",
+        }));
+        resp.as_ref()
+            .and_then(|r| r.get("value"))
+            .and_then(|v| v.get("v"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
+    fn unlock_cursor(&self) -> bool {
+        let resp = self.bridge.request(serde_json::json!({
+            "op": "cursorUnlock",
+        }));
+        resp.as_ref()
+            .and_then(|r| r.get("value"))
+            .and_then(|v| v.get("v"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
+    fn has_cursor_lock(&self) -> bool {
+        let resp = self.bridge.request(serde_json::json!({
+            "op": "hasCursorLock",
+        }));
+        resp.as_ref()
+            .and_then(|r| r.get("value"))
+            .and_then(|v| v.get("v"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
+    fn can_lock_cursor(&self) -> bool {
+        let resp = self.bridge.request(serde_json::json!({
+            "op": "canLockCursor",
+        }));
+        resp.as_ref()
+            .and_then(|r| r.get("value"))
+            .and_then(|v| v.get("v"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
     }
 }
 

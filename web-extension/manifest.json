@@ -4,7 +4,9 @@
   "version": "1.0.0",
   "description": "Replaces Flash content with a native Flash Player via Native Messaging",
   "permissions": [
-    "nativeMessaging"
+    "nativeMessaging",
+    "clipboardRead",
+    "clipboardWrite"
   ],
   "background": {
     "service_worker": "background.js"

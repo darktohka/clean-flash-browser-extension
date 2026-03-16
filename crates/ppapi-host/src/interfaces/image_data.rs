@@ -14,7 +14,6 @@ pub struct ImageDataResource {
     pub size: PP_Size,
     pub stride: i32,
     pub pixels: Vec<u8>,
-    pub map_count: u32,
 }
 
 impl Resource for ImageDataResource {
@@ -116,7 +115,6 @@ unsafe extern "C" fn create(
         size: sz,
         stride,
         pixels,
-        map_count: 0,
     };
     host.resources.insert(instance, Box::new(img))
 }
@@ -165,44 +163,18 @@ unsafe extern "C" fn map(image_data: PP_Resource) -> *mut c_void {
         return std::ptr::null_mut();
     };
 
+    // Just return the pixel pointer. The Vec lives as long as the resource;
+    // no ref_count pinning needed (matches Chromium/freshplayerplugin).
     host.resources
-        .with_resource_mut(image_data, |entry| {
-            let Some(img) = entry.resource.as_any_mut().downcast_mut::<ImageDataResource>() else {
-                return std::ptr::null_mut();
-            };
-
-            // Keep the resource alive while at least one mapping is outstanding.
-            if img.map_count == 0 {
-                entry.ref_count += 1;
-            }
-            img.map_count = img.map_count.saturating_add(1);
+        .with_downcast_mut::<ImageDataResource, _>(image_data, |img| {
             img.pixels.as_mut_ptr() as *mut c_void
         })
         .unwrap_or(std::ptr::null_mut())
 }
 
 unsafe extern "C" fn unmap(image_data: PP_Resource) {
-    let Some(host) = HOST.get() else {
-        return;
-    };
-
-    let release_pin = host
-        .resources
-        .with_resource_mut(image_data, |entry| {
-            let Some(img) = entry.resource.as_any_mut().downcast_mut::<ImageDataResource>() else {
-                return false;
-            };
-
-            if img.map_count == 0 {
-                return false;
-            }
-
-            img.map_count -= 1;
-            img.map_count == 0
-        })
-        .unwrap_or(false);
-
-    if release_pin {
-        host.resources.release(image_data);
-    }
+    // No-op — matches Chromium and freshplayerplugin behaviour.
+    // Flash plugins typically never call Unmap; the pixel buffer stays
+    // valid until the resource is released via PPB_Core::ReleaseResource.
+    tracing::debug!("PPB_ImageData::Unmap(image_data={})", image_data);
 }

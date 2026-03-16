@@ -75,16 +75,12 @@ fn resolve_font_for_desc(desc: &PP_BrowserFont_Trusted_Description) -> Arc<ab_gl
     let bold = desc.weight >= PP_BROWSERFONT_TRUSTED_WEIGHT_BOLD;
     let italic = pp_to_bool(desc.italic);
 
-    if let Some(path) = font_rasterizer::resolve_system_font(
+    font_rasterizer::resolve_system_font(
         family_name.as_deref(),
         desc.family,
         bold,
         italic,
-    ) {
-        font_rasterizer::get_font(&path)
-    } else {
-        font_rasterizer::get_fallback_font()
-    }
+    )
 }
 
 /// Compute real text width using `ab_glyph` metrics.
@@ -115,8 +111,10 @@ unsafe extern "C" fn get_font_families(_instance: PP_Instance) -> PP_Var {
     let Some(host) = HOST.get() else {
         return PP_Var::undefined();
     };
-    host.vars
-        .var_from_str("Sans\0Serif\0Monospace\0Arial\0Times New Roman\0Courier New\0")
+    // Enumerate real system font families via fontdb.
+    let families = font_rasterizer::get_font_families();
+    let list = families.join("\0") + "\0";
+    host.vars.var_from_str(&list)
 }
 
 unsafe extern "C" fn create(

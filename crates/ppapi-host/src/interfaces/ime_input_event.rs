@@ -39,6 +39,17 @@ impl Resource for IMEInputEventResource {
     }
 }
 
+impl Drop for IMEInputEventResource {
+    fn drop(&mut self) {
+        // Release the ref-counted text var owned by this event.
+        if let Some(host) = HOST.get() {
+            if self.text.type_ == PP_VARTYPE_STRING {
+                host.vars.release(self.text);
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Vtable functions
 // ---------------------------------------------------------------------------

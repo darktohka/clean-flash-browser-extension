@@ -244,21 +244,41 @@ fn is_absolute_url(url: &str) -> bool {
     split_scheme(url).is_some()
 }
 
-fn document_base_url(host: &crate::HostState, instance: PP_Instance) -> Option<String> {
+pub(crate) fn document_base_url(host: &crate::HostState, instance: PP_Instance) -> Option<String> {
+    // 1st: live query from the url provider (document.baseURI)
     let provider = host.get_url_provider();
-
-    non_empty_url(
+    let from_provider = non_empty_url(
         provider
             .as_ref()
             .and_then(|p| p.get_document_base_url(instance)),
-    )
-    .or_else(|| {
-        non_empty_url(
-            host.instances
-                .with_instance(instance, |inst| inst.swf_url.clone())
-                .flatten(),
-        )
-    })
+    );
+    if from_provider.is_some() {
+        tracing::debug!("document_base_url: from provider = {:?}", from_provider);
+        return from_provider;
+    }
+
+    // 2nd: cached page_url (set eagerly at instance creation)
+    let from_page = non_empty_url(
+        host.instances
+            .with_instance(instance, |inst| inst.page_url.clone())
+            .flatten(),
+    );
+    if from_page.is_some() {
+        tracing::debug!("document_base_url: from cached page_url = {:?}", from_page);
+        return from_page;
+    }
+
+    // 3rd (last resort): swf_url — only for non-browser (standalone) usage
+    let from_swf = non_empty_url(
+        host.instances
+            .with_instance(instance, |inst| inst.swf_url.clone())
+            .flatten(),
+    );
+    tracing::warn!(
+        "document_base_url: no page URL available, falling back to swf_url = {:?}",
+        from_swf
+    );
+    from_swf
 }
 
 unsafe extern "C" fn canonicalize(
@@ -329,11 +349,20 @@ unsafe extern "C" fn resolve_relative_to_document(
 
     // PPAPI uses the containing document URL as the base for this API.
     let base_url = document_base_url(host, instance);
+    tracing::info!(
+        "PPB_URLUtil::ResolveRelativeToDocument: base={:?}, relative={}",
+        base_url, relative
+    );
 
     let Some(resolved) = resolve_url(base_url.as_deref(), &relative) else {
+        tracing::warn!("PPB_URLUtil::ResolveRelativeToDocument: resolve_url returned None");
         return PP_Var::null();
     };
 
+    tracing::info!(
+        "PPB_URLUtil::ResolveRelativeToDocument: resolved={}",
+        resolved
+    );
     parse_components(&resolved, components);
     host.vars.var_from_str(&resolved)
 }
@@ -355,6 +384,17 @@ unsafe extern "C" fn get_document_url(
             .and_then(|p| p.get_document_url(instance)),
     )
     .or_else(|| {
+        // Prefer the cached page URL over the SWF URL.  GetDocumentURL must
+        // return the *page* URL, not the plugin source URL — that is what
+        // GetPluginInstanceURL is for.
+        non_empty_url(
+            host.instances
+                .with_instance(instance, |inst| inst.page_url.clone())
+                .flatten(),
+        )
+    })
+    .or_else(|| {
+        // Last resort for standalone (non-browser) players.
         non_empty_url(
             host.instances
                 .with_instance(instance, |inst| inst.swf_url.clone())
@@ -452,7 +492,7 @@ unsafe extern "C" fn document_can_access_document(
 
 /// Resolve a relative URL against a base URL.
 /// Handles common cases: absolute URLs, protocol-relative, path-relative.
-fn resolve_url(base: Option<&str>, relative: &str) -> Option<String> {
+pub(crate) fn resolve_url(base: Option<&str>, relative: &str) -> Option<String> {
     // Absolute relative URL wins, even if base is missing/invalid.
     if is_absolute_url(relative) {
         return Some(relative.to_string());

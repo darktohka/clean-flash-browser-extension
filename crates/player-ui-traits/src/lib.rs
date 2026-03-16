@@ -471,6 +471,36 @@ pub trait FullscreenProvider: Send + Sync {
 }
 
 // ===========================================================================
+// Cursor lock provider — abstracts pointer lock for the PPAPI host
+// ===========================================================================
+
+/// Provides cursor (pointer) locking capabilities for the PPAPI host.
+///
+/// In browsers this maps to the Pointer Lock API
+/// (`Element.requestPointerLock()` / `document.exitPointerLock()`).
+/// Cursor locking is only meaningful in fullscreen mode.
+///
+/// Implementations should be thread-safe; methods may be called from the
+/// PPAPI plugin thread.
+pub trait CursorLockProvider: Send + Sync {
+    /// Request cursor lock (pointer lock).
+    ///
+    /// Returns `true` if the request was accepted, `false` on failure.
+    fn lock_cursor(&self) -> bool;
+
+    /// Release cursor lock.
+    ///
+    /// Returns `true` if the request was accepted, `false` on failure.
+    fn unlock_cursor(&self) -> bool;
+
+    /// Check whether the cursor is currently locked.
+    fn has_cursor_lock(&self) -> bool;
+
+    /// Check whether cursor locking is available (e.g. fullscreen is active).
+    fn can_lock_cursor(&self) -> bool;
+}
+
+// ===========================================================================
 // Context menu provider — abstracts Flash right-click context menus
 // ===========================================================================
 

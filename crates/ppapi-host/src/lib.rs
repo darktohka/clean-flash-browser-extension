@@ -7,6 +7,7 @@ pub mod callback;
 pub mod browser_object;
 pub mod filesystem;
 pub mod font_rasterizer;
+pub mod gl_context;
 
 #[cfg(feature = "audio-cpal")]
 pub mod audio_input_cpal;
@@ -148,6 +149,9 @@ pub struct HostState {
     /// Fullscreen provider for toggling fullscreen mode.
     /// When set, PPB_FlashFullscreen and PPB_Fullscreen use this.
     pub fullscreen_provider: Mutex<Option<Arc<dyn player_ui_traits::FullscreenProvider>>>,
+    /// Cursor lock provider for pointer lock toggling.
+    /// When set, PPB_CursorControl uses this for lock/unlock/query.
+    pub cursor_lock_provider: Mutex<Option<Arc<dyn player_ui_traits::CursorLockProvider>>>,
     /// URL provider for browser-hosted URL utility queries.
     /// When set, PPB_URLUtil(Dev)::GetDocumentURL/GetPluginInstanceURL use this.
     pub url_provider: Mutex<Option<Arc<dyn player_ui_traits::UrlProvider>>>,
@@ -220,6 +224,7 @@ impl HostState {
                 audio_input_provider: Mutex::new(None),
                 clipboard_provider: Mutex::new(None),
                 fullscreen_provider: Mutex::new(None),
+                cursor_lock_provider: Mutex::new(None),
                 url_provider: Mutex::new(None),
                 context_menu_provider: Mutex::new(None),
                 print_provider: Mutex::new(None),
@@ -231,7 +236,16 @@ impl HostState {
                 flash_incognito: AtomicBool::new(false),
                 flash_language: Mutex::new(String::new()),
             }
-        })
+        });
+
+        // Eagerly initialize EGL/GLES2 *before* the seccomp sandbox is
+        // activated (load_plugin → sandbox::activate).  After the sandbox
+        // is in place, dlopen is blocked so libloading::Library::new will
+        // fail.  This is the same pattern used for the rfd file-chooser
+        // worker thread.
+        let _ = gl_context::gl_available();
+
+        HOST.get().unwrap()
     }
 
     /// Set the host callbacks (from the player/UI layer).
@@ -287,6 +301,26 @@ impl HostState {
     /// Get a cloned `Arc` handle to the fullscreen provider, if set.
     pub fn get_fullscreen_provider(&self) -> Option<Arc<dyn player_ui_traits::FullscreenProvider>> {
         self.fullscreen_provider.lock().clone()
+    }
+
+    /// Set the cursor lock provider for pointer lock toggling.
+    pub fn set_cursor_lock_provider(&self, provider: Box<dyn player_ui_traits::CursorLockProvider>) {
+        *self.cursor_lock_provider.lock() = Some(Arc::from(provider));
+    }
+
+    /// Get a cloned `Arc` handle to the cursor lock provider, if set.
+    pub fn get_cursor_lock_provider(&self) -> Option<Arc<dyn player_ui_traits::CursorLockProvider>> {
+        self.cursor_lock_provider.lock().clone()
+    }
+
+    /// Update the cursor lock state on a plugin instance.
+    ///
+    /// Called by the player/UI layer when the browser reports a pointer
+    /// lock state change (e.g. `pointerlockchange` event).
+    pub fn set_cursor_lock_state(&self, instance: i32, locked: bool) {
+        self.instances.with_instance_mut(instance, |inst| {
+            inst.has_cursor_lock = locked;
+        });
     }
 
     /// Set the URL provider for browser-sourced document/plugin URL queries.

@@ -838,6 +838,7 @@
         // Try reading from the real clipboard via a hidden textarea.
         // This only works for plaintext during a user gesture.
         if (fmt === "plaintext") {
+          const prevFocus = document.activeElement;
           try {
             const ta = document.createElement("textarea");
             ta.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0";
@@ -846,20 +847,21 @@
             const ok = document.execCommand("paste");
             const text = ta.value;
             document.body.removeChild(ta);
+            if (prevFocus && prevFocus.focus) prevFocus.focus();
             if (ok && text.length > 0) return { value: encodeJsValue(true) };
-          } catch (_) { /* ignore */ }
+          } catch (_) {
+            if (prevFocus && prevFocus.focus) prevFocus.focus();
+          }
         }
         return { value: encodeJsValue(false) };
       }
 
       case "clipboardRead": {
         const fmt = req.format; // "plaintext" | "html"
-        // First check our internal buffer.
-        if (window.__flashClipboard && window.__flashClipboard[fmt]) {
-          return { value: encodeJsValue(window.__flashClipboard[fmt]) };
-        }
-        // Fallback: try reading plaintext via execCommand.
+        // Try reading from the system clipboard first so that external
+        // clipboard changes (from outside Flash) are picked up.
         if (fmt === "plaintext") {
+          const prevFocus = document.activeElement;
           try {
             const ta = document.createElement("textarea");
             ta.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0";
@@ -868,8 +870,16 @@
             const ok = document.execCommand("paste");
             const text = ta.value;
             document.body.removeChild(ta);
+            if (prevFocus && prevFocus.focus) prevFocus.focus();
             if (ok && text) return { value: encodeJsValue(text) };
-          } catch (_) { /* ignore */ }
+          } catch (_) {
+            if (prevFocus && prevFocus.focus) prevFocus.focus();
+          }
+        }
+        // Fall back to our internal buffer (covers HTML and cases where
+        // execCommand is unavailable).
+        if (window.__flashClipboard && window.__flashClipboard[fmt]) {
+          return { value: encodeJsValue(window.__flashClipboard[fmt]) };
         }
         return { value: encodeJsValue(null) };
       }
@@ -882,17 +892,25 @@
         if (req.html != null) window.__flashClipboard.html = req.html;
         else delete window.__flashClipboard.html;
 
-        // Also try to write to the system clipboard via execCommand.
+        // Also write to the system clipboard.
         const text = req.plaintext || req.html || "";
-        try {
-          const ta = document.createElement("textarea");
-          ta.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0";
-          ta.value = text;
-          document.body.appendChild(ta);
-          ta.select();
-          document.execCommand("copy");
-          document.body.removeChild(ta);
-        } catch (_) { /* ignore - clipboard write may fail without user gesture */ }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          // Modern Clipboard API — async, does not steal focus.
+          navigator.clipboard.writeText(text).catch(() => {});
+        } else {
+          // Fallback: textarea + execCommand, with focus preservation.
+          const prevFocus = document.activeElement;
+          try {
+            const ta = document.createElement("textarea");
+            ta.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0";
+            ta.value = text;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand("copy");
+            document.body.removeChild(ta);
+          } catch (_) { /* ignore - clipboard write may fail without user gesture */ }
+          if (prevFocus && prevFocus.focus) prevFocus.focus();
+        }
         return { value: encodeJsValue(true) };
       }
 
@@ -937,6 +955,49 @@
         return {
           value: encodeJsValue({ w: screen.width, h: screen.height }),
         };
+      }
+
+      // ---------------------------------------------------------------
+      // Cursor lock (Pointer Lock API) for PPB_CursorControl
+      // ---------------------------------------------------------------
+
+      case "cursorLock": {
+        try {
+          // Pointer lock is only allowed from fullscreen or with a user gesture.
+          const el = document.querySelector("[data-flash-container]") ||
+                     document.querySelector("canvas") ||
+                     document.documentElement;
+          if (el.requestPointerLock) {
+            el.requestPointerLock();
+            return { value: encodeJsValue(true) };
+          }
+          return { value: encodeJsValue(false) };
+        } catch (e) {
+          console.warn("[flash] cursorLock failed:", e);
+          return { value: encodeJsValue(false) };
+        }
+      }
+
+      case "cursorUnlock": {
+        try {
+          if (document.exitPointerLock) {
+            document.exitPointerLock();
+          }
+          return { value: encodeJsValue(true) };
+        } catch (e) {
+          console.warn("[flash] cursorUnlock failed:", e);
+          return { value: encodeJsValue(false) };
+        }
+      }
+
+      case "hasCursorLock": {
+        return { value: encodeJsValue(!!document.pointerLockElement) };
+      }
+
+      case "canLockCursor": {
+        // Pointer lock is available when in fullscreen mode.
+        const inFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
+        return { value: encodeJsValue(inFullscreen) };
       }
 
       default:

@@ -1175,6 +1175,20 @@ unsafe extern "C" fn open(
         return PP_ERROR_BADARGUMENT;
     }
 
+    // ---- Resolve relative URLs against the document base URL ----
+    // Mirrors Chrome (PepperURLLoaderHost) and freshplayerplugin behaviour:
+    // the browser resolves the URLRequestInfo URL relative to the embedding
+    // page's base URL before issuing the request.
+    let instance_id = host.resources.get_instance(loader).unwrap_or(0);
+    let url = if url.starts_with("javascript:") {
+        url
+    } else {
+        tracing::trace!("PPB_URLLoader::Open: resolving URL against document base");
+        let base = super::url_util::document_base_url(host, instance_id);
+        tracing::trace!("PPB_URLLoader::Open: document base URL is {:?}, resolving url {}", base, url);
+        super::url_util::resolve_url(base.as_deref(), &url).unwrap_or(url)
+    };
+
     // ---- Check if this request requires universal access (C++ parity) ----
     // Mirrors URLRequestRequiresUniversalAccess() from
     // pepper_url_loader_host.cc: custom referrer, custom content-transfer-

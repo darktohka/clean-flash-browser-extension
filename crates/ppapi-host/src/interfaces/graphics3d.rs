@@ -4,16 +4,17 @@
 //! via `PPB_Instance::BindGraphics` and render into using the OpenGL ES 2.0
 //! functions from `PPB_OpenGLES2`.
 //!
-//! The current implementation is a *stub context*: it stores the requested
-//! attributes (width, height, color sizes, etc.) and acts as a valid resource
-//! that the plugin can query and swap, but no real GL rendering is performed.
-//! The OpenGL ES 2.0 functions in `opengles2.rs` are also no-op stubs, so
-//! together this provides enough scaffolding for Flash to initialise a 3D
-//! pipeline without crashing, while actual rendering happens through the 2D
-//! path.
+//! When EGL/GLES2 libraries are available at runtime, creates a real offscreen
+//! OpenGL ES 2.0 context backed by an EGL pbuffer surface.  All PPB_OpenGLES2
+//! calls dispatch to the real GPU driver.  On SwapBuffers, the framebuffer is
+//! read back via glReadPixels, converted from RGBA to BGRA, and delivered
+//! through the same `on_flush` callback path used by Graphics2D.
 //!
-//! Modeled on `freshplayerplugin/src/ppb_graphics3d.c`.
+//! If EGL/GLES2 is not available, falls back to the previous stub behavior.
+//!
+//! Modeled on Chrome's `content/renderer/pepper/ppb_graphics_3d_impl.cc`.
 
+use crate::gl_context::{self, OffscreenGlContext};
 use crate::interface_registry::InterfaceRegistry;
 use crate::resource::Resource;
 use ppapi_sys::*;
@@ -26,7 +27,8 @@ use super::super::HOST;
 // ---------------------------------------------------------------------------
 
 /// Graphics3D context resource — stores the surface attributes requested at
-/// creation time and tracks swap-buffer state.
+/// creation time and tracks swap-buffer state.  When EGL is available, holds
+/// a real offscreen GL context.
 pub struct Graphics3DResource {
     pub width: i32,
     pub height: i32,
@@ -39,6 +41,10 @@ pub struct Graphics3DResource {
     pub samples: i32,
     pub sample_buffers: i32,
     pub swap_behavior: i32,
+    /// Real EGL/GLES2 offscreen context, if available.
+    pub gl_context: Option<OffscreenGlContext>,
+    /// Pixel readback buffer (reused across swaps to avoid allocation).
+    readback_buf: Vec<u8>,
 }
 
 impl Resource for Graphics3DResource {
@@ -70,6 +76,8 @@ impl Graphics3DResource {
             samples: 0,
             sample_buffers: 0,
             swap_behavior: PP_GRAPHICS3DATTRIB_BUFFER_DESTROYED,
+            gl_context: None,
+            readback_buf: Vec::new(),
         };
 
         if attrib_list.is_null() {
@@ -198,7 +206,7 @@ unsafe extern "C" fn create(
         return 0;
     }
 
-    let g3d = Graphics3DResource::from_attrib_list(attrib_list);
+    let mut g3d = Graphics3DResource::from_attrib_list(attrib_list);
 
     tracing::debug!(
         "PPB_Graphics3D::Create: {}x{} alpha={} rgb=({},{},{}) depth={} stencil={}",
@@ -212,13 +220,26 @@ unsafe extern "C" fn create(
         g3d.stencil_size,
     );
 
-    // share_context is currently ignored (no real GL context to share).
     if share_context != 0 {
         tracing::warn!(
-            "PPB_Graphics3D::Create: share_context={} ignored (stub)",
+            "PPB_Graphics3D::Create: share_context={} ignored",
             share_context
         );
     }
+
+    // Try to create a real EGL/GLES2 offscreen context.
+    let gl_ctx = OffscreenGlContext::new(
+        g3d.width, g3d.height,
+        g3d.red_size, g3d.green_size, g3d.blue_size, g3d.alpha_size,
+        g3d.depth_size, g3d.stencil_size,
+        g3d.samples, g3d.sample_buffers,
+    );
+    if gl_ctx.is_some() {
+        tracing::info!("PPB_Graphics3D::Create: real GLES2 context created");
+    } else {
+        tracing::warn!("PPB_Graphics3D::Create: EGL unavailable, using stub context");
+    }
+    g3d.gl_context = gl_ctx;
 
     let resource = host.resources.insert(instance, Box::new(g3d));
     tracing::debug!("PPB_Graphics3D::Create -> resource {}", resource);
@@ -321,7 +342,13 @@ unsafe extern "C" fn get_error(context: PP_Resource) -> i32 {
         return PP_ERROR_BADRESOURCE;
     }
 
-    // No actual GL context, so no errors to report.
+    // Query the real GL error if we have a context.
+    if gl_context::ensure_context_current(context) {
+        if let Some(gl) = gl_context::gl_functions() {
+            let err = unsafe { glow::HasContext::get_error(gl) };
+            return if err == 0 { PP_OK } else { PP_ERROR_FAILED };
+        }
+    }
     PP_OK
 }
 
@@ -345,6 +372,12 @@ unsafe extern "C" fn resize_buffers(context: PP_Resource, width: i32, height: i3
         .with_downcast_mut::<Graphics3DResource, _>(context, |g3d| {
             g3d.width = width;
             g3d.height = height;
+            // Resize the underlying EGL pbuffer surface if we have one.
+            if let Some(ref mut gl_ctx) = g3d.gl_context {
+                if !gl_ctx.resize(width, height) {
+                    tracing::warn!("PPB_Graphics3D::ResizeBuffers: EGL resize failed");
+                }
+            }
             PP_OK
         })
         .unwrap_or(PP_ERROR_BADRESOURCE)
@@ -376,7 +409,7 @@ unsafe extern "C" fn swap_buffers(context: PP_Resource, callback: PP_CompletionC
     // (same pattern as Graphics2D::Flush).
     let is_bound = host
         .instances
-        .with_instance(instance_id, |inst| inst.bound_graphics == context)
+        .with_instance(instance_id, |inst| inst.bound_graphics_3d == context)
         .unwrap_or(false);
 
     if !is_bound {
@@ -386,7 +419,7 @@ unsafe extern "C" fn swap_buffers(context: PP_Resource, callback: PP_CompletionC
     // Check for double-swap (only one in-flight at a time).
     let already_in_progress = host
         .instances
-        .with_instance(instance_id, |inst| inst.graphics_in_progress)
+        .with_instance(instance_id, |inst| inst.graphics_3d_in_progress)
         .unwrap_or(false);
 
     if already_in_progress {
@@ -395,23 +428,91 @@ unsafe extern "C" fn swap_buffers(context: PP_Resource, callback: PP_CompletionC
 
     // Mark swap as in-progress.
     host.instances.with_instance_mut(instance_id, |inst| {
-        inst.graphics_in_progress = true;
+        inst.graphics_3d_in_progress = true;
     });
 
-    // In a real implementation, this is where we'd glFinish(), read back
-    // the framebuffer, and composite the result.  For now, we just complete
-    // the swap immediately since the GL stubs don't produce any pixels.
+    // Read back the GL framebuffer if we have a real context.
+    let has_gl = host.resources.with_downcast::<Graphics3DResource, _>(
+        context, |g3d| g3d.gl_context.is_some()
+    ).unwrap_or(false);
+
+    if has_gl {
+        // Ensure context is current on this thread.
+        gl_context::ensure_context_current(context);
+
+        // Get dimensions and perform readback.
+        let frame_data = host.resources.with_downcast_mut::<Graphics3DResource, _>(
+            context, |g3d| {
+                let gl = gl_context::gl_functions().unwrap();
+                // Wait for all rendering to complete.
+                unsafe { glow::HasContext::finish(gl) };
+                // Read back framebuffer into BGRA buffer.
+                g3d.gl_context.as_ref().unwrap().readback_bgra(&mut g3d.readback_buf);
+                let w = g3d.width;
+                let h = g3d.height;
+                let stride = w * 4;
+                // Clone the buffer out so we can release the resource lock.
+                (g3d.readback_buf.clone(), w, h, stride)
+            }
+        );
+
+        if let Some((mut pixels, w, h, stride)) = frame_data {
+            // If a Graphics2D overlay is also bound, composite it on top.
+            let g2d_res = host.instances.with_instance(instance_id, |inst| {
+                inst.bound_graphics_2d
+            }).unwrap_or(0);
+
+            if g2d_res != 0 {
+                host.resources.with_downcast::<
+                    super::graphics2d::Graphics2DResource, _
+                >(g2d_res, |g2d| {
+                    // Only composite if the 2D surface covers the same area.
+                    if g2d.size.width == w && g2d.size.height == h {
+                        // Alpha-blend BGRA_PREMUL 2D pixels over BGRA 3D pixels.
+                        let src = &g2d.pixels;
+                        let dst = &mut pixels;
+                        let len = dst.len().min(src.len());
+                        let mut i = 0;
+                        while i + 3 < len {
+                            let sa = src[i + 3] as u32;
+                            if sa == 255 {
+                                // Fully opaque — just copy.
+                                dst[i]     = src[i];
+                                dst[i + 1] = src[i + 1];
+                                dst[i + 2] = src[i + 2];
+                                dst[i + 3] = 255;
+                            } else if sa > 0 {
+                                // src is premultiplied: out = src + dst * (1 - src_a)
+                                let inv_a = 255 - sa;
+                                dst[i]     = (src[i]     as u32 + dst[i]     as u32 * inv_a / 255) as u8;
+                                dst[i + 1] = (src[i + 1] as u32 + dst[i + 1] as u32 * inv_a / 255) as u8;
+                                dst[i + 2] = (src[i + 2] as u32 + dst[i + 2] as u32 * inv_a / 255) as u8;
+                                dst[i + 3] = (sa + dst[i + 3] as u32 * inv_a / 255) as u8;
+                            }
+                            // sa == 0: fully transparent, keep 3D pixel.
+                            i += 4;
+                        }
+                    }
+                });
+            }
+
+            // Deliver composited frame.
+            let callbacks_guard = host.host_callbacks.lock();
+            if let Some(cb) = callbacks_guard.as_ref() {
+                cb.on_flush(context, &pixels, w, h, stride, 0, 0, w, h);
+            }
+            drop(callbacks_guard);
+        }
+    }
 
     // Clear in-progress.
     host.instances.with_instance_mut(instance_id, |inst| {
-        inst.graphics_in_progress = false;
+        inst.graphics_3d_in_progress = false;
     });
 
-    // Fire the completion callback asynchronously via the message loop,
-    // matching the pattern used by Graphics2D::Flush.
+    // Fire the completion callback asynchronously via the message loop.
     if !callback.is_null() {
         if let Some(poster) = &*host.main_loop_poster.lock() {
-            // Use a ~16 ms delay to emulate vsync-like throttling.
             poster.post_work(callback, 16, PP_OK);
             return PP_OK_COMPLETIONPENDING;
         }

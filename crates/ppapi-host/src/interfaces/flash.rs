@@ -8,7 +8,6 @@ use crate::interface_registry::InterfaceRegistry;
 use crate::interfaces::image_data::ImageDataResource;
 use ppapi_sys::*;
 use std::ffi::{CStr, c_char, c_void};
-use std::sync::Arc;
 
 use crate::interfaces::url_request_info::URLRequestInfoResource;
 
@@ -168,14 +167,9 @@ unsafe extern "C" fn draw_glyphs(
     let bold = desc.weight >= PP_BROWSERFONT_TRUSTED_WEIGHT_BOLD;
     let italic = pp_to_bool(desc.italic);
 
-    let font: Arc<ab_glyph::FontVec> =
-        if let Some(path) = font_rasterizer::resolve_system_font(
-            family_name.as_deref(), desc.family, bold, italic,
-        ) {
-            font_rasterizer::get_font(&path)
-        } else {
-            font_rasterizer::get_fallback_font()
-        };
+    let font = font_rasterizer::resolve_system_font(
+        family_name.as_deref(), desc.family, bold, italic,
+    );
 
     let px_size = if desc.size == 0 { 16.0 } else { desc.size as f32 };
 
@@ -405,12 +399,12 @@ unsafe extern "C" fn get_setting_int(
                 .map(|h| if h.get_flash_incognito() { 1 } else { 0 })
                 .unwrap_or(0)
         }
-        PP_FLASHSETTING_STAGE3DENABLED => 1,
+        PP_FLASHSETTING_STAGE3DENABLED => if crate::gl_context::gl_available() { 1 } else { 0 },
         PP_FLASHSETTING_NUMCORES => {
             num_cpus()
         }
         PP_FLASHSETTING_LSORESTRICTIONS => PP_FLASHLSORESTRICTIONS_NONE,
-        PP_FLASHSETTING_STAGE3DBASELINEENABLED => 1,
+        PP_FLASHSETTING_STAGE3DBASELINEENABLED => if crate::gl_context::gl_available() { 1 } else { 0 },
         _ => 0,
     }
 }
@@ -424,20 +418,20 @@ unsafe extern "C" fn get_setting(
         return PP_Var::undefined();
     };
     let result = match setting {
-        PP_FLASHSETTING_3DENABLED => PP_Var::from_bool(true),
+        PP_FLASHSETTING_3DENABLED => PP_Var::from_bool(crate::gl_context::gl_available()),
         PP_FLASHSETTING_INCOGNITO => {
             PP_Var::from_bool(
                 host.get_flash_incognito()
             )
         }
-        PP_FLASHSETTING_STAGE3DENABLED => PP_Var::from_bool(true),
+        PP_FLASHSETTING_STAGE3DENABLED => PP_Var::from_bool(crate::gl_context::gl_available()),
         PP_FLASHSETTING_LANGUAGE => {
             let lang = host.get_flash_language();
             host.vars.var_from_str(&lang)
         }
         PP_FLASHSETTING_NUMCORES => PP_Var::from_int(num_cpus()),
         PP_FLASHSETTING_LSORESTRICTIONS => PP_Var::from_int(PP_FLASHLSORESTRICTIONS_NONE),
-        PP_FLASHSETTING_STAGE3DBASELINEENABLED => PP_Var::from_bool(true),
+        PP_FLASHSETTING_STAGE3DBASELINEENABLED => PP_Var::from_bool(crate::gl_context::gl_available()),
         _ => PP_Var::undefined(),
     };
     tracing::debug!("PPB_Flash::GetSetting(setting={}) -> {:?}", setting, result);
