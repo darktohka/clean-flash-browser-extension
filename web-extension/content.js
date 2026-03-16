@@ -1973,7 +1973,11 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
       const height = readU32(dv, 6);
       const stateNames = ["idle", "loading", "running", "error"];
       const stateName = stateNames[code] || "unknown";
-      if (code === 3) { // error
+      if (code === 2) { // running — player has booted, send view state immediately
+        console.log(`[Flash Player] State: ${stateName}, view: ${width}x${height}`);
+        console.log(`[Flash Player] View info:`, collectViewInfo(canvas));
+        port.postMessage({ type: "viewUpdate", ...collectViewInfo(canvas) });
+      } else if (code === 3) { // error
         console.error("[Flash Player] State: error");
       }
       break;
@@ -2268,6 +2272,18 @@ function getMetaForPort(port) {
 }
 
 /**
+ * Find the instanceId for the given native messaging port.
+ */
+function getInstanceIdForPort(port) {
+  for (const [id, meta] of instanceMeta) {
+    if (meta.port === port) {
+      return id;
+    }
+  }
+  return null;
+}
+
+/**
  * Handle a scripting request from the native host.
  * Forwards to the MAIN-world page script and sends the response back.
  */
@@ -2385,6 +2401,13 @@ async function handleScriptRequest(req, port) {
   if (op === "release") {
     sendToPageScript(req);
     return;
+  }
+
+  // Inject instanceId so that page-script.js can target the correct
+  // Flash element when there are multiple SWFs on the page.
+  if (req.instanceId == null) {
+    const iid = getInstanceIdForPort(port);
+    if (iid != null) req.instanceId = iid;
   }
 
   const resp = sendToPageScript(req);

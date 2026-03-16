@@ -293,7 +293,7 @@ fn main() {
         // Native messaging stdin blocks, so we read on a helper thread.
         match try_read_command() {
             Some(cmd) => {
-                if !handle_command(&mut player, &cmd) {
+                if !handle_command(&mut player, &cmd, &frame_ready) {
                     break; // Extension disconnected or "close" received.
                 }
             }
@@ -449,7 +449,11 @@ fn parse_view_info(cmd: &serde_json::Value) -> ViewInfo {
 }
 
 /// Handle one incoming JSON command. Returns `false` to signal shutdown.
-fn handle_command(player: &mut FlashPlayer, cmd: &serde_json::Value) -> bool {
+fn handle_command(
+    player: &mut FlashPlayer,
+    cmd: &serde_json::Value,
+    frame_ready: &Arc<Mutex<bool>>,
+) -> bool {
     let msg_type = cmd["type"].as_str().unwrap_or("");
 
     match msg_type {
@@ -489,6 +493,11 @@ fn handle_command(player: &mut FlashPlayer, cmd: &serde_json::Value) -> bool {
                         let view_info = parse_view_info(cmd);
                         player.notify_view_change(w, h, Some(&view_info));
                     }
+
+                    // Force a frame update immediately after boot so the
+                    // browser receives the initial view without waiting for
+                    // the first repaint callback.
+                    *frame_ready.lock() = true;
 
                     let _ = protocol::send_host_message(&protocol::HostMessage::State {
                         code: 2, // running

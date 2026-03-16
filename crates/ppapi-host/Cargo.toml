@@ -38,7 +38,7 @@ arboard = { version = "3", optional = true }
 ab_glyph = "0.2.32"
 fontdb = "0.23"
 ttf-parser = "0.25"
-getrandom = "0.4.2"
+rand = { version = "0.10.0", features = ["sys_rng"] }
 reqwest = { workspace = true, optional = true }
 glutin = "0.32"
 glow = "0.16"
@@ -46,7 +46,6 @@ raw-window-handle = "0.6"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-getrandom = "0.4.2"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.9" }

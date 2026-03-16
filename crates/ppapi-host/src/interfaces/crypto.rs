@@ -2,6 +2,8 @@
 
 use crate::interface_registry::InterfaceRegistry;
 use ppapi_sys::*;
+use rand::TryRng;
+use rand::rngs::SysRng;
 use std::ffi::c_char;
 
 static VTABLE: PPB_Crypto_Dev_0_1 = PPB_Crypto_Dev_0_1 {
@@ -19,21 +21,15 @@ unsafe extern "C" fn get_random_bytes(buffer: *mut c_char, num_bytes: u32) {
         return;
     }
 
-    // Fill the buffer with random bytes.
+    // SAFETY: caller guarantees `buffer` points to a valid allocation of at
+    // least `num_bytes` bytes and that no other thread aliases it during this
+    // call.
     let slice = unsafe { std::slice::from_raw_parts_mut(buffer as *mut u8, num_bytes as usize) };
 
-    // Use RtlGenRandom on Windows, and getrandom() on Unix.
-    #[cfg(windows)]
-    {
-        #[link(name = "advapi32")]
-        extern "system" {
-            fn SystemFunction036(buffer: *mut u8, len: u32) -> u8;
-        }
-
-        let result = unsafe { SystemFunction036(slice.as_mut_ptr(), num_bytes) };
-        if result == 0 {
-            tracing::error!("RtlGenRandom failed");
-        }
+    // SysRng delegates to the OS CSPRNG (getrandom(2) / BCryptGenRandom /
+    // SecRandomCopyBytes) and is appropriate for security-sensitive use.
+    if let Err(e) = SysRng.try_fill_bytes(slice) {
+        tracing::error!("PPB_Crypto(Dev)::GetRandomBytes: SysRng failed: {}", e);
     }
 
     tracing::trace!("PPB_Crypto(Dev)::GetRandomBytes(num_bytes={})", num_bytes);

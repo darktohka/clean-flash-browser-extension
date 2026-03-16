@@ -419,6 +419,16 @@
   }
 
   // -----------------------------------------------------------------
+  // Per-instance element cache
+  //
+  // Maps instanceId (from data-flash-player attribute) to
+  // { ownerElement, container } so we never need to querySelector
+  // by attribute – critical when there are multiple Flash SWFs.
+  // -----------------------------------------------------------------
+
+  const flashInstances = new Map();
+
+  // -----------------------------------------------------------------
   // Object reference store
   // -----------------------------------------------------------------
 
@@ -588,6 +598,38 @@
   }
 
   /**
+   * Resolve the canvas element for a specific Flash instance.
+   * For <embed>, this ensures fullscreen/pointer-lock target the
+   * rendered canvas rather than the hidden embed element.
+   */
+  function resolveFlashCanvas(instanceId) {
+    const id = Number(instanceId);
+    const cached = Number.isFinite(id) ? flashInstances.get(id) : null;
+    if (cached) {
+      if (cached.container && cached.container.querySelector) {
+        const specific = cached.container.querySelector(
+          'canvas[data-flash-player="' + id + '"]'
+        );
+        if (specific) return specific;
+        const anyCanvas = cached.container.querySelector("canvas");
+        if (anyCanvas) return anyCanvas;
+      }
+      if (cached.ownerElement && cached.ownerElement.querySelector) {
+        const ownerCanvas = cached.ownerElement.querySelector("canvas");
+        if (ownerCanvas) return ownerCanvas;
+      }
+    }
+
+    // DOM fallback if cache is cold.
+    const byId = document.querySelector(
+      'canvas[data-flash-player="' + id + '"]'
+    );
+    if (byId) return byId;
+    return document.querySelector("[data-flash-container] canvas") ||
+           document.querySelector("canvas");
+  }
+
+  /**
    * Patch a Flash <object>/<embed> element's prototype so that unknown
    * property accesses are forwarded to PepperFlash's scriptable object
    * via CallFunction (ExternalInterface).
@@ -661,6 +703,25 @@
     }
     setupCallFunction(container);
     proxyFlashElement(container);
+
+    // Cache element references keyed by instanceId so that request
+    // handlers can find the right element without querySelector.
+    const instId = elem.getAttribute && elem.getAttribute("data-flash-player");
+    if (instId != null) {
+      const id = Number(instId);
+      // The container div is the element's parent (for <object>) or
+      // the preceding sibling's parent (for <embed>).  Prefer the
+      // element with data-flash-container if we can find it cheaply.
+      let containerDiv = container.closest
+        ? container.closest("[data-flash-container]")
+        : null;
+      if (!containerDiv && container.parentElement &&
+          container.parentElement.hasAttribute &&
+          container.parentElement.hasAttribute("data-flash-container")) {
+        containerDiv = container.parentElement;
+      }
+      flashInstances.set(id, { ownerElement: container, container: containerDiv || container });
+    }
   }
 
   /**
@@ -722,10 +783,22 @@
         return { value: encodeJsValue(window) };
 
       case "getOwnerElement": {
-        // Find the Flash <object> or <embed> element annotated by
-        // content.js (it carries the data-flash-player attribute).
-        // Prefer the actual <object>/<embed> over a <canvas>.
-        let elem = document.querySelector(
+        // Use the per-instance cache when an instanceId is provided
+        // (supports multiple Flash SWFs on a page).
+        const instId = req.instanceId;
+        let cached = instId != null ? flashInstances.get(Number(instId)) : null;
+        if (cached && cached.ownerElement) {
+          patchFlashElement(cached.ownerElement);
+          return { value: encodeJsValue(cached.ownerElement) };
+        }
+        // Fallback: query the DOM (single-instance or first load).
+        let elem = instId != null
+          ? document.querySelector(
+              'object[data-flash-player="' + instId + '"], ' +
+              'embed[data-flash-player="' + instId + '"]'
+            )
+          : null;
+        if (!elem) elem = document.querySelector(
           "object[data-flash-player], embed[data-flash-player]"
         );
         if (!elem) elem = document.querySelector("[data-flash-player]");
@@ -733,7 +806,6 @@
           return { value: { type: "undefined" } };
         }
         const container = resolveFlashContainer(elem);
-        // Ensure CallFunction is available and prototype is patched.
         patchFlashElement(container);
         return { value: encodeJsValue(container) };
       }
@@ -926,11 +998,14 @@
         const enter = !!req.fullscreen;
         try {
           if (enter) {
-            // Target the container div that wraps the canvas (marked by
-            // content.js).  This ensures the canvas and its event listeners
-            // are inside the fullscreened subtree so mouse events keep working.
-            const el = document.querySelector("[data-flash-container]") ||
-                       document.querySelector("embed, object") ||
+            // Prefer the instance canvas so fullscreen targets the rendered
+            // Flash surface instead of a hidden <embed>.
+            const fInstId = req.instanceId;
+            const fCached = fInstId != null ? flashInstances.get(Number(fInstId)) : null;
+            const canvasEl = fInstId != null ? resolveFlashCanvas(fInstId) : null;
+            const el = canvasEl ||
+                       (fCached && fCached.container) ||
+                       document.querySelector("[data-flash-container]") ||
                        document.documentElement;
             if (el.requestFullscreen) {
               el.requestFullscreen();
@@ -962,10 +1037,16 @@
       // ---------------------------------------------------------------
 
       case "cursorLock": {
+        console.log("[flash] cursorLock requested");
         try {
-          // Pointer lock is only allowed from fullscreen or with a user gesture.
-          const el = document.querySelector("[data-flash-container]") ||
-                     document.querySelector("canvas") ||
+          // Prefer the instance canvas so pointer lock is bound to the
+          // rendered Flash surface.
+          const cInstId = req.instanceId;
+          const cCached = cInstId != null ? flashInstances.get(Number(cInstId)) : null;
+          const canvasEl = cInstId != null ? resolveFlashCanvas(cInstId) : null;
+          const el = canvasEl ||
+                     (cCached && cCached.container) ||
+                     document.querySelector("[data-flash-container]") ||
                      document.documentElement;
           if (el.requestPointerLock) {
             el.requestPointerLock();
