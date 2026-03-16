@@ -83,7 +83,7 @@ impl Drop for VideoCaptureResource {
         // NOTE: We are called from ResourceManager::release() which holds
         // the resource lock.  The pump thread also acquires that lock in
         // its frame loop.  To avoid a deadlock we must NOT join here.
-        // Instead we just signal and detach — the pump thread will observe
+        // Instead we just signal and detach - the pump thread will observe
         // `capturing == false`, call OnStatus(STOPPED), release the buffer
         // resources, and exit on its own.
         self.capturing.store(false, Ordering::SeqCst);
@@ -139,7 +139,7 @@ fn get_main_poster() -> Option<MessageLoopPoster> {
 }
 
 // ---------------------------------------------------------------------------
-// PPP_VideoCapture_Dev vtable — lazily queried from the plugin
+// PPP_VideoCapture_Dev vtable - lazily queried from the plugin
 // ---------------------------------------------------------------------------
 
 fn get_ppp_video_capture() -> Option<&'static PPP_VideoCapture_Dev_0_1> {
@@ -158,7 +158,7 @@ fn get_ppp_video_capture() -> Option<&'static PPP_VideoCapture_Dev_0_1> {
 }
 
 // ---------------------------------------------------------------------------
-// Capture pump — background thread that reads from the provider and
+// Capture pump - background thread that reads from the provider and
 // forwards frames to the plugin via PPP_VideoCapture_Dev callbacks.
 // ---------------------------------------------------------------------------
 
@@ -297,7 +297,7 @@ fn capture_pump_loop(ctx: CapturePumpContext) {
                     }
                 }
             } else {
-                // All buffers in use — report pause status.
+                // All buffers in use - report pause status.
                 if let Some(on_status) = ctx.ppp.OnStatus {
                     unsafe {
                         on_status(
@@ -585,7 +585,7 @@ unsafe extern "C" fn start_capture(video_capture: PP_Resource) -> i32 {
     };
 
     // Gather fields from the resource while holding the lock, but do NOT
-    // call PPP callbacks or join threads inside the lock — the plugin
+    // call PPP callbacks or join threads inside the lock - the plugin
     // callback could re-enter PPAPI and try to acquire the same lock.
     let setup = host.resources.with_downcast_mut::<VideoCaptureResource, _>(
         video_capture,
@@ -719,7 +719,7 @@ unsafe extern "C" fn stop_capture(video_capture: PP_Resource) -> i32 {
     //
     // We must NOT join the pump thread here because Flash can (and does)
     // call StopCapture from within a PPP callback (OnBufferReady / OnStatus)
-    // that runs on the pump thread itself — joining the current thread
+    // that runs on the pump thread itself - joining the current thread
     // would deadlock instantly.  Instead we just set the flag; the pump
     // thread will see `capturing == false`, call OnStatus(STOPPED), release
     // its buffer refs, and exit on its own.

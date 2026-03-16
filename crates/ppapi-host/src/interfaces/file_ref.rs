@@ -57,7 +57,7 @@ impl Drop for FileRefResource {
 }
 
 // ---------------------------------------------------------------------------
-// Public helper — create a file ref from an absolute path (for FileChooser)
+// Public helper - create a file ref from an absolute path (for FileChooser)
 // ---------------------------------------------------------------------------
 
 /// Create a FileRef resource from an unrestricted absolute path.
@@ -188,7 +188,7 @@ unsafe extern "C" fn get_name(file_ref: PP_Resource) -> PP_Var {
 }
 
 unsafe extern "C" fn get_path(file_ref: PP_Resource) -> PP_Var {
-    tracing::debug!("PPB_FileRef::GetPath({})", file_ref);  
+    tracing::debug!("PPB_FileRef::GetPath({})", file_ref);
     let Some(host) = HOST.get() else { return PP_Var::undefined() };
 
     let path = host.resources.with_downcast::<FileRefResource, _>(file_ref, |fr| {
@@ -231,7 +231,7 @@ unsafe extern "C" fn make_directory_1_2(
     _make_directory_flags: i32,
     _callback: PP_CompletionCallback,
 ) -> i32 {
-    tracing::debug!("PPB_FileRef::MakeDirectory(1.2) — not supported");
+    tracing::debug!("PPB_FileRef::MakeDirectory(1.2) - not supported");
     PP_ERROR_FAILED
 }
 
@@ -240,7 +240,7 @@ unsafe extern "C" fn make_directory_1_1(
     _make_ancestors: PP_Bool,
     _callback: PP_CompletionCallback,
 ) -> i32 {
-    tracing::debug!("PPB_FileRef::MakeDirectory(1.1) — not supported");
+    tracing::debug!("PPB_FileRef::MakeDirectory(1.1) - not supported");
     PP_ERROR_FAILED
 }
 
@@ -250,7 +250,7 @@ unsafe extern "C" fn touch(
     _last_modified_time: PP_Time,
     _callback: PP_CompletionCallback,
 ) -> i32 {
-    tracing::debug!("PPB_FileRef::Touch — not supported");
+    tracing::debug!("PPB_FileRef::Touch - not supported");
     PP_ERROR_FAILED
 }
 
@@ -258,7 +258,7 @@ unsafe extern "C" fn delete(
     _file_ref: PP_Resource,
     _callback: PP_CompletionCallback,
 ) -> i32 {
-    tracing::debug!("PPB_FileRef::Delete — not supported");
+    tracing::debug!("PPB_FileRef::Delete - not supported");
     PP_ERROR_FAILED
 }
 
@@ -267,7 +267,7 @@ unsafe extern "C" fn rename(
     _new_file_ref: PP_Resource,
     _callback: PP_CompletionCallback,
 ) -> i32 {
-    tracing::debug!("PPB_FileRef::Rename — not supported");
+    tracing::debug!("PPB_FileRef::Rename - not supported");
     PP_ERROR_FAILED
 }
 
@@ -323,6 +323,6 @@ unsafe extern "C" fn read_directory_entries(
     _output: PP_ArrayOutput,
     _callback: PP_CompletionCallback,
 ) -> i32 {
-    tracing::debug!("PPB_FileRef::ReadDirectoryEntries — not supported");
+    tracing::debug!("PPB_FileRef::ReadDirectoryEntries - not supported");
     PP_ERROR_FAILED
 }

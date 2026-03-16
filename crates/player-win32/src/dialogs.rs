@@ -1,4 +1,4 @@
-//! Win32 dialog providers — implements `player_ui_traits::DialogProvider` and
+//! Win32 dialog providers - implements `player_ui_traits::DialogProvider` and
 //! `player_ui_traits::FileChooserProvider` using native Win32 message boxes
 //! and file dialogs.
 

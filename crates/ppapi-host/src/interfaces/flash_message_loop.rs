@@ -11,7 +11,7 @@
 //!
 //! The main-thread path uses `tokio::runtime::Handle::block_on` to
 //! await a `Notify` signal from the message loop, which gives instant
-//! wakeup when callbacks are posted — no polling or arbitrary timeouts.
+//! wakeup when callbacks are posted - no polling or arbitrary timeouts.
 
 use crate::interface_registry::InterfaceRegistry;
 use crate::resource::Resource;
@@ -220,13 +220,13 @@ unsafe extern "C" fn run(flash_message_loop: PP_Resource) -> i32 {
                     ).await;
                 });
             } else {
-                // No notify handle — fall back to a brief sleep.
+                // No notify handle - fall back to a brief sleep.
                 std::thread::sleep(Duration::from_millis(4));
             }
         }
     } else {
         // --- Background-thread path: block on condvar ---
-        // No timeout — waits until Quit() is called or the resource is
+        // No timeout - waits until Quit() is called or the resource is
         // dropped (which sets quit + notifies the condvar).
         let mut guard = lock.lock().unwrap();
         while !guard.quit {

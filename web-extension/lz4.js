@@ -1,5 +1,5 @@
 /**
- * LZ4 compression/decompression — self-contained content-script build.
+ * LZ4 compression/decompression - self-contained content-script build.
  *
  * Exposes two global functions:
  *   lz4_compress(input: Uint8Array) → Uint8Array
@@ -205,7 +205,7 @@ nVsay1tZW1vcnktb3B0KxZjYWxsLWluZGlyZWN0LW92ZXJsb25n");
 const wasmModule = new WebAssembly.Module(bytes);
 
 // Build the import object. The __wbindgen_* functions close over `wasm`
-// which is assigned immediately after instantiation — this is safe because
+// which is assigned immediately after instantiation - this is safe because
 // the functions are only *called* from within WASM exports, never during
 // instantiation itself.
 let wasm;

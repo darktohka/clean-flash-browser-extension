@@ -1,4 +1,4 @@
-//! Egui dialog provider — implements `player_ui_traits::DialogProvider` using
+//! Egui dialog provider - implements `player_ui_traits::DialogProvider` using
 //! egui modal windows.
 //!
 //! Because egui is immediate-mode, dialogs are rendered in the main `update()`
@@ -219,13 +219,13 @@ pub fn draw_dialog(dialog: &mut ActiveDialog, ctx: &egui::Context) -> Option<Dia
 }
 
 // ===========================================================================
-// File chooser provider — re-exported from player-ui-traits (rfd feature)
+// File chooser provider - re-exported from player-ui-traits (rfd feature)
 // ===========================================================================
 
 pub use player_ui_traits::RfdFileChooserProvider;
 
 // ===========================================================================
-// Egui fullscreen provider — uses eframe ViewportCommand
+// Egui fullscreen provider - uses eframe ViewportCommand
 // ===========================================================================
 
 /// Fullscreen provider that toggles eframe's native fullscreen mode via
@@ -275,7 +275,7 @@ impl player_ui_traits::FullscreenProvider for EguiFullscreenProvider {
 }
 
 // ===========================================================================
-// Egui context menu provider — Flash right-click menus
+// Egui context menu provider - Flash right-click menus
 // ===========================================================================
 
 /// Shared state for pending context menu requests between the PPAPI thread
@@ -463,7 +463,7 @@ fn draw_menu_items(
 }
 
 // ===========================================================================
-// Print provider — captures the current frame and prints via OS facilities
+// Print provider - captures the current frame and prints via OS facilities
 // ===========================================================================
 
 /// Provides printing for the desktop egui player.

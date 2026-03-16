@@ -16,7 +16,7 @@ use std::sync::Arc;
 use super::super::HOST;
 
 // ---------------------------------------------------------------------------
-// Stream handle — either native (cpal) or provider-based
+// Stream handle - either native (cpal) or provider-based
 // ---------------------------------------------------------------------------
 
 /// Handle to an active audio stream.
@@ -119,13 +119,13 @@ pub unsafe fn register(registry: &mut InterfaceRegistry) {
 }
 
 // ---------------------------------------------------------------------------
-// Audio stream helpers (cpal — native OS audio)
+// Audio stream helpers (cpal - native OS audio)
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "audio-cpal")]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
-/// Playback callback context — passed to the cpal audio thread.
+/// Playback callback context - passed to the cpal audio thread.
 #[cfg(feature = "audio-cpal")]
 struct PlaybackContext {
     callback_1_0: PPB_Audio_Callback_1_0,
@@ -261,7 +261,7 @@ struct ProviderPumpContext {
 // SAFETY: user_data is plugin-managed and expected to be thread-safe.
 unsafe impl Send for ProviderPumpContext {}
 
-/// Audio pump loop — runs on a background thread, periodically calls the
+/// Audio pump loop - runs on a background thread, periodically calls the
 /// plugin's audio callback and forwards the resulting PCM data to the
 /// [`AudioProvider`].
 fn audio_provider_pump(ctx: ProviderPumpContext) {

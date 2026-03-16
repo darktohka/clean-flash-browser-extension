@@ -4,14 +4,12 @@
  * Detects <object> and <embed> elements that reference Flash content
  * and replaces them with a <canvas> driven by the native Flash Player
  * host via Native Messaging.
- *
- * Inspired by the ppMutationObserver pattern in cheerpflash/cheerpx/pp.js.
  */
 
 "use strict";
 
 // ---------------------------------------------------------------------------
-// Debug mode — set to true to show a live statistics panel below each canvas.
+// Debug mode - set to true to show a live statistics panel below each canvas.
 // ---------------------------------------------------------------------------
 const FLASH_DEBUG = false;
 const LOG_HOST_EVENTS = false;
@@ -33,7 +31,7 @@ function getFlashParams(elem) {
   const tag = elem.tagName;
 
   if (tag === "OBJECT") {
-    // ActiveX classid check — only accept Flash classid.
+    // ActiveX classid check - only accept Flash classid.
     const classid = elem.getAttribute("classid");
     if (classid && classid.toLowerCase() !== "clsid:d27cdb6e-ae6d-11cf-96b8-444553540000") {
       return null;
@@ -61,7 +59,7 @@ function getFlashParams(elem) {
           params[name.toLowerCase()] = value;
         }
       } else if (c.tagName === "EMBED") {
-        // Merge attributes from nested <embed> fallback — fill in any
+        // Merge attributes from nested <embed> fallback - fill in any
         // keys not already set by <object> attributes or <param> tags.
         const embedAttrs = c.attributes;
         for (let j = 0; j < embedAttrs.length; j++) {
@@ -145,11 +143,11 @@ function resolveSwfUrl(src) {
 /** Unique instance counter for this content script. */
 let nextInstanceId = 0;
 
-/** Active native messaging port — used by the ExternalInterface bridge. */
+/** Active native messaging port - used by the ExternalInterface bridge. */
 let activePort = null;
 
 // ---------------------------------------------------------------------------
-// QOI WASM decoder — loaded once, reused for every frame.
+// QOI WASM decoder - loaded once, reused for every frame.
 // ---------------------------------------------------------------------------
 
 /** @type {Function|null} decode(data_len) → output_ptr */
@@ -445,7 +443,7 @@ function createDebugStatsPanel(instanceId, container, anchorEl) {
 
   // Insert right after anchorEl (defaults to container).
   // For <object> elements pass the <object> itself so the panel lands
-  // outside it — otherwise it ends up inside the collapsed object and
+  // outside it - otherwise it ends up inside the collapsed object and
   // has zero height.
   const insertAfter = anchorEl || container;
   if (insertAfter.nextSibling) {
@@ -484,7 +482,7 @@ function replaceFlashElement(elem) {
   canvas.style.border = "0";
 
   // Inherit dimensions from the original element.
-  // Detect percentage / non-pixel values — parseInt("100%") wrongly gives 100.
+  // Detect percentage / non-pixel values - parseInt("100%") wrongly gives 100.
   const widthRaw = elem.getAttribute("width") || elem.style.width || "";
   const heightRaw = elem.getAttribute("height") || elem.style.height || "";
   const isRelativeWidth = widthRaw && !/^\d+$/.test(widthRaw.trim()) && !/^\d+px$/i.test(widthRaw.trim());
@@ -497,7 +495,7 @@ function replaceFlashElement(elem) {
   canvas.style.height = elem.style.height || cssHeight;
 
   // For the internal canvas buffer, use absolute pixels.  When the size is
-  // relative we pick a sensible default — we will correct it after DOM
+  // relative we pick a sensible default - we will correct it after DOM
   // insertion once the actual rendered size can be measured.
   const origWidth = isRelativeWidth ? 550 : (parseInt(widthRaw, 10) || 550);
   const origHeight = isRelativeHeight ? 400 : (parseInt(heightRaw, 10) || 400);
@@ -718,7 +716,7 @@ setInterval(() => {
   }
 }, 250);
 
-// Fullscreen changes — resize the canvas to fill the screen on enter, and
+// Fullscreen changes - resize the canvas to fill the screen on enter, and
 // restore its original size on exit.
 function handleFullscreenChange() {
   const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
@@ -730,7 +728,7 @@ function handleFullscreenChange() {
       meta._preFsContainerH = container.style.height;
       meta._preFsCanvasW = canvas.style.width;
       meta._preFsCanvasH = canvas.style.height;
-      // Entering fullscreen — expand container and canvas to screen size.
+      // Entering fullscreen - expand container and canvas to screen size.
       container.style.width = "100vw";
       container.style.height = "100vh";
       container.style.backgroundColor = "#000";
@@ -745,7 +743,7 @@ function handleFullscreenChange() {
         meta.port.postMessage({ type: "resize", width: w, height: h, ...collectViewInfo(canvas) });
       }
     } else if (!fsEl && meta._preFsContainerW != null) {
-      // Exiting fullscreen — restore original dimensions.
+      // Exiting fullscreen - restore original dimensions.
       container.style.width = meta._preFsContainerW;
       container.style.height = meta._preFsContainerH;
       container.style.backgroundColor = "";
@@ -764,7 +762,7 @@ function handleFullscreenChange() {
 document.addEventListener("fullscreenchange", handleFullscreenChange);
 document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
 
-// Pointer lock changes — notify the native host so Flash knows if the
+// Pointer lock changes - notify the native host so Flash knows if the
 // cursor was locked or unlocked (e.g. user pressed Escape).
 function handlePointerLockChange() {
   const locked = !!document.pointerLockElement;
@@ -789,7 +787,7 @@ async function startInstance(instanceId, meta) {
 
   // Ensure the QOI WASM decoder is ready before we tell the native host to
   // start sending frames.  Without this, early frames arrive before
-  // _qoiDecode is set and are silently dropped — leaving a black screen
+  // _qoiDecode is set and are silently dropped - leaving a black screen
   // until something (resize, devtools) triggers a re-render.
   await _qoiReady;
 
@@ -1064,7 +1062,7 @@ const _hasToBase64 = typeof Uint8Array.prototype.toBase64 === "function";
  * Decode a base64 string into a Uint8Array.
  *
  * Fast path: native Uint8Array.fromBase64 (Chrome 128+, all-native, ~5× faster).
- * Fallback : pure-JS lookup-table decoder — skips the intermediate binary string
+ * Fallback : pure-JS lookup-table decoder - skips the intermediate binary string
  *            that atob() creates and processes 4 input chars → 3 output bytes per
  *            iteration instead of 1 byte per iteration.
  */
@@ -1102,11 +1100,11 @@ function uint8ToB64(bytes) {
   return btoa(parts.join(""));
 }
 
-/** Shared TextDecoder — avoids allocating a new one on every message. */
+/** Shared TextDecoder - avoids allocating a new one on every message. */
 const _textDecoder = new TextDecoder();
 
 // ---------------------------------------------------------------------------
-// Web Audio playback — receives PCM from native host, plays via AudioContext
+// Web Audio playback - receives PCM from native host, plays via AudioContext
 //
 // Uses an adaptive jitter buffer: tracks the variance of inter-arrival
 // times and keeps enough scheduling headroom to absorb spikes without
@@ -1130,7 +1128,7 @@ const audioStreams = new Map();
 
 /** Minimum scheduling headroom (seconds). */
 const MIN_AHEAD = 0.04;
-/** Maximum scheduling headroom (seconds) — caps latency. */
+/** Maximum scheduling headroom (seconds) - caps latency. */
 const MAX_AHEAD = 0.25;
 /** EMA smoothing factor for jitter measurement (0 < α < 1). */
 const JITTER_ALPHA = 0.05;
@@ -1216,7 +1214,7 @@ function audioWriteSamples(streamId, pcmBytes) {
   const ahead = stream.targetAhead;
 
   if (stream.nextTime <= now) {
-    // First buffer after init, resume, or an underrun — schedule from
+    // First buffer after init, resume, or an underrun - schedule from
     // `now + targetAhead` to build up a safe cushion before playback
     // reaches the scheduled point.
     stream.nextTime = now + ahead;
@@ -1267,7 +1265,7 @@ function audioClose(streamId) {
 }
 
 // ---------------------------------------------------------------------------
-// Web Audio input capture — uses getUserMedia + ScriptProcessorNode to
+// Web Audio input capture - uses getUserMedia + ScriptProcessorNode to
 // capture mono i16 PCM from the microphone and send it back to the host.
 // ---------------------------------------------------------------------------
 
@@ -1439,7 +1437,7 @@ function audioInputClose(streamId) {
 }
 
 // ---------------------------------------------------------------------------
-// Web Video Capture — uses getUserMedia({ video }) + canvas to capture
+// Web Video Capture - uses getUserMedia({ video }) + canvas to capture
 // video frames and send I420 YUV data back to the host.
 // ---------------------------------------------------------------------------
 
@@ -1948,7 +1946,7 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
       const height = readU32(dv, 13);
       const frameW = readU32(dv, 17);
       const frameH = readU32(dv, 21);
-      // stride at offset 25 — ignored for QOI
+      // stride at offset 25 - ignored for QOI
       const qoiOffset = 29; // 1 + 7*4
       const qoiLen = bytes.length - qoiOffset;
 
@@ -1973,7 +1971,7 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
         bytes.subarray(qoiOffset, qoiOffset + qoiLen),
       );
 
-      // Decode — returns pointer to [u32 width, u32 height, ...RGBA pixels].
+      // Decode - returns pointer to [u32 width, u32 height, ...RGBA pixels].
       const ptr = _qoiDecode(qoiLen);
       const pixelLen = width * height * 4;
       const rgba = new Uint8ClampedArray(_qoiMemory.buffer, ptr + 8, pixelLen);
@@ -1992,7 +1990,7 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
       const height = readU32(dv, 6);
       const stateNames = ["idle", "loading", "running", "error"];
       const stateName = stateNames[code] || "unknown";
-      if (code === 2) { // running — player has booted, send view state immediately
+      if (code === 2) { // running - player has booted, send view state immediately
         console.log(`[Flash Player] State: ${stateName}, view: ${width}x${height}`);
         console.log(`[Flash Player] View info:`, collectViewInfo(canvas));
         port.postMessage({ type: "viewUpdate", ...collectViewInfo(canvas) });
@@ -2047,7 +2045,7 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
         } else if (target === "_parent") {
           (window.parent || window).location.href = url;
         } else {
-          // Named target — try window.open with that name.
+          // Named target - try window.open with that name.
           window.open(url, target);
         }
       } catch (e) {
@@ -2169,7 +2167,7 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
     }
 
     case TAG_PRINT: {
-      // 1 byte tag, no payload — print the Flash canvas content only.
+      // 1 byte tag, no payload - print the Flash canvas content only.
       // Use a hidden iframe to avoid popup-blocker restrictions (this
       // message arrives from native messaging, not a user gesture).
       console.log("[Flash Player] Print requested by Flash content");
@@ -2260,7 +2258,7 @@ function getCommElement() {
  * Send a scripting request to the MAIN-world page script and return
  * the JSON-parsed response synchronously.
  *
- * Works because `dispatchEvent` is synchronous — the page script's
+ * Works because `dispatchEvent` is synchronous - the page script's
  * listener runs in the same call stack, writes the response attribute,
  * and then control returns here.
  */
@@ -2346,7 +2344,7 @@ async function handleScriptRequest(req, port) {
           sendScriptResponse(port, id, { type: "string", v: text });
           return;
         }
-      } catch (_) { /* permission denied or not focused — fall through */ }
+      } catch (_) { /* permission denied or not focused - fall through */ }
     }
     if (fmt === "html" && navigator.clipboard && navigator.clipboard.read) {
       try {
@@ -2380,7 +2378,7 @@ async function handleScriptRequest(req, port) {
     // Also write via the async Clipboard API (doesn't steal focus).
     const text = req.plaintext || req.html || "";
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).catch(() => {});
+      navigator.clipboard.writeText(text).catch(() => { });
     }
     if (resp && resp.value) {
       sendScriptResponse(port, id, resp.value);
@@ -2517,7 +2515,7 @@ function getModifiers(e) {
  * Map a DOM MouseEvent.button to our protocol button index.
  */
 function mapButton(e) {
-  // DOM: 0=left, 1=middle, 2=right — matches our protocol.
+  // DOM: 0=left, 1=middle, 2=right - matches our protocol.
   return e.button;
 }
 
@@ -2609,7 +2607,7 @@ function bindInputEvents(canvas, port, meta) {
 
   canvas.addEventListener("keydown", (e) => {
     e.preventDefault();
-    // Send RAWKEYDOWN — matches Chrome's PPAPI behaviour.
+    // Send RAWKEYDOWN - matches Chrome's PPAPI behaviour.
     // PepperFlash expects RAWKEYDOWN (type 6), not KEYDOWN (type 7).
     port.postMessage({
       type: "rawkeydown",
@@ -2761,7 +2759,7 @@ function ppCursorToCss(cursorType) {
 }
 
 // ---------------------------------------------------------------------------
-// Mutation Observer — scan and watch for Flash elements
+// Mutation Observer - scan and watch for Flash elements
 // ---------------------------------------------------------------------------
 
 /**
@@ -2797,7 +2795,7 @@ function flashMutationObserver(mutations) {
 // ---------------------------------------------------------------------------
 
 /**
- * Tear down all active Flash instances — disconnects ports so the
+ * Tear down all active Flash instances - disconnects ports so the
  * background service worker shuts down the native hosts.
  * Also closes any active Web Audio streams.
  */
@@ -2874,7 +2872,7 @@ window.addEventListener("pagehide", () => {
 
 window.addEventListener("pageshow", (e) => {
   if (e.persisted) {
-    // Page was restored from bfcache — ports are dead, restart everything.
+    // Page was restored from bfcache - ports are dead, restart everything.
     navigatingAway = false;
     restartAllInstances();
   }

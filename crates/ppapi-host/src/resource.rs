@@ -1,4 +1,4 @@
-//! Resource manager — ID-based table for browser-side resources.
+//! Resource manager - ID-based table for browser-side resources.
 //!
 //! Each PPB resource (Graphics2D, ImageData, Audio, URLLoader, etc.) is stored
 //! as a `Box<dyn Resource>` and assigned a unique `PP_Resource` integer handle.
@@ -17,10 +17,10 @@ pub trait Resource: Any + Send + Sync {
     /// The PPAPI interface name, e.g. "PPB_Graphics2D".
     fn resource_type(&self) -> &'static str;
 
-    /// Downcast helper — returns self as `&dyn Any`.
+    /// Downcast helper - returns self as `&dyn Any`.
     fn as_any(&self) -> &dyn Any;
 
-    /// Downcast helper — returns self as `&mut dyn Any`.
+    /// Downcast helper - returns self as `&mut dyn Any`.
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 

@@ -88,7 +88,7 @@ unsafe extern "C" fn utf16_to_char_set(
         return buf as *mut c_char;
     }
 
-    // Determine target charset — we only fully support UTF-8.
+    // Determine target charset - we only fully support UTF-8.
     // For other charsets, we still convert to UTF-8 (best effort).
     let _charset = if !output_char_set.is_null() {
         unsafe { CStr::from_ptr(output_char_set) }
@@ -115,7 +115,7 @@ unsafe extern "C" fn utf16_to_char_set(
                 .collect()
         }
         _ => {
-            // PP_CHARSET_CONVERSIONERROR_SUBSTITUTE — replace with '?'.
+            // PP_CHARSET_CONVERSIONERROR_SUBSTITUTE - replace with '?'.
             char::decode_utf16(utf16_slice.iter().copied())
                 .map(|r| r.unwrap_or('?'))
                 .collect()
@@ -194,7 +194,7 @@ unsafe extern "C" fn char_set_to_utf16(
                 .filter(|c| *c != '\u{FFFD}')
                 .collect(),
             _ => {
-                // SUBSTITUTE — from_utf8_lossy already uses U+FFFD, but the
+                // SUBSTITUTE - from_utf8_lossy already uses U+FFFD, but the
                 // spec says use '?' for non-Unicode charsets. We'll use '?'.
                 let mut result = String::new();
                 let mut i = 0;
@@ -246,9 +246,8 @@ unsafe extern "C" fn get_default_char_set(_instance: PP_Instance) -> PP_Var {
         return PP_Var::undefined();
     };
 
-    // Determine encoding from LANG environment variable, matching
-    // freshplayerplugin's lookup table. Modern Linux is almost always UTF-8,
-    // but Flash may query the "legacy" charset for clipboard operations.
+    // Determine encoding from LANG environment variable.
+    // TODO: use the player-ui-traits API to query the system charset instead of relying on LANG parsing.
     let lang = std::env::var("LANG").unwrap_or_else(|_| "en".to_string());
     let lang_prefix = extract_lang_prefix(&lang);
 
@@ -277,7 +276,7 @@ unsafe extern "C" fn get_default_char_set(_instance: PP_Instance) -> PP_Var {
 /// Extract the relevant locale prefix from a LANG string like "en_US.UTF-8".
 /// For Chinese locales, keep the country code (zh-CN, zh-TW).
 fn extract_lang_prefix(locale: &str) -> String {
-    // Handle Chinese specially — need the country part.
+    // Handle Chinese specially - need the country part.
     if locale.starts_with("zh") {
         let normalized = locale.replace('_', "-");
         // Cut at '.'

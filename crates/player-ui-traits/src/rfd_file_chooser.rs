@@ -1,4 +1,4 @@
-//! `rfd`-based file chooser provider — implements [`FileChooserProvider`] using
+//! `rfd`-based file chooser provider - implements [`FileChooserProvider`] using
 //! native OS file dialogs via the `rfd` crate.
 //!
 //! Enabled by the `rfd` Cargo feature on `player-ui-traits`.  Used by both the
@@ -148,7 +148,7 @@ fn parse_accept_types(accept_types: &str) -> Vec<String> {
             // Already an extension like ".swf"
             extensions.push(part.trim_start_matches('.').to_string());
         } else if part.contains('/') {
-            // MIME type — map common ones to extensions
+            // MIME type - map common ones to extensions
             match part {
                 "image/*" => extensions.extend(["png", "jpg", "jpeg", "gif", "bmp", "webp"].iter().map(|s| s.to_string())),
                 "image/png" => extensions.push("png".to_string()),
@@ -161,7 +161,7 @@ fn parse_accept_types(accept_types: &str) -> Vec<String> {
                 "video/*" => extensions.extend(["mp4", "webm", "avi", "mkv", "flv"].iter().map(|s| s.to_string())),
                 "audio/*" => extensions.extend(["mp3", "wav", "ogg", "flac", "aac"].iter().map(|s| s.to_string())),
                 _ => {
-                    // Unknown MIME type — take the subtype as extension
+                    // Unknown MIME type - take the subtype as extension
                     if let Some(subtype) = part.split('/').nth(1) {
                         if subtype != "*" {
                             extensions.push(subtype.to_string());

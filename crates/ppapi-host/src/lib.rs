@@ -61,7 +61,7 @@ pub fn tokio_runtime() -> &'static tokio::runtime::Runtime {
 }
 
 // ===========================================================================
-// Host callbacks — trait for the UI/player layer to receive events from
+// Host callbacks - trait for the UI/player layer to receive events from
 // the PPAPI host (frame ready, URL load request, etc.)
 // ===========================================================================
 
@@ -69,7 +69,7 @@ pub fn tokio_runtime() -> &'static tokio::runtime::Runtime {
 /// These callbacks are invoked from the PPAPI interface implementations
 /// when the plugin does something that needs external handling.
 pub trait HostCallbacks: Send + Sync {
-    /// Called when PPB_Graphics2D::Flush is called — a new frame is ready.
+    /// Called when PPB_Graphics2D::Flush is called - a new frame is ready.
     /// `pixels` is the full BGRA_PREMUL buffer, row-major, `stride` bytes per row.
     /// `dirty_*` describes the sub-region that changed since the last flush.
     fn on_flush(&self, graphics_2d: PP_Resource, pixels: &[u8],
@@ -107,7 +107,7 @@ pub trait HostCallbacks: Send + Sync {
 }
 
 // ===========================================================================
-// Global host state — singleton that all interface implementations access
+// Global host state - singleton that all interface implementations access
 // ===========================================================================
 
 /// Global host state singleton. Initialized once by `HostState::init()`.

@@ -15,7 +15,7 @@ use crate::HOST;
 // Resource
 // ---------------------------------------------------------------------------
 
-/// IME input event resource — stores composition text, segments, and selection.
+/// IME input event resource - stores composition text, segments, and selection.
 pub struct IMEInputEventResource {
     pub instance: PP_Instance,
     pub event_type: PP_InputEvent_Type,

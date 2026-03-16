@@ -9,7 +9,7 @@ use player_ui_traits::{ClipboardFormat, ClipboardProvider};
 /// Cross-platform clipboard provider backed by arboard.
 ///
 /// arboard's `Clipboard` is not `Send`/`Sync`, so we create a new instance
-/// for each operation.  This is cheap — it just opens the OS clipboard
+/// for each operation.  This is cheap - it just opens the OS clipboard
 /// handle, does the operation, and closes it.
 pub struct ArboardClipboardProvider {
     /// Serialize all clipboard access through a mutex so we never have
@@ -93,7 +93,7 @@ impl ClipboardProvider for ArboardClipboardProvider {
                 let text = String::from_utf8_lossy(p);
                 clipboard.set_text(&*text).is_ok()
             }
-            _ => true, // nothing writable (e.g. only RTF) — vacuous success
+            _ => true, // nothing writable (e.g. only RTF) - vacuous success
         }
     }
 }

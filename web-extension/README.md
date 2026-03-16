@@ -12,11 +12,11 @@ A Chrome/Firefox extension that detects Flash content (`<object>` and `<embed>` 
 └──────────────┘      └──────────────────┘      └─────────────────────┘
 ```
 
-- **content.js** — Injected into every page. Uses a `MutationObserver` to find Flash `<object>`/`<embed>` elements and replaces them with a `<canvas>`. Input events on the canvas are forwarded through the background worker to the native host. Frame updates (dirty subregions only) are drawn onto the canvas.
+- **content.js** - Injected into every page. Uses a `MutationObserver` to find Flash `<object>`/`<embed>` elements and replaces them with a `<canvas>`. Input events on the canvas are forwarded through the background worker to the native host. Frame updates (dirty subregions only) are drawn onto the canvas.
 
-- **background.js** — Service worker that manages the Native Messaging connection to the `flash-player-host` binary. Bridges messages between content scripts and the native host.
+- **background.js** - Service worker that manages the Native Messaging connection to the `flash-player-host` binary. Bridges messages between content scripts and the native host.
 
-- **flash-player-host** — The Rust binary (`player-web` crate) that hosts the PepperFlash PPAPI plugin. Communicates via the Native Messaging protocol (length-prefixed JSON on stdin/stdout).
+- **flash-player-host** - The Rust binary (`player-web` crate) that hosts the PepperFlash PPAPI plugin. Communicates via the Native Messaging protocol (length-prefixed JSON on stdin/stdout).
 
 ## Setup
 

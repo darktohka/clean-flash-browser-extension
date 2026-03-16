@@ -14,7 +14,7 @@ use crate::interfaces::url_request_info::URLRequestInfoResource;
 use super::super::HOST;
 
 // ---------------------------------------------------------------------------
-// PPB_Flash;12.6 — 17 functions (includes RunMessageLoop/QuitMessageLoop)
+// PPB_Flash;12.6 - 17 functions (includes RunMessageLoop/QuitMessageLoop)
 // ---------------------------------------------------------------------------
 
 static VTABLE_12_6: PPB_Flash_12_6 = PPB_Flash_12_6 {
@@ -38,7 +38,7 @@ static VTABLE_12_6: PPB_Flash_12_6 = PPB_Flash_12_6 {
 };
 
 // ---------------------------------------------------------------------------
-// PPB_Flash;13.0 — 12 functions (no RunMessageLoop/QuitMessageLoop)
+// PPB_Flash;13.0 - 12 functions (no RunMessageLoop/QuitMessageLoop)
 // ---------------------------------------------------------------------------
 
 static VTABLE_13_0: PPB_Flash_13_0 = PPB_Flash_13_0 {
@@ -57,7 +57,7 @@ static VTABLE_13_0: PPB_Flash_13_0 = PPB_Flash_13_0 {
 };
 
 // ---------------------------------------------------------------------------
-// PPB_Flash;12.5 — 16 functions (12.6 minus EnumerateVideoCaptureDevices)
+// PPB_Flash;12.5 - 16 functions (12.6 minus EnumerateVideoCaptureDevices)
 // ---------------------------------------------------------------------------
 
 static VTABLE_12_5: PPB_Flash_12_5 = PPB_Flash_12_5 {
@@ -80,7 +80,7 @@ static VTABLE_12_5: PPB_Flash_12_5 = PPB_Flash_12_5 {
 };
 
 // ---------------------------------------------------------------------------
-// PPB_Flash;12.4 — 15 functions (12.5 minus SetCrashData)
+// PPB_Flash;12.4 - 15 functions (12.5 minus SetCrashData)
 // ---------------------------------------------------------------------------
 
 static VTABLE_12_4: PPB_Flash_12_4 = PPB_Flash_12_4 {
@@ -117,7 +117,7 @@ pub unsafe fn register(registry: &mut InterfaceRegistry) {
 unsafe extern "C" fn set_instance_always_on_top(_instance: PP_Instance, _on_top: PP_Bool) {
     tracing::debug!("PPB_Flash::SetInstanceAlwaysOnTop(instance={}, on_top={})",
         _instance, _on_top);
-    // No-op — same as freshplayerplugin.
+    // TO-DO: No-op for now
 }
 
 unsafe extern "C" fn draw_glyphs(
@@ -217,7 +217,7 @@ unsafe extern "C" fn get_proxy_for_url(
     let url_debug = if _url.is_null() { std::borrow::Cow::Borrowed("<null>") } else { CStr::from_ptr(_url).to_string_lossy() };
     tracing::debug!("PPB_Flash::GetProxyForURL(instance={}, url={:?})",
         _instance, url_debug);
-    // Return DIRECT (no proxy) — same as a standalone player.
+    // Return DIRECT (no proxy) - same as a standalone player.
     let Some(host) = HOST.get() else {
         return PP_Var::undefined();
     };
@@ -251,7 +251,7 @@ unsafe extern "C" fn navigate(
             tracing::warn!("PPB_Flash::Navigate: no URL found in request_info {}", _request_info);
             return PP_ERROR_BADARGUMENT;
         }
-    }; 
+    };
 
     // Redirect Adobe-hosted informational URLs to the CleanFlash installer.
     let url = match url.as_str() {
@@ -366,7 +366,7 @@ unsafe extern "C" fn get_command_line_args(_module: PP_Module) -> PP_Var {
 
 unsafe extern "C" fn preload_font_win(_logfontw: *const c_void) {
     tracing::debug!("PPB_Flash::PreloadFontWin called (stub)");
-    // Windows-only — no-op on Linux.
+    // Windows-only - no-op on Linux.
 }
 
 unsafe extern "C" fn is_rect_topmost(
@@ -388,7 +388,7 @@ unsafe extern "C" fn invoke_printing(_instance: PP_Instance) -> i32 {
 
 unsafe extern "C" fn update_activity(_instance: PP_Instance) {
     tracing::debug!("PPB_Flash::UpdateActivity(instance={})", _instance);
-    // Screensaver inhibition — no-op for now.
+    // Screensaver inhibition - no-op for now.
 }
 
 unsafe extern "C" fn get_device_id_12_6(_instance: PP_Instance) -> PP_Var {

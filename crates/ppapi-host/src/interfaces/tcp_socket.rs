@@ -118,7 +118,7 @@ fn trace_socket_payload(kind: &str, resource_id: PP_Resource, payload: &[u8]) {
 }
 
 // ---------------------------------------------------------------------------
-// Socket stream — plain TCP or TLS-wrapped
+// Socket stream - plain TCP or TLS-wrapped
 // ---------------------------------------------------------------------------
 
 pub enum SocketStream {
@@ -165,7 +165,7 @@ impl Write for SocketStream {
 
 pub struct TcpSocketResource {
     pub instance: PP_Instance,
-    /// The I/O stream — plain TCP or TLS-wrapped.  Protected by a Mutex
+    /// The I/O stream - plain TCP or TLS-wrapped.  Protected by a Mutex
     /// so background read/write tasks can access it safely (required for
     /// TLS where the connection state cannot be cloned).
     pub stream: Arc<Mutex<Option<SocketStream>>>,
@@ -177,7 +177,7 @@ pub struct TcpSocketResource {
     pub disconnected: bool,
     /// Whether TCP_NODELAY is requested (before or after connect).
     pub no_delay: bool,
-    /// Cancellation token — set to `true` on Disconnect so that
+    /// Cancellation token - set to `true` on Disconnect so that
     /// background threads know they should not fire their callback.
     pub cancel: Arc<AtomicBool>,
     /// Pre-loaded policy response bytes to hand back on the next read.
@@ -262,7 +262,7 @@ unsafe extern "C" fn connect(
     };
 
     // -----------------------------------------------------------------
-    // Port 843 interception — Flash socket-policy master server.
+    // Port 843 interception - Flash socket-policy master server.
     // Instead of connecting to the remote host (which usually has no
     // policy server), immediately pretend we connected and pre-load a
     // permissive policy response so the subsequent Read returns it.
@@ -270,7 +270,7 @@ unsafe extern "C" fn connect(
     if port == 843 {
         tracing::info!(
             "PPB_TCPSocket_Private::Connect: intercepting port 843 policy \
-             request for resource={} — will auto-respond with permissive policy",
+             request for resource={} - will auto-respond with permissive policy",
             tcp_socket
         );
         host.resources
@@ -398,11 +398,11 @@ fn finish_connect(
     cancel: &AtomicBool,
 ) {
     // If the socket was already disconnected / resource freed while
-    // we were connecting, do NOT fire the callback — the plugin has
+    // we were connecting, do NOT fire the callback - the plugin has
     // already cleaned up and the user_data pointer may be stale.
     if cancel.load(Ordering::Acquire) {
         tracing::debug!(
-            "PPB_TCPSocket_Private: connect finished for cancelled resource {} — dropping callback",
+            "PPB_TCPSocket_Private: connect finished for cancelled resource {} - dropping callback",
             resource_id
         );
         return;
@@ -474,7 +474,7 @@ unsafe extern "C" fn get_remote_address(
 }
 
 // ---------------------------------------------------------------------------
-// TLS support — rustls
+// TLS support - rustls
 // ---------------------------------------------------------------------------
 
 /// Returns a shared `ClientConfig` with Mozilla root certificates.
@@ -711,7 +711,7 @@ unsafe extern "C" fn read(
     }
 
     // -----------------------------------------------------------------
-    // Normal read path — lock the stream and read on a bg thread.
+    // Normal read path - lock the stream and read on a bg thread.
     // -----------------------------------------------------------------
     let Some((stream_arc, cancel)) = host
         .resources
@@ -726,7 +726,7 @@ unsafe extern "C" fn read(
     let max_read = bytes_to_read.min(1024 * 1024) as usize;
     // Carry the plugin buffer address as a usize so the closure is Send.
     // We only use it *after* the read completes, right before posting the
-    // callback — at which point the PPAPI contract guarantees the buffer
+    // callback - at which point the PPAPI contract guarantees the buffer
     // is still valid.
     let buf_addr = buffer as usize;
     let cb = callback;
@@ -812,7 +812,7 @@ unsafe extern "C" fn read(
                 ReadPoll::Retry => {
                     if cancel.load(Ordering::Acquire) {
                         tracing::debug!(
-                            "PPB_TCPSocket_Private::Read(resource={}): cancelled — dropping callback",
+                            "PPB_TCPSocket_Private::Read(resource={}): cancelled - dropping callback",
                             resource_id
                         );
                         return;
@@ -825,7 +825,7 @@ unsafe extern "C" fn read(
 
         if cancel.load(Ordering::Acquire) {
             tracing::debug!(
-                "PPB_TCPSocket_Private::Read(resource={}): cancelled — dropping callback",
+                "PPB_TCPSocket_Private::Read(resource={}): cancelled - dropping callback",
                 resource_id
             );
             return;
@@ -888,7 +888,7 @@ unsafe extern "C" fn write(
     if data == POLICY_FILE_REQUEST {
         tracing::info!(
             "PPB_TCPSocket_Private::Write(resource={}): intercepted policy-file-request \
-             — queuing permissive policy response",
+             - queuing permissive policy response",
             tcp_socket
         );
         host.resources
@@ -950,7 +950,7 @@ unsafe extern "C" fn write(
 
         if cancel.load(Ordering::Acquire) {
             tracing::debug!(
-                "PPB_TCPSocket_Private::Write(resource={}): cancelled — dropping callback",
+                "PPB_TCPSocket_Private::Write(resource={}): cancelled - dropping callback",
                 resource_id
             );
             return;
@@ -976,7 +976,7 @@ unsafe extern "C" fn disconnect(tcp_socket: PP_Resource) {
             // Signal cancellation so background threads drop their
             // callbacks instead of posting stale completions.
             s.cancel.store(true, Ordering::Release);
-            // Shut down the raw TCP stream first — this interrupts any
+            // Shut down the raw TCP stream first - this interrupts any
             // blocking I/O held under the stream lock.
             if let Some(ref tcp) = s.raw_tcp {
                 let _ = tcp.shutdown(Shutdown::Both);

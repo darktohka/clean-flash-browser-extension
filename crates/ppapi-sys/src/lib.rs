@@ -116,7 +116,7 @@ pub const PP_ERROR_MESSAGE_TOO_BIG: i32 = -109;
 pub const PP_ERROR_NAME_NOT_RESOLVED: i32 = -110;
 
 // ===========================================================================
-// PP_Var — variant type
+// PP_Var - variant type
 // ===========================================================================
 
 pub const PP_VARTYPE_UNDEFINED: i32 = 0;
@@ -602,7 +602,7 @@ pub const PP_URLREQUESTPROPERTY_CUSTOMUSERAGENT: i32 = 13;
 pub type PP_URLRequestProperty = i32;
 
 // ===========================================================================
-// PPB_GetInterface — the browser interface lookup function
+// PPB_GetInterface - the browser interface lookup function
 // ===========================================================================
 
 /// Function pointer type for the browser's interface lookup.
@@ -1208,7 +1208,7 @@ pub struct PPB_AudioConfig_1_1 {
 unsafe impl Send for PPB_AudioConfig_1_1 {}
 unsafe impl Sync for PPB_AudioConfig_1_1 {}
 
-/// PPB_AudioConfig;1.0 — same as 1.1 but `RecommendSampleFrameCount` has no
+/// PPB_AudioConfig;1.0 - same as 1.1 but `RecommendSampleFrameCount` has no
 /// `instance` parameter and `RecommendSampleRate` is absent.
 #[repr(C)]
 pub struct PPB_AudioConfig_1_0 {
@@ -1459,7 +1459,7 @@ unsafe impl Send for PPB_TextInput_Dev_0_1 {}
 unsafe impl Sync for PPB_TextInput_Dev_0_1 {}
 
 // ===========================================================================
-// PPB_TextInputController;1.0 (stable — replaces the Dev variants above)
+// PPB_TextInputController;1.0 (stable - replaces the Dev variants above)
 // ===========================================================================
 
 pub const PPB_TEXTINPUTCONTROLLER_INTERFACE_1_0: &str = "PPB_TextInputController;1.0\0";
@@ -1650,7 +1650,7 @@ pub const PP_FLASHLSORESTRICTIONS_NONE: i32 = 1;
 pub const PP_FLASHLSORESTRICTIONS_BLOCK: i32 = 2;
 pub const PP_FLASHLSORESTRICTIONS_IN_MEMORY: i32 = 3;
 
-/// PPB_Flash;12.6 vtable — 17 functions.
+/// PPB_Flash;12.6 vtable - 17 functions.
 /// Includes RunMessageLoop and QuitMessageLoop.
 #[repr(C)]
 pub struct PPB_Flash_12_6 {
@@ -1688,7 +1688,7 @@ pub struct PPB_Flash_12_6 {
 unsafe impl Send for PPB_Flash_12_6 {}
 unsafe impl Sync for PPB_Flash_12_6 {}
 
-/// PPB_Flash;12.5 vtable — 16 functions.
+/// PPB_Flash;12.5 vtable - 16 functions.
 /// Same as 12.6 but without EnumerateVideoCaptureDevices.
 #[repr(C)]
 pub struct PPB_Flash_12_5 {
@@ -1725,7 +1725,7 @@ pub struct PPB_Flash_12_5 {
 unsafe impl Send for PPB_Flash_12_5 {}
 unsafe impl Sync for PPB_Flash_12_5 {}
 
-/// PPB_Flash;12.4 vtable — 15 functions.
+/// PPB_Flash;12.4 vtable - 15 functions.
 /// Same as 12.5 but without SetCrashData.
 #[repr(C)]
 pub struct PPB_Flash_12_4 {
@@ -1761,7 +1761,7 @@ pub struct PPB_Flash_12_4 {
 unsafe impl Send for PPB_Flash_12_4 {}
 unsafe impl Sync for PPB_Flash_12_4 {}
 
-/// PPB_Flash;13.0 vtable — 12 functions.
+/// PPB_Flash;13.0 vtable - 12 functions.
 /// Does NOT have RunMessageLoop / QuitMessageLoop (those were removed).
 #[repr(C)]
 pub struct PPB_Flash_13_0 {
@@ -1831,7 +1831,7 @@ unsafe impl Sync for PPB_Flash_DRM_1_0 {}
 pub const PPB_URLUTIL_DEV_INTERFACE_0_7: &str = "PPB_URLUtil(Dev);0.7\0";
 pub const PPB_URLUTIL_DEV_INTERFACE_0_6: &str = "PPB_URLUtil(Dev);0.6\0";
 
-/// URL components descriptor — returned by PPB_URLUtil methods.
+/// URL components descriptor - returned by PPB_URLUtil methods.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PP_URLComponents_Dev {
@@ -1909,7 +1909,7 @@ unsafe impl Send for PPB_FlashFullscreen_1_0 {}
 unsafe impl Sync for PPB_FlashFullscreen_1_0 {}
 
 // ===========================================================================
-// PPB_FlashFullscreen;0.1 (deprecated — superseded by PPB_Fullscreen;1.0)
+// PPB_FlashFullscreen;0.1 (deprecated - superseded by PPB_Fullscreen;1.0)
 // ===========================================================================
 
 pub const PPB_FLASHFULLSCREEN_INTERFACE_0_1: &str = "PPB_FlashFullscreen;0.1\0";
@@ -2177,7 +2177,7 @@ pub type GLsizeiptr = isize;
 
 pub const PPB_OPENGLES2_INTERFACE_1_0: &str = "PPB_OpenGLES2;1.0\0";
 
-/// PPB_OpenGLES2;1.0 vtable — 142 GL ES 2.0 function pointers.
+/// PPB_OpenGLES2;1.0 vtable - 142 GL ES 2.0 function pointers.
 #[repr(C)]
 pub struct PPB_OpenGLES2_1_0 {
     pub ActiveTexture: Option<unsafe extern "C" fn(context: PP_Resource, texture: GLenum)>,
@@ -2476,7 +2476,7 @@ pub const PP_PRINTSCALINGOPTION_NONE: i32 = 0;
 pub const PP_PRINTSCALINGOPTION_FIT_TO_PRINTABLE_AREA: i32 = 1;
 pub const PP_PRINTSCALINGOPTION_SOURCE_SIZE: i32 = 2;
 
-/// PP_PrintSettings_Dev — 60 bytes (matches C struct).
+/// PP_PrintSettings_Dev - 60 bytes (matches C struct).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PP_PrintSettings_Dev {
@@ -2579,7 +2579,7 @@ pub struct PPB_AudioInput_Dev_0_4 {
 unsafe impl Send for PPB_AudioInput_Dev_0_4 {}
 unsafe impl Sync for PPB_AudioInput_Dev_0_4 {}
 
-/// VTable for `PPB_AudioInput(Dev);0.3` — identical layout to 0.4 but the
+/// VTable for `PPB_AudioInput(Dev);0.3` - identical layout to 0.4 but the
 /// `Open` callback parameter is `PPB_AudioInput_Callback_0_3` (no latency).
 #[repr(C)]
 pub struct PPB_AudioInput_Dev_0_3 {
@@ -2624,7 +2624,7 @@ unsafe impl Sync for PPB_AudioInput_Dev_0_3 {}
 
 pub const PPB_AUDIO_OUTPUT_DEV_INTERFACE_0_1: &str = "PPB_AudioOutput(Dev);0.1\0";
 
-/// Audio output callback — the plugin fills the sample buffer.
+/// Audio output callback - the plugin fills the sample buffer.
 pub type PPB_AudioOutput_Callback = Option<
     unsafe extern "C" fn(
         sample_buffer: *mut c_void,
@@ -2945,7 +2945,7 @@ unsafe impl Send for PPB_CursorControl_Dev_0_4 {}
 unsafe impl Sync for PPB_CursorControl_Dev_0_4 {}
 
 // ===========================================================================
-// PPB_PDF — PDF-specific private interface
+// PPB_PDF - PDF-specific private interface
 // ===========================================================================
 
 pub const PPB_PDF_INTERFACE: &str = "PPB_PDF;1\0";
@@ -3030,7 +3030,7 @@ unsafe impl Send for PPB_PDF {}
 unsafe impl Sync for PPB_PDF {}
 
 // ===========================================================================
-// PPB_VideoCapture(Dev);0.3 — video capture device interface
+// PPB_VideoCapture(Dev);0.3 - video capture device interface
 // ===========================================================================
 
 pub const PPB_VIDEOCAPTURE_DEV_INTERFACE_0_3: &str = "PPB_VideoCapture(Dev);0.3\0";
@@ -3081,7 +3081,7 @@ pub struct PPB_VideoCapture_Dev_0_3 {
 unsafe impl Send for PPB_VideoCapture_Dev_0_3 {}
 unsafe impl Sync for PPB_VideoCapture_Dev_0_3 {}
 
-// PPP_VideoCapture(Dev);0.1 — plugin-side video capture callbacks
+// PPP_VideoCapture(Dev);0.1 - plugin-side video capture callbacks
 pub const PPP_VIDEO_CAPTURE_DEV_INTERFACE_0_1: &str = "PPP_VideoCapture(Dev);0.1\0";
 
 /// Video capture status enum.
@@ -3130,10 +3130,10 @@ unsafe impl Send for PPP_VideoCapture_Dev_0_1 {}
 unsafe impl Sync for PPP_VideoCapture_Dev_0_1 {}
 
 // ===========================================================================
-// PP_NetAddress_Private — opaque network address structure
+// PP_NetAddress_Private - opaque network address structure
 // ===========================================================================
 
-/// Opaque network address — plugins must never access members directly.
+/// Opaque network address - plugins must never access members directly.
 /// The `data` field stores a `sockaddr_in` or `sockaddr_in6` in practice.
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -3728,7 +3728,7 @@ pub struct PPB_UDPSocket_1_0 {
 unsafe impl Send for PPB_UDPSocket_1_0 {}
 unsafe impl Sync for PPB_UDPSocket_1_0 {}
 
-/// PPB_UDPSocket;1.1 — identical layout to 1.0 (behavioural differences only).
+/// PPB_UDPSocket;1.1 - identical layout to 1.0 (behavioural differences only).
 pub type PPB_UDPSocket_1_1 = PPB_UDPSocket_1_0;
 
 #[repr(C)]
@@ -3809,7 +3809,7 @@ pub const PP_MAKEDIRECTORYFLAG_NONE: i32 = 0;
 pub const PP_MAKEDIRECTORYFLAG_WITH_ANCESTORS: i32 = 1 << 0;
 pub const PP_MAKEDIRECTORYFLAG_EXCLUSIVE: i32 = 1 << 1;
 
-/// PPB_FileRef;1.2 vtable — 12 functions.
+/// PPB_FileRef;1.2 vtable - 12 functions.
 #[repr(C)]
 pub struct PPB_FileRef_1_2 {
     pub Create: Option<unsafe extern "C" fn(file_system: PP_Resource, path: *const c_char) -> PP_Resource>,
@@ -3829,7 +3829,7 @@ pub struct PPB_FileRef_1_2 {
 unsafe impl Send for PPB_FileRef_1_2 {}
 unsafe impl Sync for PPB_FileRef_1_2 {}
 
-/// PPB_FileRef;1.1 vtable — 12 functions (MakeDirectory takes PP_Bool).
+/// PPB_FileRef;1.1 vtable - 12 functions (MakeDirectory takes PP_Bool).
 #[repr(C)]
 pub struct PPB_FileRef_1_1 {
     pub Create: Option<unsafe extern "C" fn(file_system: PP_Resource, path: *const c_char) -> PP_Resource>,
@@ -3849,7 +3849,7 @@ pub struct PPB_FileRef_1_1 {
 unsafe impl Send for PPB_FileRef_1_1 {}
 unsafe impl Sync for PPB_FileRef_1_1 {}
 
-/// PPB_FileRef;1.0 vtable — 10 functions (no Query, no ReadDirectoryEntries).
+/// PPB_FileRef;1.0 vtable - 10 functions (no Query, no ReadDirectoryEntries).
 #[repr(C)]
 pub struct PPB_FileRef_1_0 {
     pub Create: Option<unsafe extern "C" fn(file_system: PP_Resource, path: *const c_char) -> PP_Resource>,
@@ -3878,7 +3878,7 @@ pub type PP_FileChooserMode_Dev = i32;
 pub const PP_FILECHOOSERMODE_OPEN: PP_FileChooserMode_Dev = 0;
 pub const PP_FILECHOOSERMODE_OPENMULTIPLE: PP_FileChooserMode_Dev = 1;
 
-/// PPB_FileChooser(Dev);0.6 vtable — 3 functions.
+/// PPB_FileChooser(Dev);0.6 vtable - 3 functions.
 #[repr(C)]
 pub struct PPB_FileChooser_Dev_0_6 {
     pub Create: Option<unsafe extern "C" fn(instance: PP_Instance, mode: PP_FileChooserMode_Dev, accept_types: PP_Var) -> PP_Resource>,
@@ -3889,7 +3889,7 @@ pub struct PPB_FileChooser_Dev_0_6 {
 unsafe impl Send for PPB_FileChooser_Dev_0_6 {}
 unsafe impl Sync for PPB_FileChooser_Dev_0_6 {}
 
-/// PPB_FileChooser(Dev);0.5 vtable — 4 functions (old API).
+/// PPB_FileChooser(Dev);0.5 vtable - 4 functions (old API).
 #[repr(C)]
 pub struct PPB_FileChooser_Dev_0_5 {
     pub Create: Option<unsafe extern "C" fn(instance: PP_Instance, mode: PP_FileChooserMode_Dev, accept_types: PP_Var) -> PP_Resource>,
@@ -3908,7 +3908,7 @@ unsafe impl Sync for PPB_FileChooser_Dev_0_5 {}
 pub const PPB_FILECHOOSER_TRUSTED_INTERFACE_0_5: &str = "PPB_FileChooserTrusted;0.5\0";
 pub const PPB_FILECHOOSER_TRUSTED_INTERFACE_0_6: &str = "PPB_FileChooserTrusted;0.6\0";
 
-/// PPB_FileChooserTrusted;0.6 vtable — 1 function.
+/// PPB_FileChooserTrusted;0.6 vtable - 1 function.
 #[repr(C)]
 pub struct PPB_FileChooserTrusted_0_6 {
     pub ShowWithoutUserGesture: Option<
@@ -3925,7 +3925,7 @@ pub struct PPB_FileChooserTrusted_0_6 {
 unsafe impl Send for PPB_FileChooserTrusted_0_6 {}
 unsafe impl Sync for PPB_FileChooserTrusted_0_6 {}
 
-/// PPB_FileChooserTrusted;0.5 vtable — 1 function (no PP_ArrayOutput).
+/// PPB_FileChooserTrusted;0.5 vtable - 1 function (no PP_ArrayOutput).
 #[repr(C)]
 pub struct PPB_FileChooserTrusted_0_5 {
     pub ShowWithoutUserGesture: Option<
@@ -3956,7 +3956,7 @@ pub const PP_FILEOPENFLAG_TRUNCATE: i32 = 1 << 3;
 pub const PP_FILEOPENFLAG_EXCLUSIVE: i32 = 1 << 4;
 pub const PP_FILEOPENFLAG_APPEND: i32 = 1 << 5;
 
-/// PPB_Flash_File_FileRef vtable — 2 functions.
+/// PPB_Flash_File_FileRef vtable - 2 functions.
 #[repr(C)]
 pub struct PPB_Flash_File_FileRef {
     pub OpenFile: Option<unsafe extern "C" fn(file_ref_id: PP_Resource, mode: i32, file: *mut PP_FileHandle) -> i32>,
@@ -3973,7 +3973,7 @@ unsafe impl Sync for PPB_Flash_File_FileRef {}
 pub const PPB_FLASH_FONTFILE_INTERFACE_0_1: &str = "PPB_Flash_FontFile;0.1\0";
 pub const PPB_FLASH_FONTFILE_INTERFACE_0_2: &str = "PPB_Flash_FontFile;0.2\0";
 
-/// PPB_Flash_FontFile;0.2 vtable — 4 functions.
+/// PPB_Flash_FontFile;0.2 vtable - 4 functions.
 #[repr(C)]
 pub struct PPB_Flash_FontFile_0_2 {
     pub Create: Option<
@@ -3998,7 +3998,7 @@ pub struct PPB_Flash_FontFile_0_2 {
 unsafe impl Send for PPB_Flash_FontFile_0_2 {}
 unsafe impl Sync for PPB_Flash_FontFile_0_2 {}
 
-/// PPB_Flash_FontFile;0.1 vtable — 3 functions (no IsSupportedForWindows).
+/// PPB_Flash_FontFile;0.1 vtable - 3 functions (no IsSupportedForWindows).
 #[repr(C)]
 pub struct PPB_Flash_FontFile_0_1 {
     pub Create: Option<
@@ -4052,7 +4052,7 @@ pub struct PP_Flash_Menu {
     pub items: *mut PP_Flash_MenuItem,
 }
 
-/// PPB_Flash_Menu;0.2 vtable — 3 functions.
+/// PPB_Flash_Menu;0.2 vtable - 3 functions.
 #[repr(C)]
 pub struct PPB_Flash_Menu_0_2 {
     pub Create: Option<unsafe extern "C" fn(instance_id: PP_Instance, menu_data: *const PP_Flash_Menu) -> PP_Resource>,
@@ -4076,7 +4076,7 @@ unsafe impl Sync for PPB_Flash_Menu_0_2 {}
 
 pub const PPB_FLASH_PRINT_INTERFACE_1_0: &str = "PPB_Flash_Print;1.0\0";
 
-/// PPB_Flash_Print;1.0 vtable — single function.
+/// PPB_Flash_Print;1.0 vtable - single function.
 #[repr(C)]
 pub struct PPB_Flash_Print_1_0 {
     pub InvokePrinting: Option<unsafe extern "C" fn(instance: PP_Instance)>,

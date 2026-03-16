@@ -70,7 +70,7 @@ pub fn qoi_encode_bgra(pixels_bgra: &[u8], width: u32, height: u32) -> Vec<u8> {
             index[hash] = px;
 
             if px[3] == prev[3] {
-                // Alpha unchanged — try diff / luma / rgb.
+                // Alpha unchanged - try diff / luma / rgb.
                 let dr = px[0] as i16 - prev[0] as i16;
                 let dg = px[1] as i16 - prev[1] as i16;
                 let db = px[2] as i16 - prev[2] as i16;

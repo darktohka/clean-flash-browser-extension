@@ -36,7 +36,7 @@ pub struct MessageLoop {
     /// Work items that were received but not yet ready (deferred/delayed).
     /// Kept here to avoid re-posting them to the channel on every poll.
     deferred: Vec<WorkItem>,
-    /// Shared notify handle — signalled on every `post_work` so that
+    /// Shared notify handle - signalled on every `post_work` so that
     /// nested pump loops (Flash message loop) wake up immediately.
     notify: Arc<Notify>,
 }
@@ -216,7 +216,7 @@ impl MessageLoop {
                     }
                 }
                 Err(mpsc::error::TryRecvError::Empty) => {
-                    // Nothing available — park briefly then retry.
+                    // Nothing available - park briefly then retry.
                     std::thread::sleep(Duration::from_millis(1));
                 }
                 Err(mpsc::error::TryRecvError::Disconnected) => {

@@ -163,7 +163,7 @@ unsafe extern "C" fn show_without_user_gesture_0_6(
     do_show(chooser, save_as, &suggested, output, callback)
 }
 
-/// ShowWithoutUserGesture (0.5 API — no PP_ArrayOutput, we ignore).
+/// ShowWithoutUserGesture (0.5 API - no PP_ArrayOutput, we ignore).
 unsafe extern "C" fn show_without_user_gesture_0_5(
     chooser: PP_Resource,
     save_as: PP_Bool,
@@ -240,7 +240,7 @@ fn do_show(
             match provider.as_ref() {
                 Some(p) => p.show_file_chooser(ui_mode, &accept_types_clone, &suggested_name),
                 None => {
-                    tracing::warn!("No FileChooserProvider set — returning cancel");
+                    tracing::warn!("No FileChooserProvider set - returning cancel");
                     Vec::new()
                 }
             }

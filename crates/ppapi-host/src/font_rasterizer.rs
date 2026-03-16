@@ -136,7 +136,7 @@ impl FontCache {
 }
 
 // ---------------------------------------------------------------------------
-// Public API — font resolution
+// Public API - font resolution
 // ---------------------------------------------------------------------------
 
 /// Map a PPAPI family enum value to a `fontdb::Family`.

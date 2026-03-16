@@ -1,4 +1,4 @@
-//! Player Core — orchestrates the PPAPI host, plugin lifecycle, and UI interaction.
+//! Player Core - orchestrates the PPAPI host, plugin lifecycle, and UI interaction.
 //!
 //! This crate ties together the PPAPI host (ppapi-host) with the UI abstraction
 //! (player-ui-traits) to form the complete Flash player logic.
@@ -283,7 +283,6 @@ impl FlashPlayer {
 
     /// Open a .swf file with explicit embed arguments.
     ///
-    /// Mirrors freshplayerplugin's `call_plugin_did_create_comt` flow:
     ///  1. Query PPP_Instance;1.1 and PPP_InputEvent;0.1
     ///  2. Call DidCreate(id, argc, argn, argv)
     ///  3. Query PPP_Instance_Private;0.1 → call GetInstanceObject
@@ -352,7 +351,7 @@ impl FlashPlayer {
         };
         let ppp = ppp_instance.ok_or("Plugin does not support PPP_Instance;1.1")?;
 
-        // Also query PPP_InputEvent;0.1 (freshplayerplugin does this before DidCreate).
+        // Also query PPP_InputEvent;0.1
         let _ppp_input: Option<&'static PPP_InputEvent_0_1> = unsafe {
             plugin.get_interface_typed(
                 std::ffi::CStr::from_bytes_with_nul(b"PPP_InputEvent;0.1\0").unwrap(),
@@ -391,7 +390,7 @@ impl FlashPlayer {
         // Set it to the page URL so cross-origin SWFs resolve against
         // the embedding page, not the CDN serving the SWF binary.
         // Query the provider directly (not the trimmed page_url) so
-        // the trailing slash is preserved — Flash needs a directory URL.
+        // the trailing slash is preserved - Flash needs a directory URL.
         if !has_embed_arg(&did_create_args, "base") {
             let base_val = host.get_url_provider()
                 .and_then(|p| p.get_document_base_url(instance_id))
@@ -468,8 +467,6 @@ impl FlashPlayer {
         self.instance_id = Some(instance_id);
 
         // ---- Step 3: PPP_Instance_Private → GetInstanceObject ----------
-        // freshplayerplugin queries this immediately after DidCreate and
-        // calls GetInstanceObject (the scripting bridge).
         let ppp_instance_private: Option<&'static PPP_Instance_Private_0_1> = unsafe {
             plugin.get_interface_typed(
                 std::ffi::CStr::from_bytes_with_nul(b"PPP_Instance_Private;0.1\0").unwrap(),
@@ -487,7 +484,7 @@ impl FlashPlayer {
                     host.set_instance_object(scriptable_obj);
                     tracing::info!("open_swf: saved scriptable object for ExternalInterface");
                 }
-                // We don't release the object — the host holds a reference
+                // We don't release the object - the host holds a reference
                 // for the lifetime of the instance to receive CallFunction
                 // invocations.
             }
@@ -496,7 +493,7 @@ impl FlashPlayer {
         }
 
         // ---- Step 4: HandleDocumentLoad (full-frame) -------------------
-        // Mirror freshplayerplugin: create URLRequestInfo, URLLoader, call
+        // Create URLRequestInfo, URLLoader, call
         // Open (which loads data via the host callback), then pass the
         // loader to HandleDocumentLoad.
         if let Some(handle_doc_load) = ppp.HandleDocumentLoad {
@@ -552,7 +549,7 @@ impl FlashPlayer {
         //self.notify_view_change(800, 600);
 
         tracing::info!("Instance {} created for {}", instance_id, swf_path);
-        // Start with 0×0 — the UI layer will immediately send the real
+        // Start with 0×0 - the UI layer will immediately send the real
         // available size via notify_view_change.
         *self.state.lock() = PlayerState::Running {
             width: 0,
@@ -947,7 +944,7 @@ impl Drop for FlashPlayer {
 }
 
 // ===========================================================================
-// Host callbacks implementation — receives events from PPB interface impls
+// Host callbacks implementation - receives events from PPB interface impls
 // ===========================================================================
 
 struct PlayerHostCallbacks {
@@ -1077,10 +1074,9 @@ impl HostCallbacks for PlayerHostCallbacks {
 /// Create a URLLoader resource for delivering the main SWF document to the
 /// plugin via `PPP_Instance::HandleDocumentLoad`.
 ///
-/// This mirrors the freshplayerplugin approach in `call_plugin_did_create_comt`:
 ///  1. Create a URLRequestInfo, set the URL property + method
 ///  2. Create a URLLoader
-///  3. Call Open(loader, request_info, do_nothing_callback) — which fills the
+///  3. Call Open(loader, request_info, do_nothing_callback) - which fills the
 ///     loader with data from the host callback.
 ///  4. Release the request info
 ///  5. Return the loader resource for HandleDocumentLoad.
@@ -1159,8 +1155,8 @@ impl HostCallbacks for PlayerHostCallbacks {
 //}
 
 /// Create a document URLLoader by using the PPB_URLLoader::Open API.
-/// This approach calls URLRequestInfo::Create, URLLoader::Create, and URLLoader::Open,
-/// matching what freshplayerplugin does. The Open() call is blocking/synchronous.
+/// This approach calls URLRequestInfo::Create, URLLoader::Create, and URLLoader::Open.
+/// The Open() call is blocking/synchronous.
 fn create_document_url_loader(
     instance_id: PP_Instance,
     host: &ppapi_host::HostState,
@@ -1232,7 +1228,7 @@ fn create_document_url_loader(
         return 0;
     }
 
-    // Call Open with a BLOCKING (null) callback. Mirror freshplayerplugin.
+    // Call Open with a BLOCKING (null) callback.
     let open_result = unsafe {
         loader_open(
             loader_id,

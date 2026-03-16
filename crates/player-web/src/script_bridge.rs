@@ -1,4 +1,4 @@
-//! Script bridge — `ScriptProvider` implementation for the web player.
+//! Script bridge - `ScriptProvider` implementation for the web player.
 //!
 //! Sends scripting requests to the Chrome Extension content script via the
 //! native-messaging binary protocol (using [`protocol::send_host_message`])
@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use crate::protocol;
 
 // ===========================================================================
-// ScriptBridge — shared state between the ScriptProvider and the stdin reader
+// ScriptBridge - shared state between the ScriptProvider and the stdin reader
 // ===========================================================================
 
 /// Shared state that connects the blocking `ScriptProvider` methods
@@ -328,7 +328,7 @@ impl ScriptProvider for WebScriptProvider {
     }
 
     fn release_object(&self, object_id: u64) {
-        // Fire-and-forget — no response needed.
+        // Fire-and-forget - no response needed.
         let json_str = json!({
             "id": 0,
             "op": "release",

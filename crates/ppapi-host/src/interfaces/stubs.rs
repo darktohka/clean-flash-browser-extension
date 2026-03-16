@@ -56,7 +56,7 @@ fn register_named_stubs(iface: &'static str, ptrs: &[unsafe extern "C" fn() -> u
 }
 
 // ---------------------------------------------------------------------------
-// stub_array!(N) — builds a const array of N distinct typed_stub<i> pointers.
+// stub_array!(N) - builds a const array of N distinct typed_stub<i> pointers.
 // Add arms here as needed (max slot count across all vtables below).
 // ---------------------------------------------------------------------------
 macro_rules! stub_array {
@@ -117,35 +117,35 @@ macro_rules! stub_vtable {
 // Declare all stub vtables
 // ---------------------------------------------------------------------------
 
-// PPB_AudioConfig, PPB_Audio, PPB_AudioInput — moved to dedicated modules
+// PPB_AudioConfig, PPB_Audio, PPB_AudioInput - moved to dedicated modules
 
-// PPB_BrowserFont_Trusted — moved to browser_font.rs
-// PPB_Buffer(Dev) — moved to buffer.rs
-// PPB_CharSet(Dev) — moved to char_set.rs
-// PPB_CursorControl(Dev) — moved to cursor_control.rs
+// PPB_BrowserFont_Trusted - moved to browser_font.rs
+// PPB_Buffer(Dev) - moved to buffer.rs
+// PPB_CharSet(Dev) - moved to char_set.rs
+// PPB_CursorControl(Dev) - moved to cursor_control.rs
 
-// PPB_FileChooser(Dev) — moved to file_chooser.rs
-// PPB_FileChooserTrusted — moved to file_chooser.rs
-// PPB_FileRef — moved to file_ref.rs
-// PPB_Flash_File_FileRef — moved to flash_file_fileref.rs
-// PPB_Flash_FontFile — moved to flash_font_file.rs
-// PPB_Flash_Menu — moved to flash_menu.rs
+// PPB_FileChooser(Dev) - moved to file_chooser.rs
+// PPB_FileChooserTrusted - moved to file_chooser.rs
+// PPB_FileRef - moved to file_ref.rs
+// PPB_Flash_File_FileRef - moved to flash_file_fileref.rs
+// PPB_Flash_FontFile - moved to flash_font_file.rs
+// PPB_Flash_Menu - moved to flash_menu.rs
 
-// PPB_Graphics3D;1.0 — moved to graphics3d.rs
+// PPB_Graphics3D;1.0 - moved to graphics3d.rs
 
-// PPB_IMEInputEvent(Dev) — moved to ime_input_event.rs
+// PPB_IMEInputEvent(Dev) - moved to ime_input_event.rs
 
-// PPB_NetAddress_Private — moved to net_address.rs
+// PPB_NetAddress_Private - moved to net_address.rs
 
-// PPB_OpenGLES2;1.0 — moved to opengles2.rs
+// PPB_OpenGLES2;1.0 - moved to opengles2.rs
 
-// PPB_OpenGLES2ChromiumMapSub — moved to opengles2.rs (including Dev variant names)
+// PPB_OpenGLES2ChromiumMapSub - moved to opengles2.rs (including Dev variant names)
 
-// PPB_TCPSocket_Private — moved to tcp_socket.rs
+// PPB_TCPSocket_Private - moved to tcp_socket.rs
 
-// PPB_TextInput(Dev) — moved to text_input.rs
+// PPB_TextInput(Dev) - moved to text_input.rs
 
-// PPB_UDPSocket_Private — moved to udp_socket.rs
+// PPB_UDPSocket_Private - moved to udp_socket.rs
 
 
 
@@ -154,10 +154,10 @@ macro_rules! stub_vtable {
 
 
 // Additional interfaces requested post-init
-// PPB_OpenGLES2 extensions and PPB_Printing — moved to opengles2.rs / printing.rs
+// PPB_OpenGLES2 extensions and PPB_Printing - moved to opengles2.rs / printing.rs
 
 // ---------------------------------------------------------------------------
-// Registration — macro to register all versions of each stub vtable
+// Registration - macro to register all versions of each stub vtable
 // ---------------------------------------------------------------------------
 
 macro_rules! register_stub {
@@ -179,24 +179,24 @@ macro_rules! register_stub {
 /// Register all stub interfaces.
 pub fn register(registry: &mut InterfaceRegistry) {
     unsafe {
-    // PPB_AudioConfig, PPB_Audio, PPB_AudioInput — moved to dedicated modules
-    // PPB_BrowserFont_Trusted — moved to browser_font.rs
-    // PPB_Buffer(Dev) — moved to buffer.rs
-    // PPB_CharSet(Dev) — moved to char_set.rs
-    // PPB_CursorControl(Dev) — moved to cursor_control.rs
-    // PPB_FileChooser(Dev) — moved to file_chooser.rs
-    // PPB_FileChooserTrusted — moved to file_chooser.rs
-    // PPB_FileRef — moved to file_ref.rs
-    // PPB_Flash_File_FileRef — moved to flash_file_fileref.rs
-    // PPB_Flash_FontFile — moved to flash_font_file.rs
-    // PPB_Flash_Menu — moved to flash_menu.rs
-    // PPB_Graphics3D;1.0 — moved to graphics3d.rs
-    // PPB_IMEInputEvent(Dev) — moved to ime_input_event.rs
-    // PPB_NetAddress_Private — moved to net_address.rs
-    // PPB_OpenGLES2ChromiumMapSub Dev variants — moved to opengles2.rs
-    // PPB_TCPSocket_Private — moved to tcp_socket.rs
-    // PPB_TextInput(Dev) — moved to text_input.rs
-    // PPB_UDPSocket_Private — moved to udp_socket.rs
+    // PPB_AudioConfig, PPB_Audio, PPB_AudioInput - moved to dedicated modules
+    // PPB_BrowserFont_Trusted - moved to browser_font.rs
+    // PPB_Buffer(Dev) - moved to buffer.rs
+    // PPB_CharSet(Dev) - moved to char_set.rs
+    // PPB_CursorControl(Dev) - moved to cursor_control.rs
+    // PPB_FileChooser(Dev) - moved to file_chooser.rs
+    // PPB_FileChooserTrusted - moved to file_chooser.rs
+    // PPB_FileRef - moved to file_ref.rs
+    // PPB_Flash_File_FileRef - moved to flash_file_fileref.rs
+    // PPB_Flash_FontFile - moved to flash_font_file.rs
+    // PPB_Flash_Menu - moved to flash_menu.rs
+    // PPB_Graphics3D;1.0 - moved to graphics3d.rs
+    // PPB_IMEInputEvent(Dev) - moved to ime_input_event.rs
+    // PPB_NetAddress_Private - moved to net_address.rs
+    // PPB_OpenGLES2ChromiumMapSub Dev variants - moved to opengles2.rs
+    // PPB_TCPSocket_Private - moved to tcp_socket.rs
+    // PPB_TextInput(Dev) - moved to text_input.rs
+    // PPB_UDPSocket_Private - moved to udp_socket.rs
 
     // PPB_OpenGLES2 extensions and PPB_Printing are now in dedicated modules
     } // unsafe

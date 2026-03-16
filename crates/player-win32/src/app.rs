@@ -1,4 +1,4 @@
-//! Win32 application — the Flash Player GUI.
+//! Win32 application - the Flash Player GUI.
 //!
 //! Provides a native Win32 UI with:
 //! - Menu bar: File > Open, Open URL, Close, Exit
@@ -176,7 +176,7 @@ impl FlashPlayerApp {
         let file_chooser_provider = Arc::new(dialogs::Win32FileChooserProvider::new());
         player.set_file_chooser_provider(file_chooser_provider);
 
-        // Set repaint callback — invalidate the window to trigger WM_PAINT.
+        // Set repaint callback - invalidate the window to trigger WM_PAINT.
         // Extract the raw HWND pointer as usize so the closure is Send+Sync.
         let raw_hwnd = window.handle.hwnd().map(|h| h as usize).unwrap_or(0);
         player.set_repaint_callback(move || {
@@ -744,7 +744,7 @@ impl FlashPlayerApp {
                 self.open_content(&path_str);
             }
         } else {
-            // Dialog cancelled — resume timer if content is still running.
+            // Dialog cancelled - resume timer if content is still running.
             let player = self.player.borrow();
             if player.is_running() {
                 self.timer_disabled.store(0, Ordering::Relaxed);
@@ -764,7 +764,7 @@ impl FlashPlayerApp {
                 self.open_content(&url);
             }
         } else {
-            // Dialog cancelled — resume timer if content is still running.
+            // Dialog cancelled - resume timer if content is still running.
             let player = self.player.borrow();
             if player.is_running() {
                 self.timer_disabled.store(0, Ordering::Relaxed);

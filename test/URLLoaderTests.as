@@ -140,7 +140,7 @@ package
             headerBg.graphics.endFill();
             addChild(headerBg);
 
-            headerField = makeText("URLLoader Test Suite — Initializing...", 10, 8, STAGE_W - 20, HEADER_H, 15, true, COLOR_TEXT);
+            headerField = makeText("URLLoader Test Suite - Initializing...", 10, 8, STAGE_W - 20, HEADER_H, 15, true, COLOR_TEXT);
             addChild(headerField);
 
             // Table column headers
@@ -701,7 +701,7 @@ package
             loader.addEventListener(Event.COMPLETE, function(e:Event):void {
                 var data:String = URLLoader(e.target).data;
                 log("  Echo: " + data.substr(0, 120));
-                // Server echoes back the query params — check it contains foo=bar
+                // Server echoes back the query params - check it contains foo=bar
                 if (data.indexOf("bar") >= 0 && data.indexOf("42") >= 0)
                     onPass("Query params echoed correctly");
                 else
@@ -1181,7 +1181,7 @@ package
         {
             // When dataFormat=VARIABLES and the response is malformed,
             // Flash's internal URLVariables.decode() may throw Error #2101.
-            // That error is NOT dispatched as COMPLETE or IO_ERROR — it is
+            // That error is NOT dispatched as COMPLETE or IO_ERROR - it is
             // swallowed (or goes to uncaughtErrorEvents). So we use an
             // internal timer: if no event fires within 5s, that itself
             // proves the edge case (silent failure).
@@ -1191,7 +1191,7 @@ package
                 if (!resolved)
                 {
                     resolved = true;
-                    onPass("No event fired — decode() error swallowed (expected Flash behavior)");
+                    onPass("No event fired - decode() error swallowed (expected Flash behavior)");
                 }
             });
             fallbackTimer.start();
@@ -1480,7 +1480,7 @@ package
             var ldr:Loader = new Loader();
             ldr.contentLoaderInfo.addEventListener(Event.COMPLETE, function(e:Event):void {
                 // Cross-origin SWF loading (content, not data) may succeed
-                // even without crossdomain.xml — the SWF loads but cross-scripting
+                // even without crossdomain.xml - the SWF loads but cross-scripting
                 // is blocked. This is different from URLLoader data access.
                 log("  Cross-origin SWF loaded (content load allowed w/o policy)");
                 onPass("SWF loaded (cross-scripting blocked, not load itself)");

@@ -343,7 +343,7 @@ unsafe extern "C" fn create_keyboard(
     let Some(host) = HOST.get() else {
         return 0;
     };
-    // AddRef the incoming vars — the caller retains its own reference.
+    // AddRef the incoming vars - the caller retains its own reference.
     if character_text.type_ == PP_VARTYPE_STRING {
         host.vars.add_ref(character_text);
     }

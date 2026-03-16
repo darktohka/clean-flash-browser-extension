@@ -401,10 +401,10 @@ static VTABLE_0_3: PPB_UDPSocket_Private_0_3 = PPB_UDPSocket_Private_0_3 {
 };
 
 // ===========================================================================
-// PPB_UDPSocket;1.0 / 1.1 / 1.2 — public (resource-based address) interface
+// PPB_UDPSocket;1.0 / 1.1 / 1.2 - public (resource-based address) interface
 // ===========================================================================
 
-/// Public UDP socket resource — identical internal structure but separate
+/// Public UDP socket resource - identical internal structure but separate
 /// resource type so `IsUDPSocket` can distinguish it.
 pub struct UdpSocketPublicResource {
     pub instance: PP_Instance,
@@ -698,12 +698,12 @@ unsafe extern "C" fn pub_set_option(
                 }
                 PP_UDPSOCKET_OPTION_SEND_BUFFER_SIZE
                 | PP_UDPSOCKET_OPTION_RECV_BUFFER_SIZE => {
-                    // Hints only — acknowledge but no-op.
+                    // Hints only - acknowledge but no-op.
                     PP_OK
                 }
                 PP_UDPSOCKET_OPTION_MULTICAST_LOOP
                 | PP_UDPSOCKET_OPTION_MULTICAST_TTL => {
-                    // Not implemented — succeed silently.
+                    // Not implemented - succeed silently.
                     PP_OK
                 }
                 _ => PP_ERROR_BADARGUMENT,

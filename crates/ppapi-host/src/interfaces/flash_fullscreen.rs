@@ -69,7 +69,7 @@ fn do_set_fullscreen(instance: PP_Instance, fullscreen: PP_Bool) -> PP_Bool {
     let accepted = if let Some(provider) = host.get_fullscreen_provider() {
         provider.set_fullscreen(want)
     } else {
-        // No provider — just update the flag locally.
+        // No provider - just update the flag locally.
         true
     };
 

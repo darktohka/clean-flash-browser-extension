@@ -128,7 +128,7 @@ fn main() {
             // (libpepflashplayer) that calls printf() or _write(1, …) goes
             // through the CRT layer, so without _dup2 those writes still
             // reached Chrome's original stdout pipe and corrupted the
-            // native-messaging channel — causing Chrome to disconnect and the
+            // native-messaging channel - causing Chrome to disconnect and the
             // host to see an unexpected EOF on stdin.
             //
             // On Unix, dup2() covers both layers because the CRT fd IS the
@@ -334,7 +334,7 @@ fn main() {
 }
 
 // ===========================================================================
-// Threaded stdin reader — makes stdin non-blocking for the main loop
+// Threaded stdin reader - makes stdin non-blocking for the main loop
 // ===========================================================================
 
 use std::sync::mpsc;
@@ -400,7 +400,7 @@ fn try_read_command() -> Option<serde_json::Value> {
                             }
                         }
                         Ok(None) => {
-                            // EOF — extension closed.
+                            // EOF - extension closed.
                             let _ = tx.send(None);
                             break;
                         }
@@ -420,7 +420,7 @@ fn try_read_command() -> Option<serde_json::Value> {
     match guard.try_recv() {
         Ok(Some(msg)) => Some(msg),
         Ok(None) => {
-            // EOF sentinel — signal shutdown.
+            // EOF sentinel - signal shutdown.
             Some(json!({"type": "eof"}))
         }
         Err(mpsc::TryRecvError::Empty) => None,
@@ -707,7 +707,7 @@ fn handle_command(
                 if let Some(ref js) = result {
                     tracing::debug!("callFunction result: {}", js);
                 }
-                // For now the result is discarded — the JS caller already
+                // For now the result is discarded - the JS caller already
                 // returned undefined (fire-and-forget).  If synchronous
                 // return values are needed in the future, send the result
                 // back to the extension here.
@@ -727,7 +727,7 @@ fn handle_command(
         }
 
         "close" | "eof" => {
-            tracing::info!("Received {} — shutting down", msg_type);
+            tracing::info!("Received {} - shutting down", msg_type);
             return false;
         }
 
@@ -740,7 +740,7 @@ fn handle_command(
 }
 
 // ===========================================================================
-// Frame sending — only dirty region
+// Frame sending - only dirty region
 // ===========================================================================
 
 /// Extract the pending dirty region from the shared frame buffer and send
@@ -791,7 +791,7 @@ fn send_dirty_frame(frame_handle: &Arc<Mutex<Option<player_core::SharedFrameBuff
 }
 
 // ===========================================================================
-// Context menu provider — sends Flash menus to the browser extension
+// Context menu provider - sends Flash menus to the browser extension
 // ===========================================================================
 
 /// Context menu provider that sends menu items to the Chrome Extension
@@ -908,7 +908,7 @@ fn serialize_menu_items(items: &[player_ui_traits::ContextMenuItem]) -> serde_js
 }
 
 // ===========================================================================
-// Audio provider — sends PCM audio to the browser via native messaging
+// Audio provider - sends PCM audio to the browser via native messaging
 // ===========================================================================
 
 /// Audio provider that forwards PCM samples to the Chrome Extension's
@@ -971,7 +971,7 @@ impl player_ui_traits::AudioProvider for WebAudioProvider {
 }
 
 // ===========================================================================
-// Audio input provider — captures audio from the browser's microphone
+// Audio input provider - captures audio from the browser's microphone
 // via native messaging.
 //
 // The host sends AudioInputOpen/Start/Stop/Close commands to the browser.
@@ -1087,7 +1087,7 @@ impl player_ui_traits::AudioInputProvider for WebAudioInputProvider {
     fn enumerate_devices(&self) -> Vec<(String, String)> {
         // On the browser side, we always report one "default" device.
         // Actual device enumeration would require a synchronous round-trip
-        // to the browser which isn't worth the complexity — Flash typically
+        // to the browser which isn't worth the complexity - Flash typically
         // just asks for the default microphone.
         vec![("browser:default".into(), "Microphone".into())]
     }
@@ -1181,7 +1181,7 @@ impl player_ui_traits::AudioInputProvider for WebAudioInputProviderWrapper {
 }
 
 // ===========================================================================
-// Video capture provider — captures video from the browser's webcam
+// Video capture provider - captures video from the browser's webcam
 // via native messaging.
 //
 // The host sends VideoCaptureOpen/Start/Stop/Close commands to the browser.
@@ -1347,7 +1347,7 @@ impl player_ui_traits::VideoCaptureProvider for WebVideoCaptureProviderWrapper {
 }
 
 // ===========================================================================
-// Clipboard provider — routes through ScriptBridge to browser clipboard APIs
+// Clipboard provider - routes through ScriptBridge to browser clipboard APIs
 // ===========================================================================
 
 /// Clipboard provider for the web player.
@@ -1482,7 +1482,7 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 }
 
 // ===========================================================================
-// Web fullscreen provider — uses the script bridge to toggle fullscreen
+// Web fullscreen provider - uses the script bridge to toggle fullscreen
 // ===========================================================================
 
 struct WebFullscreenProvider {
@@ -1533,7 +1533,7 @@ impl player_ui_traits::FullscreenProvider for WebFullscreenProvider {
 }
 
 // ===========================================================================
-// Web cursor lock provider — uses the script bridge for Pointer Lock API
+// Web cursor lock provider - uses the script bridge for Pointer Lock API
 // ===========================================================================
 
 struct WebCursorLockProvider {
@@ -1593,7 +1593,7 @@ impl player_ui_traits::CursorLockProvider for WebCursorLockProvider {
 }
 
 // ===========================================================================
-// Web URL provider — browser-backed document/plugin URL lookups
+// Web URL provider - browser-backed document/plugin URL lookups
 // ===========================================================================
 
 struct WebUrlProvider {
@@ -1636,14 +1636,14 @@ impl player_ui_traits::UrlProvider for WebUrlProvider {
 }
 
 // ===========================================================================
-// Print provider — delegates printing to the browser via native messaging
+// Print provider - delegates printing to the browser via native messaging
 // ===========================================================================
 
 struct WebPrintProvider;
 
 impl player_ui_traits::PrintProvider for WebPrintProvider {
     fn print(&self) -> bool {
-        tracing::debug!("WebPrintProvider::print — sending Print message to browser");
+        tracing::debug!("WebPrintProvider::print - sending Print message to browser");
         protocol::send_host_message(&protocol::HostMessage::Print).is_ok()
     }
 }

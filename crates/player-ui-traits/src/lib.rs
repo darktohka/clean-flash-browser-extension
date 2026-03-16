@@ -1,4 +1,4 @@
-//! Player UI traits — abstracts the GUI layer so the player core doesn't
+//! Player UI traits - abstracts the GUI layer so the player core doesn't
 //! depend on any specific UI framework (egui, GTK, etc.).
 
 #[cfg(feature = "rfd")]
@@ -130,7 +130,7 @@ pub trait PlayerUI: Send {
 }
 
 // ===========================================================================
-// Dialog provider — abstracts alert/confirm/prompt for the PPAPI host
+// Dialog provider - abstracts alert/confirm/prompt for the PPAPI host
 // ===========================================================================
 
 /// Provides UI dialogs that the PPAPI host can invoke when Flash content
@@ -152,7 +152,7 @@ pub trait DialogProvider: Send + Sync {
 }
 
 // ===========================================================================
-// File chooser provider — abstracts native file picker dialogs
+// File chooser provider - abstracts native file picker dialogs
 // ===========================================================================
 
 /// Mode for file chooser dialogs.
@@ -231,7 +231,7 @@ impl JsValue {
 /// forward scripting operations (`GetWindowObject`, `ExecuteScript`,
 /// `HasProperty`, `GetProperty`, `Call`, …) to the actual page.
 ///
-/// Implementations are expected to be **synchronous** — each method blocks
+/// Implementations are expected to be **synchronous** - each method blocks
 /// until the browser responds.
 pub trait ScriptProvider: Send + Sync {
     /// Obtain a reference to the global `window` object.
@@ -266,10 +266,10 @@ pub trait ScriptProvider: Send + Sync {
         args: &[JsValue],
     ) -> Result<JsValue, String>;
 
-    /// Call `object(args…)` — invoke the object itself as a function.
+    /// Call `object(args…)` - invoke the object itself as a function.
     fn call(&self, object_id: u64, args: &[JsValue]) -> Result<JsValue, String>;
 
-    /// `new object(args…)` — construct via the object.
+    /// `new object(args…)` - construct via the object.
     fn construct(&self, object_id: u64, args: &[JsValue]) -> Result<JsValue, String>;
 
     /// Evaluate a JavaScript string and return the result.
@@ -280,7 +280,7 @@ pub trait ScriptProvider: Send + Sync {
 }
 
 // ===========================================================================
-// URL provider — browser document / plugin source URL retrieval
+// URL provider - browser document / plugin source URL retrieval
 // ===========================================================================
 
 /// Provides browser-sourced URL values used by `PPB_URLUtil(Dev)`.
@@ -310,7 +310,7 @@ pub trait UrlProvider: Send + Sync {
 }
 
 // ===========================================================================
-// Audio provider — abstracts audio playback for browser-hosted players
+// Audio provider - abstracts audio playback for browser-hosted players
 // ===========================================================================
 
 /// Provides audio playback capabilities for browser-hosted players.
@@ -351,7 +351,7 @@ pub trait AudioProvider: Send + Sync {
 }
 
 // ===========================================================================
-// Audio input provider — abstracts audio capture for the PPAPI host
+// Audio input provider - abstracts audio capture for the PPAPI host
 // ===========================================================================
 
 /// Provides audio input (microphone capture) capabilities.
@@ -407,7 +407,7 @@ pub trait AudioInputProvider: Send + Sync {
 }
 
 // ===========================================================================
-// Clipboard provider — abstracts system clipboard access
+// Clipboard provider - abstracts system clipboard access
 // ===========================================================================
 
 /// The kind of clipboard data that Flash may read or write.
@@ -447,7 +447,7 @@ pub trait ClipboardProvider: Send + Sync {
 }
 
 // ===========================================================================
-// Fullscreen provider — abstracts fullscreen toggling for the PPAPI host
+// Fullscreen provider - abstracts fullscreen toggling for the PPAPI host
 // ===========================================================================
 
 /// Provides fullscreen mode toggling for the PPAPI host.
@@ -471,7 +471,7 @@ pub trait FullscreenProvider: Send + Sync {
 }
 
 // ===========================================================================
-// Cursor lock provider — abstracts pointer lock for the PPAPI host
+// Cursor lock provider - abstracts pointer lock for the PPAPI host
 // ===========================================================================
 
 /// Provides cursor (pointer) locking capabilities for the PPAPI host.
@@ -501,7 +501,7 @@ pub trait CursorLockProvider: Send + Sync {
 }
 
 // ===========================================================================
-// Context menu provider — abstracts Flash right-click context menus
+// Context menu provider - abstracts Flash right-click context menus
 // ===========================================================================
 
 /// The type of a single menu item in a Flash context menu.
@@ -555,7 +555,7 @@ pub trait ContextMenuProvider: Send + Sync {
 }
 
 // ===========================================================================
-// Print provider — abstracts printing for the PPAPI host
+// Print provider - abstracts printing for the PPAPI host
 // ===========================================================================
 
 /// Default print settings returned by the print provider.
@@ -616,7 +616,7 @@ pub trait PrintProvider: Send + Sync {
 }
 
 // ===========================================================================
-// Video capture provider — abstracts video capture for the PPAPI host
+// Video capture provider - abstracts video capture for the PPAPI host
 // ===========================================================================
 
 /// A single video frame delivered by the capture provider.
@@ -682,7 +682,7 @@ pub trait VideoCaptureProvider: Send + Sync {
 }
 
 // ===========================================================================
-// View info — browser-sourced view metadata for PPB_View resources
+// View info - browser-sourced view metadata for PPB_View resources
 // ===========================================================================
 
 /// Additional view metadata collected from the browser environment.

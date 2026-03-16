@@ -113,7 +113,7 @@ fn to_uniform(loc: GLint) -> Option<glow::UniformLocation> {
 }
 
 // ---------------------------------------------------------------------------
-// PPB_OpenGLES2;1.0 — GL ES 2.0 functions
+// PPB_OpenGLES2;1.0 - GL ES 2.0 functions
 // ---------------------------------------------------------------------------
 
 unsafe extern "C" fn active_texture(ctx: PP_Resource, texture: GLenum) {
@@ -392,7 +392,7 @@ unsafe extern "C" fn get_attrib_location(ctx: PP_Resource, prog: GLuint, name: *
     })
 }
 unsafe extern "C" fn get_booleanv(ctx: PP_Resource, pname: GLenum, params: *mut GLboolean) {
-    // Must use raw glGetBooleanv — glow's get_parameter_bool only reads one
+    // Must use raw glGetBooleanv - glow's get_parameter_bool only reads one
     // value, but pnames like GL_COLOR_WRITEMASK write 4 booleans.
     if with_gl(ctx).is_some() {
         let f = RAW_GET_BOOLEANV.get_or_init(|| load_raw_gl(c"glGetBooleanv"));
@@ -406,7 +406,7 @@ unsafe extern "C" fn get_error(ctx: PP_Resource) -> GLenum {
     with_gl(ctx).map_or(0, |gl| gl.get_error())
 }
 unsafe extern "C" fn get_floatv(ctx: PP_Resource, pname: GLenum, params: *mut GLfloat) {
-    // Must use raw glGetFloatv — glow's get_parameter_f32 only reads one
+    // Must use raw glGetFloatv - glow's get_parameter_f32 only reads one
     // value, but pnames like GL_DEPTH_RANGE / GL_BLEND_COLOR write 2-4 floats.
     if with_gl(ctx).is_some() {
         let f = RAW_GET_FLOATV.get_or_init(|| load_raw_gl(c"glGetFloatv"));
@@ -419,7 +419,7 @@ unsafe extern "C" fn get_framebuffer_attachment_parameteriv(ctx: PP_Resource, ta
     }
 }
 unsafe extern "C" fn get_integerv(ctx: PP_Resource, pname: GLenum, params: *mut GLint) {
-    // Must use raw glGetIntegerv — glow's get_parameter_i32 only reads one
+    // Must use raw glGetIntegerv - glow's get_parameter_i32 only reads one
     // value, but pnames like GL_VIEWPORT / GL_SCISSOR_BOX write 4 ints,
     // which overflows glow's single-value stack variable and corrupts the stack.
     if with_gl(ctx).is_some() {
@@ -888,7 +888,7 @@ unsafe extern "C" fn enable_feature_chromium(_ctx: PP_Resource, feature: *const 
 static CHROMIUM_ENABLE_VTABLE: PPB_OpenGLES2ChromiumEnableFeature_1_0 = PPB_OpenGLES2ChromiumEnableFeature_1_0 { EnableFeatureCHROMIUM: Some(enable_feature_chromium) };
 
 // ---------------------------------------------------------------------------
-// Chromium MapSub — temp-buffer based buffer/texture upload
+// Chromium MapSub - temp-buffer based buffer/texture upload
 // ---------------------------------------------------------------------------
 
 enum ChromiumMappingKind {
@@ -1009,7 +1009,7 @@ unsafe extern "C" fn end_query(ctx: PP_Resource, target: GLenum) {
     if let Some(gl) = with_gl(ctx) { gl.end_query(target); }
 }
 unsafe extern "C" fn get_queryiv(ctx: PP_Resource, target: GLenum, pname: GLenum, p: *mut GLint) {
-    // glGetQueryiv queries a target, not a query object — raw GL needed.
+    // glGetQueryiv queries a target, not a query object - raw GL needed.
     if with_gl(ctx).is_some() {
         type GetQueryivFn = unsafe extern "system" fn(u32, u32, *mut i32);
         static GET_QUERYIV: std::sync::OnceLock<Option<GetQueryivFn>> = std::sync::OnceLock::new();

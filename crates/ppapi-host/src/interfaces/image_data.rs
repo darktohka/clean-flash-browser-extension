@@ -164,7 +164,7 @@ unsafe extern "C" fn map(image_data: PP_Resource) -> *mut c_void {
     };
 
     // Just return the pixel pointer. The Vec lives as long as the resource;
-    // no ref_count pinning needed (matches Chromium/freshplayerplugin).
+    // no ref_count pinning needed (matches Chromium).
     host.resources
         .with_downcast_mut::<ImageDataResource, _>(image_data, |img| {
             img.pixels.as_mut_ptr() as *mut c_void
@@ -173,7 +173,7 @@ unsafe extern "C" fn map(image_data: PP_Resource) -> *mut c_void {
 }
 
 unsafe extern "C" fn unmap(image_data: PP_Resource) {
-    // No-op — matches Chromium and freshplayerplugin behaviour.
+    // No-op, matches Chromium behaviour.
     // Flash plugins typically never call Unmap; the pixel buffer stays
     // valid until the resource is released via PPB_Core::ReleaseResource.
     tracing::debug!("PPB_ImageData::Unmap(image_data={})", image_data);

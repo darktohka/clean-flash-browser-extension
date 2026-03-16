@@ -148,7 +148,7 @@ pub fn init_saved_handles() {
 }
 
 // -----------------------------------------------------------------------
-// Read (extension → host) — still plain JSON
+// Read (extension → host) - still plain JSON
 // -----------------------------------------------------------------------
 
 /// Read one native messaging frame from the saved stdin handle.
@@ -173,7 +173,7 @@ pub fn read_message() -> io::Result<Option<serde_json::Value>> {
         }
         Err(e) => {
             tracing::warn!(
-                "stdin read_exact error: kind={:?} os_error={:?} — {}",
+                "stdin read_exact error: kind={:?} os_error={:?} - {}",
                 e.kind(), e.raw_os_error(), e,
             );
             return Err(e);
@@ -231,7 +231,7 @@ pub enum HostMessage<'a> {
     /// JavaScript scripting request (host → browser → content script).
     /// The payload is a JSON string that the content script interprets.
     ScriptRequest(&'a str),
-    /// Navigation request — Flash wants to open a URL.
+    /// Navigation request - Flash wants to open a URL.
     Navigate {
         url: &'a str,
         target: &'a str,
@@ -512,7 +512,7 @@ pub fn send_host_message(msg: &HostMessage<'_>) -> io::Result<()> {
         let end = ((i + 1) * MAX_B64_PER_CHUNK).min(b64.len());
         let chunk_data = &b64[start..end];
 
-        // Build JSON manually — faster than pulling in serde for 4 fields.
+        // Build JSON manually - faster than pulling in serde for 4 fields.
         let json = format!(
             r#"{{"s":{},"c":{},"t":{},"d":"{}"}}"#,
             seq, i, total_chunks, chunk_data,

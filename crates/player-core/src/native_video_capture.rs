@@ -1,4 +1,4 @@
-//! Native video capture provider — wraps the `video-capture` crate to
+//! Native video capture provider - wraps the `video-capture` crate to
 //! enumerate cameras, capture frames, QOI-encode them, and deliver them
 //! to the PPAPI host via the [`VideoCaptureProvider`] trait.
 //!
@@ -36,7 +36,7 @@ struct StreamState {
     /// The latest captured frame (QOI-encoded RGBA).  Shared with the
     /// output-handler closure running on the camera callback thread.
     latest_frame: Arc<Mutex<Option<CapturedFrame>>>,
-    /// Whether capture is active — toggled by start/stop, checked by
+    /// Whether capture is active - toggled by start/stop, checked by
     /// the output-handler closure to gate frame storage.
     capturing: Arc<AtomicBool>,
     /// Join handle for the camera thread.
@@ -74,7 +74,7 @@ impl Default for NativeVideoCaptureProvider {
 
 impl VideoCaptureProvider for NativeVideoCaptureProvider {
     fn enumerate_devices(&self) -> Vec<VideoCaptureDeviceInfo> {
-        // A temporary CameraManager is fine here — we only need to list
+        // A temporary CameraManager is fine here - we only need to list
         // devices, not keep the manager alive.
         let cam_mgr = match CameraManager::default() {
             Ok(mgr) => mgr,
@@ -219,7 +219,7 @@ impl VideoCaptureProvider for NativeVideoCaptureProvider {
 }
 
 // ---------------------------------------------------------------------------
-// Camera thread — owns the CameraManager for its lifetime
+// Camera thread - owns the CameraManager for its lifetime
 // ---------------------------------------------------------------------------
 
 fn camera_thread(
@@ -232,7 +232,7 @@ fn camera_thread(
     cmd_rx: mpsc::Receiver<CameraCmd>,
     ready_tx: mpsc::SyncSender<bool>,
 ) {
-    // ---- Initialise the camera manager (not Send — stays on this thread) ----
+    // ---- Initialise the camera manager (not Send - stays on this thread) ----
     let mut cam_mgr = match CameraManager::default() {
         Ok(mgr) => mgr,
         Err(e) => {
@@ -336,7 +336,7 @@ fn camera_thread(
     // Signal the provider that initialisation succeeded.
     let _ = ready_tx.send(true);
 
-    // ---- Command loop — keeps cam_mgr alive until Close ----
+    // ---- Command loop - keeps cam_mgr alive until Close ----
     loop {
         match cmd_rx.recv() {
             Ok(CameraCmd::Start) => {
@@ -352,7 +352,7 @@ fn camera_thread(
                 }
             }
             Ok(CameraCmd::Close) | Err(_) => {
-                // Channel closed or explicit close — stop and exit.
+                // Channel closed or explicit close - stop and exit.
                 if let Some(device) = cam_mgr.index_mut(device_index) {
                     let _ = device.stop();
                 }

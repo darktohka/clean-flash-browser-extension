@@ -50,10 +50,10 @@ impl CompletionCallback {
 /// or return PP_OK for a blocking callback.
 pub fn complete_immediately(cb: PP_CompletionCallback, result: i32) -> i32 {
     if cb.is_null() {
-        // Blocking call — return the result directly.
+        // Blocking call - return the result directly.
         result
     } else {
-        // Async call — fire the callback and return COMPLETIONPENDING.
+        // Async call - fire the callback and return COMPLETIONPENDING.
         // For synchronous completion, we fire it inline and return the result.
         unsafe {
             cb.run(result);

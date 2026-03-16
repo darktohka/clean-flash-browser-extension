@@ -2,7 +2,7 @@
 //!
 //! The PDF interface provides PDF-specific functionality such as font file
 //! fallback, string searching, and V8 snapshot loading. In a standalone Flash
-//! player most of these are no-ops — the plugin is not a PDF viewer. The font
+//! player most of these are no-ops - the plugin is not a PDF viewer. The font
 //! functions delegate to the same infrastructure as PPB_Flash_FontFile when
 //! that is available; for now they return failure/empty results. All calls are
 //! traced for debugging purposes.
@@ -90,7 +90,7 @@ unsafe extern "C" fn search_string(
         term,
         case_sensitive
     );
-    // No search implementation — return empty results.
+    // No search implementation - return empty results.
     if !results.is_null() {
         unsafe { *results = std::ptr::null_mut() };
     }

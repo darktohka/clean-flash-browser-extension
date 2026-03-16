@@ -133,9 +133,9 @@ package
         {
             // 3 vertices: x, y, z, r, g, b
             var verts:Vector.<Number> = new <Number>[
-                 0.0,  0.8,  0.0,   0.95, 0.55, 0.66,  // top — red/pink
-                -0.8, -0.6,  0.0,   0.58, 0.84, 0.65,  // bottom-left — green
-                 0.8, -0.6,  0.0,   0.53, 0.66, 0.98   // bottom-right — blue
+                 0.0,  0.8,  0.0,   0.95, 0.55, 0.66,  // top - red/pink
+                -0.8, -0.6,  0.0,   0.58, 0.84, 0.65,  // bottom-left - green
+                 0.8, -0.6,  0.0,   0.53, 0.66, 0.98   // bottom-right - blue
             ];
 
             _vertexBuffer = _context3D.createVertexBuffer(3, 6); // 3 verts, 6 floats each
@@ -151,15 +151,15 @@ package
         private function setupShaders():void
         {
             // Vertex shader:
-            //   op = m44(va0, vc0)   — transform position by matrix in vc0..vc3
-            //   v0 = va1             — pass color to fragment
+            //   op = m44(va0, vc0)   - transform position by matrix in vc0..vc3
+            //   v0 = va1             - pass color to fragment
             var vertSrc:ByteArray = assembleAGAL(true,
                 "m44 op, va0, vc0\n" +
                 "mov v0, va1\n"
             );
 
             // Fragment shader:
-            //   oc = v0  — output interpolated color
+            //   oc = v0  - output interpolated color
             var fragSrc:ByteArray = assembleAGAL(false,
                 "mov oc, v0\n"
             );

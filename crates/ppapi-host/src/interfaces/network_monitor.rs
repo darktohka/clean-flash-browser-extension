@@ -3,8 +3,7 @@
 //! Provides network monitoring resources. Flash queries this to detect
 //! network configuration changes. In our standalone player, we create valid
 //! resources and respond to type-checks, but UpdateNetworkList returns
-//! PP_ERROR_NOACCESS (no network monitoring permissions), matching the
-//! freshplayerplugin behaviour.
+//! PP_ERROR_NOACCESS (no network monitoring permissions).
 
 use crate::interface_registry::InterfaceRegistry;
 use crate::resource::Resource;

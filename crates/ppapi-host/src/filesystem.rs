@@ -2,11 +2,11 @@
 //!
 //! Provides a [`FlashFileSystem`] trait and three implementations:
 //!
-//! - **`OsFileSystem`** — persists to the real OS filesystem (default).
+//! - **`OsFileSystem`** - persists to the real OS filesystem (default).
 //!   Uses `std::fs` internally so it works on both Windows and Unix.
-//! - **`InMemoryFileSystem`** — stores data in-memory; nothing is written
+//! - **`InMemoryFileSystem`** - stores data in-memory; nothing is written
 //!   to disk and all data is lost when the process exits.
-//! - **`StubFileSystem`** — every operation returns an error.  Useful for
+//! - **`StubFileSystem`** - every operation returns an error.  Useful for
 //!   headless / CI builds where Flash file I/O is irrelevant.
 //!
 //! # Selecting a provider
@@ -172,7 +172,7 @@ fn file_to_handle(file: std::fs::File) -> Result<PP_FileHandle, i32> {
     let handle = file.into_raw_handle();
     let fd = unsafe { _open_osfhandle(handle as isize, 0) };
     if fd == -1 {
-        // Couldn't convert — close the OS handle to avoid leak.
+        // Couldn't convert - close the OS handle to avoid leak.
         unsafe {
             CloseHandle(handle as isize);
         }

@@ -120,7 +120,7 @@ pub fn pp_var_to_js_value(var: PP_Var) -> JsValue {
             match browser_id.flatten() {
                 Some(id) => JsValue::Object(id),
                 None => {
-                    // Plugin-created object — can't proxy to browser.
+                    // Plugin-created object - can't proxy to browser.
                     tracing::trace!("pp_var_to_js_value: non-browser object -> Undefined");
                     JsValue::Undefined
                 }

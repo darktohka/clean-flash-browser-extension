@@ -12,7 +12,7 @@ use std::any::Any;
 
 use super::super::HOST;
 
-/// Printing resource — mostly empty, just satisfies the interface contract.
+/// Printing resource - mostly empty, just satisfies the interface contract.
 pub struct PrintingResource;
 
 impl Resource for PrintingResource {
@@ -107,7 +107,7 @@ unsafe extern "C" fn get_default_print_settings(
             ps.dpi
         );
     } else {
-        // No provider — return sensible defaults (US Letter, 72 DPI).
+        // No provider - return sensible defaults (US Letter, 72 DPI).
         let defaults = player_ui_traits::PrintSettings::default();
         unsafe {
             (*print_settings).printable_area = PP_Rect {

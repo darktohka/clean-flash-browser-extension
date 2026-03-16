@@ -14,7 +14,7 @@ use super::super::HOST;
 // Resource
 // ---------------------------------------------------------------------------
 
-/// Audio configuration resource — stores sample rate and frame count.
+/// Audio configuration resource - stores sample rate and frame count.
 pub struct AudioConfigResource {
     pub sample_rate: PP_AudioSampleRate,
     pub sample_frame_count: u32,
@@ -106,7 +106,7 @@ unsafe extern "C" fn recommend_sample_frame_count(
     clamp_sample_frame_count(requested_sample_frame_count)
 }
 
-/// 1.0 variant — no `PP_Instance` parameter.
+/// 1.0 variant - no `PP_Instance` parameter.
 unsafe extern "C" fn recommend_sample_frame_count_1_0(
     _sample_rate: PP_AudioSampleRate,
     requested_sample_frame_count: u32,

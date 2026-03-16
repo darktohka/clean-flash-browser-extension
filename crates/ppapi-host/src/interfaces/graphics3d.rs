@@ -26,7 +26,7 @@ use super::super::HOST;
 // Graphics3D resource data
 // ---------------------------------------------------------------------------
 
-/// Graphics3D context resource — stores the surface attributes requested at
+/// Graphics3D context resource - stores the surface attributes requested at
 /// creation time and tracks swap-buffer state.  When EGL is available, holds
 /// a real offscreen GL context.
 pub struct Graphics3DResource {
@@ -476,7 +476,7 @@ unsafe extern "C" fn swap_buffers(context: PP_Resource, callback: PP_CompletionC
                         while i + 3 < len {
                             let sa = src[i + 3] as u32;
                             if sa == 255 {
-                                // Fully opaque — just copy.
+                                // Fully opaque - just copy.
                                 dst[i]     = src[i];
                                 dst[i + 1] = src[i + 1];
                                 dst[i + 2] = src[i + 2];

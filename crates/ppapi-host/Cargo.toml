@@ -3,15 +3,15 @@ name = "ppapi-host"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Core PPAPI host implementation — loads and hosts PPAPI plugins"
+description = "Core PPAPI host implementation - loads and hosts PPAPI plugins"
 
 [features]
 default = ["fs-os", "audio-cpal"]
 ## Use the real OS filesystem for Flash file storage (works on all platforms).
 fs-os = []
-## Use an in-memory filesystem — data is not persisted to disk.
+## Use an in-memory filesystem - data is not persisted to disk.
 fs-memory = []
-## Use a stub filesystem — all file operations return errors.
+## Use a stub filesystem - all file operations return errors.
 fs-stub = []
 ## Use cpal for native OS audio output (desktop players).
 ## Disable this when audio is provided externally (e.g. browser Web Audio API).
@@ -20,7 +20,7 @@ audio-cpal = ["dep:cpal"]
 clipboard-arboard = ["dep:arboard"]
 ## Use reqwest for HTTP/HTTPS URL loading (adds native networking).
 url-reqwest = ["dep:reqwest"]
-## Stub URL loader — returns 404 for all HTTP/HTTPS requests.
+## Stub URL loader - returns 404 for all HTTP/HTTPS requests.
 url-stub = []
 
 [dependencies]

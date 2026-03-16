@@ -172,7 +172,7 @@ unsafe extern "C" fn paint_image_data(
     };
 
     // We need the image size to build the default src_rect.  Read it
-    // first (cheap — no pixel data touched).
+    // first (cheap - no pixel data touched).
     let img_size: Option<PP_Size> = host
         .resources
         .with_downcast::<super::image_data::ImageDataResource, _>(image_data, |img| img.size);
@@ -311,7 +311,7 @@ unsafe extern "C" fn flush(graphics_2d: PP_Resource, callback: PP_CompletionCall
         .unwrap_or(false);
 
     if !is_bound {
-        // Not bound — complete immediately with error.
+        // Not bound - complete immediately with error.
         return crate::callback::complete_immediately(callback, PP_ERROR_FAILED);
     }
 
@@ -332,7 +332,7 @@ unsafe extern "C" fn flush(graphics_2d: PP_Resource, callback: PP_CompletionCall
 
     // Read the dirty rect and pixel data, then notify host callbacks.
     // When a Graphics3D context is also bound, the 2D content is composited
-    // on top of the 3D frame during SwapBuffers — skip direct delivery here.
+    // on top of the 3D frame during SwapBuffers - skip direct delivery here.
     let has_3d = host.instances.with_instance(instance_id, |inst| {
         inst.bound_graphics_3d != 0
     }).unwrap_or(false);

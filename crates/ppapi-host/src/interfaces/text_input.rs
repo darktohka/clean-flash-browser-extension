@@ -69,7 +69,7 @@ unsafe extern "C" fn selection_changed(instance: PP_Instance) {
 // Vtable functions  (Stable TextInputController;1.0)
 // ---------------------------------------------------------------------------
 
-/// Stable variant of SetTextInputType (same signature — type alias differs
+/// Stable variant of SetTextInputType (same signature - type alias differs
 /// but both are i32 at the ABI level).
 unsafe extern "C" fn set_text_input_type_stable(
     instance: PP_Instance,
@@ -81,7 +81,7 @@ unsafe extern "C" fn set_text_input_type_stable(
     );
 }
 
-/// Stable UpdateCaretPosition — only one rect parameter (no bounding_box).
+/// Stable UpdateCaretPosition - only one rect parameter (no bounding_box).
 unsafe extern "C" fn update_caret_position_stable(
     instance: PP_Instance,
     caret: *const PP_Rect,
@@ -95,7 +95,7 @@ unsafe extern "C" fn update_caret_position_stable(
     }
 }
 
-/// Stable CancelCompositionText — identical signature.
+/// Stable CancelCompositionText - identical signature.
 unsafe extern "C" fn cancel_composition_text_stable(instance: PP_Instance) {
     tracing::trace!(
         "PPB_TextInputController::CancelCompositionText(instance={})",
@@ -103,7 +103,7 @@ unsafe extern "C" fn cancel_composition_text_stable(instance: PP_Instance) {
     );
 }
 
-/// Stable UpdateSurroundingText — takes PP_Var instead of *const c_char.
+/// Stable UpdateSurroundingText - takes PP_Var instead of *const c_char.
 unsafe extern "C" fn update_surrounding_text_stable(
     instance: PP_Instance,
     _text: PP_Var,

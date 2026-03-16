@@ -10,7 +10,7 @@ use std::any::Any;
 
 use super::super::HOST;
 
-/// Flash DRM resource — minimal, just needs to exist.
+/// Flash DRM resource - minimal, just needs to exist.
 pub struct FlashDRMResource;
 
 impl Resource for FlashDRMResource {

@@ -36,7 +36,7 @@ const GL_STENCIL_INDEX8: u32 = glow::STENCIL_INDEX8;
 const GL_FRAMEBUFFER_COMPLETE: u32 = glow::FRAMEBUFFER_COMPLETE;
 
 // ============================================================================
-// Global state — loaded once at first use
+// Global state - loaded once at first use
 // ============================================================================
 
 struct GlState {
@@ -105,7 +105,7 @@ impl GlState {
     }
 
     fn create_display() -> Result<Display, String> {
-        // Attempt 1: EGL via X11 display — works on X11/XWayland.
+        // Attempt 1: EGL via X11 display - works on X11/XWayland.
         #[cfg(all(unix, not(target_os = "macos")))]
         {
             let raw_display = RawDisplayHandle::Xlib(
@@ -205,7 +205,7 @@ fn gl_state() -> Option<&'static GlState> {
         .get_or_init(|| match GlState::init() {
             Ok(state) => Some(state),
             Err(e) => {
-                tracing::warn!("EGL/GLES2 init failed — Stage3D unavailable: {}", e);
+                tracing::warn!("EGL/GLES2 init failed - Stage3D unavailable: {}", e);
                 None
             }
         })

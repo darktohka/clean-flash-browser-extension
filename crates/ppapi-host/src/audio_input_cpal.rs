@@ -21,7 +21,7 @@ pub struct CpalAudioInputProvider {
 }
 
 struct CpalInputStream {
-    /// The cpal stream handle — kept alive to maintain recording.
+    /// The cpal stream handle - kept alive to maintain recording.
     _stream: Option<cpal::Stream>,
     /// Ring buffer of captured bytes (mono i16 LE PCM).
     ring: Arc<Mutex<RingBuffer>>,
@@ -154,7 +154,7 @@ impl player_ui_traits::AudioInputProvider for CpalAudioInputProvider {
         tracing::info!("CpalAudioInputProvider: using input device: {:?}", dev_name);
 
         let _config = cpal::StreamConfig {
-            channels: 1, // mono — PPAPI audio input is mono
+            channels: 1, // mono - PPAPI audio input is mono
             sample_rate: sample_rate,
             buffer_size: cpal::BufferSize::Fixed(sample_frame_count),
         };

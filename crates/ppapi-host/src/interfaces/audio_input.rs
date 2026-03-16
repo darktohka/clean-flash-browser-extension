@@ -114,7 +114,7 @@ pub unsafe fn register(registry: &mut InterfaceRegistry) {
 }
 
 // ---------------------------------------------------------------------------
-// Capture pump — background thread that reads from the provider and
+// Capture pump - background thread that reads from the provider and
 // forwards samples to the plugin's audio input callback.
 // ---------------------------------------------------------------------------
 
@@ -490,7 +490,7 @@ unsafe extern "C" fn start_capture(audio_input: PP_Resource) -> PP_Bool {
                 }
             }
 
-            // No provider — capture produces silence via the pump thread
+            // No provider - capture produces silence via the pump thread
             // with a zeroed buffer.
             ai.capturing.store(true, Ordering::SeqCst);
             tracing::debug!(

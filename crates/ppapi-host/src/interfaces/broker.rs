@@ -2,7 +2,7 @@
 //!
 //! The broker interface provides access to a trusted broker process with
 //! greater privileges. In a standalone player there is no separate broker
-//! process — we are already running with full privileges. We create valid
+//! process - we are already running with full privileges. We create valid
 //! resources so the plugin's interface availability check passes, `Connect`
 //! completes immediately with PP_OK, `GetHandle` returns PP_ERROR_FAILED
 //! (no pipe), and `IsAllowed` returns PP_TRUE (the user implicitly trusts
@@ -19,7 +19,7 @@ use super::super::HOST;
 // Resource
 // ---------------------------------------------------------------------------
 
-/// Broker resource — no real broker process behind it.
+/// Broker resource - no real broker process behind it.
 pub struct BrokerResource {
     pub instance: PP_Instance,
     pub connected: bool,
@@ -162,7 +162,7 @@ unsafe extern "C" fn get_handle(broker: PP_Resource, handle: *mut i32) -> i32 {
 unsafe extern "C" fn is_allowed(broker: PP_Resource) -> PP_Bool {
     let host = HOST.get().unwrap();
     if host.resources.is_type(broker, "PPB_BrokerTrusted") {
-        // Standalone player — always allowed.
+        // Standalone player - always allowed.
         PP_TRUE
     } else {
         PP_FALSE

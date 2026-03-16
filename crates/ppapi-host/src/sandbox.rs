@@ -3,9 +3,9 @@
 //! ## Linux (seccomp-BPF)
 //!
 //! Once activated, this blocks:
-//! - `execve` / `execveat` — prevents spawning child processes
-//! - `mmap` with `PROT_EXEC` — prevents mapping new executable memory (blocks `dlopen`)
-//! - `memfd_create` — prevents creating anonymous executable files
+//! - `execve` / `execveat` - prevents spawning child processes
+//! - `mmap` with `PROT_EXEC` - prevents mapping new executable memory (blocks `dlopen`)
+//! - `memfd_create` - prevents creating anonymous executable files
 //!
 //! Note: `mprotect` with `PROT_EXEC` is intentionally **allowed** so that Flash's
 //! AVM2 JIT compiler can transition RW pages to RX (W^X pattern).
@@ -184,7 +184,7 @@ mod inner {
             return Err(io::Error::last_os_error());
         }
 
-        tracing::info!("seccomp sandbox activated — execve, mmap(PROT_EXEC), memfd_create blocked (mprotect PROT_EXEC allowed for JIT)");
+        tracing::info!("seccomp sandbox activated - execve, mmap(PROT_EXEC), memfd_create blocked (mprotect PROT_EXEC allowed for JIT)");
         Ok(())
     }
 }
@@ -246,11 +246,11 @@ mod inner {
                 return Err(err);
             }
 
-            // Intentionally leak `job` — the Job Object must remain alive for
+            // Intentionally leak `job` - the Job Object must remain alive for
             // the lifetime of the process to keep the restriction active.
             // Closing it would remove the limits.
 
-            tracing::info!("Job Object sandbox active — child process creation blocked");
+            tracing::info!("Job Object sandbox active - child process creation blocked");
             Ok(())
         }
     }
@@ -260,7 +260,7 @@ mod inner {
     /// - `ProcessChildProcessPolicy`: tells the kernel to block child process
     ///   creation at the process level (defense-in-depth alongside the Job Object).
     /// - `ProcessSignaturePolicy`: blocks loading of DLLs that are not signed by
-    ///   Microsoft, the Windows Store, or the WHQL — prevents the plugin from
+    ///   Microsoft, the Windows Store, or the WHQL - prevents the plugin from
     ///   loading arbitrary native code via `LoadLibrary`.
     fn apply_mitigation_policies() -> io::Result<()> {
         use windows_sys::Win32::System::Threading::{
@@ -289,7 +289,7 @@ mod inner {
         };
 
         if ret == FALSE {
-            // This policy requires Windows 10 1709+.  Log but don't fail —
+            // This policy requires Windows 10 1709+.  Log but don't fail -
             // the Job Object already provides the primary restriction.
             let code = unsafe { GetLastError() };
             tracing::warn!(
@@ -298,7 +298,7 @@ mod inner {
                 code,
             );
         } else {
-            tracing::info!("ProcessChildProcessPolicy active — child process creation blocked at kernel level");
+            tracing::info!("ProcessChildProcessPolicy active - child process creation blocked at kernel level");
         }
 
         Ok(())
@@ -306,7 +306,7 @@ mod inner {
 
     /// Activate the Windows sandbox.
     ///
-    /// 1. Creates a Job Object limiting active processes to 1 — blocks
+    /// 1. Creates a Job Object limiting active processes to 1 - blocks
     ///    `CreateProcess` and similar.
     /// 2. Sets `ProcessChildProcessPolicy` as defense-in-depth.
     pub fn activate() -> io::Result<()> {
@@ -314,7 +314,7 @@ mod inner {
         apply_mitigation_policies()?;
 
         tracing::info!(
-            "Windows sandbox activated — process creation blocked \
+            "Windows sandbox activated - process creation blocked \
              (Job Object + mitigation policies)"
         );
         Ok(())

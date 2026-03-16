@@ -1,4 +1,4 @@
-//! Interface registry — maps interface name strings to vtable pointers.
+//! Interface registry - maps interface name strings to vtable pointers.
 //!
 //! The browser provides `PPB_GetInterface(name) -> *const c_void` to the plugin.
 //! This registry stores all registered PPB_* vtable pointers keyed by their

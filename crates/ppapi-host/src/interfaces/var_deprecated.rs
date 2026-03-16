@@ -7,7 +7,7 @@
 //! The object methods delegate to the plugin's `PPP_Class_Deprecated` vtable
 //! that was stored when the object was created via `CreateObject`.
 //!
-//! VarFromUtf8 in 0.3 takes a PP_Module parameter (ignored — matches 1.0).
+//! VarFromUtf8 in 0.3 takes a PP_Module parameter (ignored - matches 1.0).
 
 use crate::interface_registry::InterfaceRegistry;
 use ppapi_sys::*;

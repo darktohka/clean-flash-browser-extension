@@ -36,7 +36,7 @@ use super::url_request_info::URLRequestInfoResource;
 use super::url_response_info::URLResponseInfoResource;
 
 // ---------------------------------------------------------------------------
-// Concurrency limiter — at most 8 simultaneous in-flight URLLoader requests
+// Concurrency limiter - at most 8 simultaneous in-flight URLLoader requests
 // ---------------------------------------------------------------------------
 
 /// Maximum number of concurrent HTTP requests.
@@ -48,7 +48,7 @@ fn global_semaphore() -> &'static Semaphore {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP client infrastructure — self-contained URL loading
+// HTTP client infrastructure - self-contained URL loading
 // ---------------------------------------------------------------------------
 
 /// Response from performing URL loading (internal to this module).
@@ -204,7 +204,7 @@ fn perform_url_open(
     // ----- crossdomain.xml interception -----
     if is_crossdomain_xml_request(url) {
         tracing::info!(
-            "URL open: intercepting crossdomain.xml request for {} — serving fake permissive policy",
+            "URL open: intercepting crossdomain.xml request for {} - serving fake permissive policy",
             url
         );
         let body_bytes: &[u8] = FAKE_CROSSDOMAIN_XML;
@@ -385,7 +385,7 @@ enum Mode {
     Opening,
     /// Response received; data is streaming in.
     StreamingData,
-    /// Load finished (success or error) — all data consumed or error set.
+    /// Load finished (success or error) - all data consumed or error set.
     LoadComplete,
 }
 
@@ -725,7 +725,7 @@ fn spawn_open_task(
         // ---- Step 1: Acquire concurrency permit ----
         let _permit = global_semaphore().acquire().await;
         if _permit.is_err() {
-            // Semaphore closed — host is shutting down.
+            // Semaphore closed - host is shutting down.
             finish_loading(loader_id, PP_ERROR_ABORTED, &poster);
             return;
         }
@@ -868,7 +868,7 @@ fn spawn_open_task(
         fire_open_callback(loader_id, &poster);
 
         // If this was a redirect that the plugin needs to inspect (follow_redirects=false),
-        // don't stream the body — wait for FollowRedirect.
+        // don't stream the body - wait for FollowRedirect.
         if is_redirect && !should_auto_follow {
             return;
         }
@@ -899,7 +899,7 @@ fn extract_location_header(headers: &str) -> Option<String> {
 /// Fire the pending Open/FollowRedirect callback with PP_OK (success).
 ///
 /// For **error** paths, use `finish_loading(loader_id, PP_ERROR_FAILED, poster)`
-/// instead — that matches Chrome's `FinishedLoading` code path which
+/// instead - that matches Chrome's `FinishedLoading` code path which
 /// atomically sets mode + done_status and fires the pending callback.
 fn fire_open_callback(loader_id: PP_Resource, poster: &MessageLoopPoster) {
     tracing::debug!("URLLoader: firing open callback with PP_OK for loader_id {}", loader_id);
@@ -997,7 +997,7 @@ fn stream_body(
                     let cb = ul.pending_callback.take();
                     cb.map(|c| (c, copy_len as i32))
                 } else {
-                    // No pending read — just buffer the data.
+                    // No pending read - just buffer the data.
                     ul.buffer.extend(&chunk[..bytes_read]);
                     None
                 };
@@ -1070,7 +1070,7 @@ fn finish_loading(loader_id: PP_Resource, status: i32, poster: &MessageLoopPoste
                     ul.buffer.drain(..copy_len);
                     ul.pending_callback.take().map(|c| (c, copy_len as i32))
                 } else {
-                    // Buffer empty — report EOF (0 bytes) or error.
+                    // Buffer empty - report EOF (0 bytes) or error.
                     let result = if status == PP_OK { 0 } else { status };
                     ul.pending_callback.take().map(|c| (c, result))
                 }
@@ -1187,7 +1187,7 @@ unsafe extern "C" fn open(
     }
 
     // ---- Resolve relative URLs against the document base URL ----
-    // Mirrors Chrome (PepperURLLoaderHost) and freshplayerplugin behaviour:
+    // Mirrors Chrome (PepperURLLoaderHost) behavior:
     // the browser resolves the URLRequestInfo URL relative to the embedding
     // page's base URL before issuing the request.
     let instance_id = host.resources.get_instance(loader).unwrap_or(0);
@@ -1357,7 +1357,7 @@ unsafe extern "C" fn follow_redirect(
                 return Err(PP_ERROR_FAILED);
             }
 
-            // Clear old response state, per Chrome and freshplayerplugin.
+            // Clear old response state, per Chrome.
             ul.response_info_id = None;
             ul.status_code = 0;
             ul.status_line.clear();
@@ -1476,14 +1476,14 @@ unsafe extern "C" fn get_response_info(loader: PP_Resource) -> PP_Resource {
         return 0;
     };
     // Extract the response_info_id WITHOUT calling add_ref while the mutex is
-    // held — parking_lot::Mutex is non-reentrant and add_ref would deadlock.
+    // held - parking_lot::Mutex is non-reentrant and add_ref would deadlock.
     let resp_id = host
         .resources
         .with_downcast::<URLLoaderResource, _>(loader, |ul| ul.response_info_id)
         .flatten()
         .unwrap_or(0);
     if resp_id != 0 {
-        // Increment refcount per PPAPI contract — caller owns a ref.
+        // Increment refcount per PPAPI contract - caller owns a ref.
         host.resources.add_ref(resp_id);
     }
     resp_id
@@ -1543,13 +1543,13 @@ unsafe extern "C" fn read_response_body(
                 return copy_len as i32;
             }
 
-            // Buffer is empty — check if the load is done.
+            // Buffer is empty - check if the load is done.
             if let Some(status) = ul.done_status {
                 // Load is complete. Return 0 for EOF or the error code.
                 return if status == PP_OK { 0 } else { status };
             }
 
-            // Data not yet available — register callback for async wakeup.
+            // Data not yet available - register callback for async wakeup.
             ul.pending_callback = Some(callback);
             ul.user_buffer_ptr = buffer as usize;
             ul.user_buffer_size = requested;
@@ -1564,7 +1564,7 @@ unsafe extern "C" fn finish_streaming_to_file(
     _callback: PP_CompletionCallback,
 ) -> i32 {
     tracing::debug!(
-        "PPB_URLLoader::FinishStreamingToFile(loader={}) — not supported",
+        "PPB_URLLoader::FinishStreamingToFile(loader={}) - not supported",
         loader
     );
     // Chrome returns PP_ERROR_NOTSUPPORTED here.
@@ -1611,7 +1611,7 @@ unsafe extern "C" fn grant_universal_access(loader: PP_Resource) {
     let Some(host) = HOST.get() else {
         return;
     };
-    // In our host, we always grant it — we trust the plugin (Flash).
+    // In our host, we always grant it - we trust the plugin (Flash).
     host.resources
         .with_downcast_mut::<URLLoaderResource, _>(loader, |ul| {
             ul.has_universal_access = true;

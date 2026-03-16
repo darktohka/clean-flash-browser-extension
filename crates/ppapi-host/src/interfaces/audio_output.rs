@@ -20,7 +20,7 @@ use std::sync::Arc;
 use super::super::HOST;
 
 // ---------------------------------------------------------------------------
-// Stream handle — either native (cpal) or provider-based
+// Stream handle - either native (cpal) or provider-based
 // ---------------------------------------------------------------------------
 
 #[allow(dead_code)] // variants hold values kept alive for their Drop impl
@@ -107,13 +107,13 @@ pub unsafe fn register(registry: &mut InterfaceRegistry) {
 }
 
 // ---------------------------------------------------------------------------
-// Audio stream helpers (cpal — native OS audio)
+// Audio stream helpers (cpal - native OS audio)
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "audio-cpal")]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
-/// Playback callback context — passed to the cpal audio thread.
+/// Playback callback context - passed to the cpal audio thread.
 #[cfg(feature = "audio-cpal")]
 struct PlaybackContext {
     callback: PPB_AudioOutput_Callback,
@@ -369,7 +369,7 @@ unsafe extern "C" fn enumerate_devices(
         return PP_ERROR_BADRESOURCE;
     }
 
-    // Return an empty device list — use default output device.
+    // Return an empty device list - use default output device.
     if let Some(get_buffer) = output.GetDataBuffer {
         unsafe {
             let _ = get_buffer(output.user_data, 0, std::mem::size_of::<PP_Resource>() as u32);

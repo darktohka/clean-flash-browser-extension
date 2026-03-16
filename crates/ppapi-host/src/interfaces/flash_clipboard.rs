@@ -251,7 +251,7 @@ unsafe extern "C" fn get_sequence_number(
 }
 
 // ===========================================================================
-// 4.0 wrappers — format parameter is i32 enum, not u32 custom-id
+// 4.0 wrappers - format parameter is i32 enum, not u32 custom-id
 // ===========================================================================
 
 unsafe extern "C" fn is_format_available_v4(

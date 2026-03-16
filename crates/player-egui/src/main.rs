@@ -1,4 +1,4 @@
-//! Flash Player egui frontend — main entry point.
+//! Flash Player egui frontend - main entry point.
 
 mod app;
 mod dialogs;

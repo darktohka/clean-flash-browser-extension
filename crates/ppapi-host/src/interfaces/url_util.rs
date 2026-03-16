@@ -39,8 +39,8 @@ pub unsafe fn register(registry: &mut InterfaceRegistry) {
 }
 
 /// Parse URL components from a &str, filling PP_URLComponents_Dev.
-/// Simple heuristic parser — not a full RFC 3986 implementation.
-/// Absent/unspecified URL component — matches Chrome's `url::Component()`
+/// Simple heuristic parser - not a full RFC 3986 implementation.
+/// Absent/unspecified URL component - matches Chrome's `url::Component()`
 /// default: `begin=0, len=-1`.  Flash checks `len != -1` (i.e. `is_valid()`)
 /// to decide whether a component is present, so using `len=0` for absent
 /// components would trick Flash into treating them as present and then
@@ -268,7 +268,7 @@ pub(crate) fn document_base_url(host: &crate::HostState, instance: PP_Instance) 
         return from_page;
     }
 
-    // 3rd (last resort): swf_url — only for non-browser (standalone) usage
+    // 3rd (last resort): swf_url - only for non-browser (standalone) usage
     let from_swf = non_empty_url(
         host.instances
             .with_instance(instance, |inst| inst.swf_url.clone())
@@ -385,7 +385,7 @@ unsafe extern "C" fn get_document_url(
     )
     .or_else(|| {
         // Prefer the cached page URL over the SWF URL.  GetDocumentURL must
-        // return the *page* URL, not the plugin source URL — that is what
+        // return the *page* URL, not the plugin source URL - that is what
         // GetPluginInstanceURL is for.
         non_empty_url(
             host.instances

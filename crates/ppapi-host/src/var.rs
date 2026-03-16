@@ -66,7 +66,7 @@ impl VarManager {
         );
         let count = map.len();
         drop(map);
-        tracing::trace!("VarManager: new string id={} — live strings: {}", id, count);
+        tracing::trace!("VarManager: new string id={} - live strings: {}", id, count);
         PP_Var::from_string_id(id)
     }
 
@@ -137,7 +137,7 @@ impl VarManager {
                 if should_remove {
                     map.remove(&id);
                     tracing::trace!(
-                        "VarManager: released string id={} — live strings: {}",
+                        "VarManager: released string id={} - live strings: {}",
                         id,
                         map.len()
                     );

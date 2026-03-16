@@ -406,7 +406,7 @@
   installInlineModernSwfobject();
   ppSpoofFlash();
 
-  // Unique element id — must match the one in content.js.
+  // Unique element id - must match the one in content.js.
   const COMM_ID = "__flash_player_comm__";
 
   // Create the hidden communication element if it doesn't exist yet.
@@ -660,10 +660,10 @@
         // This covers all DOM properties/methods like tagName, setAttribute, etc.
         if (prop in target) return Reflect.get(target, prop, receiver);
 
-        // Promise-related / serialisation — never proxy these.
+        // Promise-related / serialisation - never proxy these.
         if (prop === "then" || prop === "toJSON") return undefined;
 
-        // Unknown property — return an ExternalInterface stub.
+        // Unknown property - return an ExternalInterface stub.
         return makeExternalInterfaceStub(prop);
       },
 
@@ -753,7 +753,7 @@
             argsXml +
             "</invoke>";
           sendCallFunctionAsync(invokeXml);
-          // Fire-and-forget — returning undefined for now.
+          // Fire-and-forget - returning undefined for now.
           return undefined;
         };
       };
@@ -967,7 +967,7 @@
         // Also write to the system clipboard.
         const text = req.plaintext || req.html || "";
         if (navigator.clipboard && navigator.clipboard.writeText) {
-          // Modern Clipboard API — async, does not steal focus.
+          // Modern Clipboard API - async, does not steal focus.
           navigator.clipboard.writeText(text).catch(() => {});
         } else {
           // Fallback: textarea + execCommand, with focus preservation.

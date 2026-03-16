@@ -269,7 +269,7 @@ fn get_instance_dimensions(instance: PP_Instance) -> (i32, i32) {
 }
 
 // ===========================================================================
-// PPP_Class_Deprecated vtable — single vtable shared by all fake objects
+// PPP_Class_Deprecated vtable - single vtable shared by all fake objects
 // ===========================================================================
 
 static WINDOW_CLASS: PPP_Class_Deprecated = PPP_Class_Deprecated {
@@ -519,7 +519,7 @@ fn get_or_create_sub_object(
     }
     let var = make_sub_object(obj, make_kind());
     obj.sub_objects.insert(key, var);
-    // add_ref so the caller gets its own reference —
+    // add_ref so the caller gets its own reference -
     // the cache holds one and the caller holds one.
     let host = HOST.get().expect("HOST not initialised");
     host.vars.add_ref(var);
@@ -1068,7 +1068,7 @@ fn call_history(
 // ---- Console methods ----
 
 fn call_console(method: &str) -> PP_Var {
-    // We intentionally ignore console output from Flash — the host already
+    // We intentionally ignore console output from Flash - the host already
     // has its own logging via tracing.
     tracing::trace!("console.{}(): stub no-op", method);
     PP_Var::undefined()

@@ -1,4 +1,4 @@
-//! Flash Player Win32 frontend — main entry point.
+//! Flash Player Win32 frontend - main entry point.
 
 mod app;
 mod dialogs;

@@ -4,7 +4,7 @@
 //! Internally the `data` field stores a `SockAddrIn` (IPv4) or
 //! `SockAddrIn6` (IPv6) in network byte order.
 //!
-//! Also provides [`NetAddressResource`] — a minimal resource wrapper around
+//! Also provides [`NetAddressResource`] - a minimal resource wrapper around
 //! `SocketAddr` for use by the public `PPB_UDPSocket` (resource-based) API.
 //!
 //! We define our own portable socket structs so we don't depend on
@@ -19,7 +19,7 @@ use std::mem;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 // ---------------------------------------------------------------------------
-// NetAddressResource — lightweight SocketAddr wrapper used by public APIs
+// NetAddressResource - lightweight SocketAddr wrapper used by public APIs
 // ---------------------------------------------------------------------------
 
 /// A network address stored as a `PP_Resource`.

@@ -1,4 +1,4 @@
-//! egui application — the Flash Player GUI.
+//! egui application - the Flash Player GUI.
 //!
 //! Provides a simple UI with:
 //! - Menu bar: File > Open, Open URL, Close, Exit
@@ -68,7 +68,7 @@ impl FlashPlayerApp {
         let repaint_ctx = _cc.egui_ctx.clone();
         player.set_repaint_callback(move || repaint_ctx.request_repaint());
 
-        // Default plugin path — can be overridden.
+        // Default plugin path - can be overridden.
         #[cfg(windows)]
         let plugin_path =
             std::env::var("FLASH_PLUGIN_PATH").unwrap_or_else(|_| String::from("pepflashplayer.dll"));
@@ -256,7 +256,7 @@ impl FlashPlayerApp {
         // If there's an active dialog, draw it.
         if let Some(ref mut dialog) = self.active_dialog {
             if let Some(response) = dialogs::draw_dialog(dialog, ctx) {
-                // The user responded — send the response and remove the dialog.
+                // The user responded - send the response and remove the dialog.
                 if let Some(dialog) = self.active_dialog.take() {
                     dialog.respond(response);
                 }
@@ -374,7 +374,7 @@ impl FlashPlayerApp {
         let (need_full, pixels, frame_w, frame_h, dirty_x, dirty_y, dirty_w, dirty_h) = update;
 
         if need_full {
-            // Size changed or first frame — (re)create the full texture.
+            // Size changed or first frame - (re)create the full texture.
             self.last_frame_size = (frame_w, frame_h);
             let image = egui::ColorImage {
                 size: [frame_w as usize, frame_h as usize],
@@ -387,7 +387,7 @@ impl FlashPlayerApp {
                 egui::TextureOptions::NEAREST,
             ));
         } else {
-            // Partial update — upload only the dirty sub-region.
+            // Partial update - upload only the dirty sub-region.
             let sub_image = egui::ColorImage {
                 size: [dirty_w as usize, dirty_h as usize],
                 pixels,
@@ -422,7 +422,7 @@ impl FlashPlayerApp {
         if let Some(ref texture) = self.frame_texture {
             let tex_size = texture.size_vec2();
 
-            // Fill the entire available area — the plugin is told
+            // Fill the entire available area - the plugin is told
             // the real size and will render at that resolution.
             let display_size = available;
             let content_rect = egui::Rect::from_min_size(ui.min_rect().min, display_size);
@@ -920,7 +920,7 @@ impl eframe::App for FlashPlayerApp {
         //   ~4 ms so that CallOnMainThread timers fire promptly.
         //   New frames from Flash trigger an *immediate* repaint via the
         //   repaint callback wired in `new()`, so we only need this for
-        //   timer dispatch — not for frame presentation.
+        //   timer dispatch - not for frame presentation.
         // • When idle, egui sleeps until user input.
         if self.player.is_running() {
             ctx.request_repaint_after(Duration::from_millis(16));

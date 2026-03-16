@@ -2,7 +2,7 @@
 """
 Three HTTP servers for URLLoader/URLRequest test suite.
 
-Server A (port 3000): Main server — serves SWF, HTML, and same-origin test endpoints.
+Server A (port 3000): Main server - serves SWF, HTML, and same-origin test endpoints.
 Server B (port 3001): Cross-origin WITH permissive crossdomain.xml.
 Server C (port 3002): Cross-origin WITHOUT any crossdomain.xml.
 """
