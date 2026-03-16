@@ -23,12 +23,17 @@ player-ui-traits = { path = "crates/player-ui-traits" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 reqwest = { version = "0.13.2", default-features = false, features = ["blocking", "charset", "http2", "rustls"] }
+rustls-platform-verifier = { version = "0.6.2", features = ["prefer-webpki"] }
+
+[profile.release]
+debug = true
 
 [profile."release-lto"]
 inherits = "release"
 lto = "fat"
 strip = true
 codegen-units = 1
+debug = false
 
-[profile.release]
-debug = true
+[patch.crates-io]
+rustls-platform-verifier = { git = 'https://github.com/darktohka/rustls-platform-verifier' }
