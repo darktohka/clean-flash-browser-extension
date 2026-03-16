@@ -41,17 +41,31 @@ pub fn resolve_plugin_path() -> String {
     }
 
     // Otherwise search the current directory for any file whose name
-    // contains "pepflashplayer" (case-insensitive).
+    // contains "pepflashplayer" (case-insensitive), sorted descending by
+    // name so that higher-versioned files (e.g. "…34…") are preferred over
+    // lower-versioned ones (e.g. "…32…").
     if let Ok(entries) = std::fs::read_dir(".") {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-            if name_str.to_ascii_lowercase().contains("pepflashplayer") {
-                let path = entry.path();
-                return std::fs::canonicalize(&path)
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_else(|_| path.to_string_lossy().into_owned());
-            }
+        let mut matches: Vec<std::path::PathBuf> = entries
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .to_ascii_lowercase()
+                    .contains("pepflashplayer")
+            })
+            .map(|e| e.path())
+            .collect();
+
+        matches.sort_by(|a, b| {
+            b.file_name()
+                .unwrap_or_default()
+                .cmp(a.file_name().unwrap_or_default())
+        });
+
+        if let Some(path) = matches.into_iter().next() {
+            return std::fs::canonicalize(&path)
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| path.to_string_lossy().into_owned());
         }
     }
 
