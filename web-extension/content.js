@@ -1728,6 +1728,7 @@ function showFlashContextMenu(items, x, y, canvas, port) {
     minWidth: "160px",
     cursor: "default",
     userSelect: "none",
+    textAlign: "left",
   });
 
   let responded = false;
@@ -1745,7 +1746,7 @@ function showFlashContextMenu(items, x, y, canvas, port) {
         Object.assign(sep.style, {
           height: "1px",
           background: "#c0c0c0",
-          margin: "3px 0",
+          margin: "3px 0"
         });
         parentEl.appendChild(sep);
         continue;
