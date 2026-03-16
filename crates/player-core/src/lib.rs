@@ -12,6 +12,53 @@ use std::path::Path;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 
+/// Resolve the path to the Pepper Flash plugin.
+///
+/// Resolution order:
+/// 1. `FLASH_PLUGIN_PATH` environment variable, if set.
+/// 2. Platform-default name (`pepflashplayer.dll` / `PepperFlashPlayer` /
+///    `libpepflashplayer.so`) in the current working directory.
+/// 3. If the chosen path does not point to an existing file, scan the
+///    current working directory for the first entry whose name contains
+///    `pepflashplayer` (case-insensitive) and use that instead.
+///
+/// The returned string is canonicalized when possible.
+pub fn resolve_plugin_path() -> String {
+    #[cfg(windows)]
+    let default_name = "pepflashplayer.dll";
+    #[cfg(target_os = "macos")]
+    let default_name = "PepperFlashPlayer";
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let default_name = "libpepflashplayer.so";
+
+    let candidate = std::env::var("FLASH_PLUGIN_PATH").unwrap_or_else(|_| default_name.into());
+
+    // If the candidate already exists, canonicalize and return it.
+    if std::path::Path::new(&candidate).exists() {
+        return std::fs::canonicalize(&candidate)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or(candidate);
+    }
+
+    // Otherwise search the current directory for any file whose name
+    // contains "pepflashplayer" (case-insensitive).
+    if let Ok(entries) = std::fs::read_dir(".") {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.to_ascii_lowercase().contains("pepflashplayer") {
+                let path = entry.path();
+                return std::fs::canonicalize(&path)
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| path.to_string_lossy().into_owned());
+            }
+        }
+    }
+
+    // Fall back to the candidate as-is (load_plugin will report the error).
+    candidate
+}
+
 /// Shared frame buffer for incremental texture updates.
 ///
 /// Maintains a mirror of the Graphics2D pixel buffer (BGRA_PREMUL) and
@@ -135,6 +182,14 @@ impl FlashPlayer {
     /// Set the path to the PepperFlash plugin .so.
     pub fn set_plugin_path(&mut self, path: impl Into<String>) {
         self.plugin_path = Some(path.into());
+    }
+
+    /// Resolve the Flash plugin path to use, applying it directly to this player.
+    ///
+    /// Calls [`resolve_plugin_path`] and forwards the result to
+    /// [`set_plugin_path`](Self::set_plugin_path).
+    pub fn apply_default_plugin_path(&mut self) {
+        self.set_plugin_path(resolve_plugin_path());
     }
 
     /// Set the dialog provider (from the UI layer) for alert/confirm/prompt.

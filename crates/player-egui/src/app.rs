@@ -68,22 +68,9 @@ impl FlashPlayerApp {
         let repaint_ctx = _cc.egui_ctx.clone();
         player.set_repaint_callback(move || repaint_ctx.request_repaint());
 
-        // Default plugin path - can be overridden.
-        #[cfg(windows)]
-        let plugin_path =
-            std::env::var("FLASH_PLUGIN_PATH").unwrap_or_else(|_| String::from("pepflashplayer.dll"));
-        #[cfg(target_os = "macos")]
-        let plugin_path =
-            std::env::var("FLASH_PLUGIN_PATH").unwrap_or_else(|_| String::from("PepperFlashPlayer"));
-        #[cfg(all(unix, not(target_os = "macos")))]
-        let plugin_path =
-            std::env::var("FLASH_PLUGIN_PATH").unwrap_or_else(|_| String::from("libpepflashplayer.so"));
-
-        let actual_plugin_path = std::fs::canonicalize(&plugin_path)
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| plugin_path.clone());
-
-        player.set_plugin_path(&actual_plugin_path);
+        // Resolve the plugin path (env var → default name → CWD scan).
+        let plugin_path = player_core::resolve_plugin_path();
+        player.set_plugin_path(&plugin_path);
 
         // Set up the dialog provider.
         let dialog_state = Arc::new(dialogs::DialogState::new());

@@ -138,22 +138,8 @@ fn main() {
         });
     });
 
-    // Plugin path from environment.
-    #[cfg(windows)]
-    let plugin_path =
-        std::env::var("FLASH_PLUGIN_PATH").unwrap_or_else(|_| "pepflashplayer.dll".into());
-    #[cfg(target_os = "macos")]
-    let plugin_path =
-        std::env::var("FLASH_PLUGIN_PATH").unwrap_or_else(|_| "PepperFlashPlayer".into());
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let plugin_path =
-        std::env::var("FLASH_PLUGIN_PATH").unwrap_or_else(|_| "libpepflashplayer.so".into());
-
-    if let Ok(resolved) = std::fs::canonicalize(&plugin_path) {
-        player.set_plugin_path(resolved.to_string_lossy().as_ref());
-    } else {
-        player.set_plugin_path(&plugin_path);
-    }
+    // Resolve the plugin path (env var → default name → CWD scan).
+    player.apply_default_plugin_path();
 
     if let Err(e) = player.init_host() {
         let _ = protocol::send_host_message(&protocol::HostMessage::Error(
