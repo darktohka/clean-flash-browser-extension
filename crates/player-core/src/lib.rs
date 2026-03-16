@@ -26,9 +26,6 @@ pub struct SharedFrameBuffer {
     pub stride: u32,
     /// Full BGRA_PREMUL pixel buffer, updated incrementally on each flush.
     pub pixels: Vec<u8>,
-    /// Snapshot of pixels as of the last time the UI sent a frame.
-    /// Used to diff tiles and skip unchanged regions.
-    pub last_sent: Vec<u8>,
     /// Pending dirty rect `(x, y, w, h)` for the UI to consume.
     /// `None` means no new data since the UI last read.
     pub pending_dirty: Option<(u32, u32, u32, u32)>,
@@ -993,7 +990,6 @@ impl HostCallbacks for PlayerHostCallbacks {
             height: 0,
             stride: 0,
             pixels: Vec::new(),
-            last_sent: Vec::new(),
             pending_dirty: None,
         });
 
@@ -1004,7 +1000,6 @@ impl HostCallbacks for PlayerHostCallbacks {
             buf.stride = s;
             let total = (s * h) as usize;
             buf.pixels.resize(total, 0);
-            buf.last_sent.resize(total, 0);
             let copy_len = total.min(pixels.len());
             buf.pixels[..copy_len].copy_from_slice(&pixels[..copy_len]);
             buf.pending_dirty = Some((0, 0, w, h));
