@@ -46,6 +46,8 @@ raw-window-handle = "0.6"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+wayland-client = { version = "0.31", default-features = false, features = ["system", "dlopen"] }
+wayland-backend = { version = "0.3", default-features = false, features = ["client_system", "rwh_06", "dlopen"] }
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.9" }

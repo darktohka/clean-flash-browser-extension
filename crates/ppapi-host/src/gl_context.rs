@@ -18,7 +18,11 @@ use glutin::context::{ContextApi, ContextAttributesBuilder, NotCurrentGlContext,
 use glutin::display::{Display, GlDisplay};
 use glutin::surface::{PbufferSurface, Surface, SurfaceAttributesBuilder};
 use glutin::display::DisplayApiPreference;
+#[cfg(all(unix, not(target_os = "macos")))]
+use raw_window_handle::HasDisplayHandle;
 use raw_window_handle::RawDisplayHandle;
+#[cfg(all(unix, not(target_os = "macos")))]
+use wayland_client::Connection;
 
 // GL constants
 const GL_FRAMEBUFFER: u32 = glow::FRAMEBUFFER;
@@ -47,6 +51,8 @@ unsafe impl Send for GlState {}
 unsafe impl Sync for GlState {}
 
 static GL_STATE: OnceLock<Option<GlState>> = OnceLock::new();
+#[cfg(all(unix, not(target_os = "macos")))]
+static WAYLAND_CONNECTION: OnceLock<Option<Connection>> = OnceLock::new();
 
 impl GlState {
     fn init() -> Result<Self, String> {
@@ -119,16 +125,34 @@ impl GlState {
         // Attempt 2: EGL via Wayland handle.
         #[cfg(all(unix, not(target_os = "macos")))]
         {
-            let raw_display = RawDisplayHandle::Wayland(
-                raw_window_handle::WaylandDisplayHandle::empty()
-            );
-            match unsafe { Display::new(raw_display, DisplayApiPreference::Egl) } {
-                Ok(d) => {
-                    tracing::info!("glutin: created EGL display via Wayland handle");
-                    return Ok(d);
+            let connection = WAYLAND_CONNECTION.get_or_init(|| {
+                match Connection::connect_to_env() {
+                    Ok(conn) => Some(conn),
+                    Err(e) => {
+                        tracing::debug!("glutin: Wayland connect_to_env failed: {}", e);
+                        None
+                    }
                 }
-                Err(e) => {
-                    tracing::debug!("glutin: Wayland EGL display failed: {}", e);
+            });
+
+            if let Some(conn) = connection.as_ref() {
+                let backend = conn.backend();
+                match backend.display_handle() {
+                    Ok(handle) => {
+                        let raw_display = handle.as_raw();
+                        match unsafe { Display::new(raw_display, DisplayApiPreference::Egl) } {
+                            Ok(d) => {
+                                tracing::info!("glutin: created EGL display via Wayland handle");
+                                return Ok(d);
+                            }
+                            Err(e) => {
+                                tracing::debug!("glutin: Wayland EGL display failed: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::debug!("glutin: Wayland display_handle failed: {}", e);
+                    }
                 }
             }
         }

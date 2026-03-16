@@ -28,7 +28,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -43,14 +43,14 @@ jobs:
 
       - name: Upload artifact (Unix)
         if: runner.os != 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}
           path: target/${{ matrix.target }}/release-lto/flash-player-host
 
       - name: Upload artifact (Windows)
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}
           path: target/${{ matrix.target }}/release-lto/flash-player-host.exe
@@ -60,7 +60,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Remove install-host scripts
         run: |
@@ -72,7 +72,7 @@ jobs:
           zip -r ../web-extension.zip .
 
       - name: Upload web-extension artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: web-extension
           path: web-extension.zip

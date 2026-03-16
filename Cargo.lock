@@ -3069,6 +3069,8 @@ dependencies = [
  "tokio",
  "tracing",
  "ttf-parser",
+ "wayland-backend",
+ "wayland-client",
  "webpki-roots",
  "winapi",
  "windows-sys 0.61.2",
@@ -4543,6 +4545,7 @@ checksum = "aa75f400b7f719bcd68b3f47cd939ba654cedeef690f486db71331eec4c6a406"
 dependencies = [
  "cc",
  "downcast-rs",
+ "raw-window-handle",
  "rustix 1.1.4",
  "scoped-tls",
  "smallvec",
