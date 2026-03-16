@@ -715,11 +715,17 @@ fn handle_command(
 }
 
 // ===========================================================================
-// Frame sending — only dirty region
+// Frame sending — only dirty region, with tile-based diffing
 // ===========================================================================
 
+/// Tile size in pixels for dirty-region subdivision.
+/// Each tile is compared against the last-sent pixels; unchanged tiles are
+/// skipped entirely, dramatically cutting the data sent over native messaging
+/// when only a small part of the frame actually changes.
+const TILE_SIZE: u32 = 64;
+
 /// Extract the pending dirty region from the shared frame buffer and send
-/// it to the extension as a chunked binary message.
+/// only the tiles whose pixels actually changed since the last send.
 fn send_dirty_frame(frame_handle: &Arc<Mutex<Option<player_core::SharedFrameBuffer>>>) {
     let mut guard = frame_handle.lock();
     let Some(buf) = guard.as_mut() else { return };
@@ -735,34 +741,85 @@ fn send_dirty_frame(frame_handle: &Arc<Mutex<Option<player_core::SharedFrameBuff
     let frame_w = buf.width;
     let frame_h = buf.height;
 
-    // Extract dirty sub-rectangle pixels.
-    let row_bytes = (dw * 4) as usize;
-    let mut region = Vec::with_capacity(row_bytes * dh as usize);
-    for row in 0..dh {
-        let y = dy + row;
-        let offset = (y * stride + dx * 4) as usize;
-        let end = offset + row_bytes;
-        if end <= buf.pixels.len() {
-            region.extend_from_slice(&buf.pixels[offset..end]);
+    // Collect tiles that actually changed.
+    let mut tiles: Vec<(u32, u32, u32, u32, Vec<u8>)> = Vec::new();
+
+    let tile_x_start = dx / TILE_SIZE;
+    let tile_x_end = (dx + dw + TILE_SIZE - 1) / TILE_SIZE;
+    let tile_y_start = dy / TILE_SIZE;
+    let tile_y_end = (dy + dh + TILE_SIZE - 1) / TILE_SIZE;
+
+    for ty in tile_y_start..tile_y_end {
+        for tx in tile_x_start..tile_x_end {
+            // Tile pixel bounds, clipped to dirty rect and frame.
+            let tx0 = (tx * TILE_SIZE).max(dx);
+            let ty0 = (ty * TILE_SIZE).max(dy);
+            let tx1 = ((tx + 1) * TILE_SIZE).min(dx + dw).min(frame_w);
+            let ty1 = ((ty + 1) * TILE_SIZE).min(dy + dh).min(frame_h);
+            let tw = tx1.saturating_sub(tx0);
+            let th = ty1.saturating_sub(ty0);
+            if tw == 0 || th == 0 {
+                continue;
+            }
+
+            // Check if any row in this tile differs from last_sent.
+            let row_bytes = (tw * 4) as usize;
+            let mut changed = buf.last_sent.is_empty();
+            if !changed {
+                for row in 0..th {
+                    let y = ty0 + row;
+                    let off = (y * stride + tx0 * 4) as usize;
+                    let end = off + row_bytes;
+                    if end > buf.pixels.len() || end > buf.last_sent.len() {
+                        changed = true;
+                        break;
+                    }
+                    if buf.pixels[off..end] != buf.last_sent[off..end] {
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+
+            if !changed {
+                continue;
+            }
+
+            // Extract tile pixels and update last_sent.
+            let mut region = Vec::with_capacity(row_bytes * th as usize);
+            for row in 0..th {
+                let y = ty0 + row;
+                let off = (y * stride + tx0 * 4) as usize;
+                let end = off + row_bytes;
+                if end <= buf.pixels.len() {
+                    region.extend_from_slice(&buf.pixels[off..end]);
+                    if end <= buf.last_sent.len() {
+                        buf.last_sent[off..end].copy_from_slice(&buf.pixels[off..end]);
+                    }
+                }
+            }
+            tiles.push((tx0, ty0, tw, th, region));
         }
     }
 
     // Release the lock before the potentially slow encode + I/O.
     drop(guard);
 
-    // QOI-encode the dirty region (converts BGRA → RGBA on the fly).
-    let qoi_data = qoi_encode::qoi_encode_bgra(&region, dw, dh);
+    // Send each changed tile as a separate TAG_FRAME message.
+    for (tx, ty, tw, th, region) in tiles {
+        let qoi_data = qoi_encode::qoi_encode_bgra(&region, tw, th);
 
-    let _ = protocol::send_host_message(&protocol::HostMessage::Frame {
-        x: dx,
-        y: dy,
-        width: dw,
-        height: dh,
-        frame_width: frame_w,
-        frame_height: frame_h,
-        stride,
-        pixels: &qoi_data,
-    });
+        let _ = protocol::send_host_message(&protocol::HostMessage::Frame {
+            x: tx,
+            y: ty,
+            width: tw,
+            height: th,
+            frame_width: frame_w,
+            frame_height: frame_h,
+            stride,
+            pixels: &qoi_data,
+        });
+    }
 }
 
 // ===========================================================================
