@@ -19,7 +19,7 @@ from typing import NoReturn
 
 HOST_NAME = "org.cleanflash.flash_player"
 HOST_DESCRIPTION = "Flash Player Native Messaging Host"
-CHROME_EXTENSION_ID = "anhpdblalmhfhailclfnnlflfanhgohn"
+CHROME_EXTENSION_ID = "dcikaadaeajidejkoekdflmfdgeoldcb"
 FIREFOX_EXTENSION_ID = "flash-player@cleanflash.org"
 
 

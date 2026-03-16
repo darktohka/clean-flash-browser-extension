@@ -3,3 +3,4 @@ test1
 chrome
 target
 *.so
+*.key
