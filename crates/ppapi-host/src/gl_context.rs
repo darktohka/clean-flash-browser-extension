@@ -120,7 +120,7 @@ impl GlState {
         #[cfg(all(unix, not(target_os = "macos")))]
         {
             let raw_display = RawDisplayHandle::Wayland(
-                raw_window_handle::WaylandDisplayHandle::new(),
+                raw_window_handle::WaylandDisplayHandle::empty()
             );
             match unsafe { Display::new(raw_display, DisplayApiPreference::Egl) } {
                 Ok(d) => {
