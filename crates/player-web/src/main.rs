@@ -45,6 +45,7 @@ use ppapi_sys::*;
 use serde_json::json;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
 
@@ -54,39 +55,9 @@ fn main() {
     // interference (CRT _dup2, SetStdHandle, or Flash plugin side-effects).
     protocol::init_saved_handles();
 
-    // Set up logging: write to log file ONLY.
-    // stdout is reserved for native messaging; stderr is silenced so that
-    // libpepflashplayer.so cannot corrupt the native messaging channel.
-    let filter =
-                EnvFilter::new("trace");
-                //EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-
-    // Create a new log file for each execution, named with a timestamp.
-    let log_dir = std::env::var("FLASH_PLAYER_LOG_DIR")
-        .unwrap_or_else(|_| "/home/user/flash-player-host".into());
-    let _ = std::fs::create_dir_all(&log_dir);
-    let timestamp = chrono_timestamp();
-    let log_filename = format!("flash-player-host-{}.log", timestamp);
-    let log_path = std::path::Path::new(&log_dir).join(&log_filename);
-    let log_file = std::fs::File::create(&log_path).expect("failed to create log file");
-
-    // Write startup header with current date to the log file.
-    use std::io::Write;
-    let mut header_file = log_file.try_clone().expect("failed to clone log file handle");
-    let _ = writeln!(header_file, "=== Flash Player Native Messaging Host ===");
-    let _ = writeln!(header_file, "=== Started: {} ===", timestamp);
-    let _ = writeln!(header_file);
-
-    // Build subscriber: log file only (no stderr, no stdout).
-    let (file_writer, _guard) = tracing_appender::non_blocking(log_file);
-    let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer(file_writer)
-        .with_ansi(false);
-
-    tracing_subscriber::registry()
-        .with(filter)
-        .with(file_layer)
-        .init();
+    // Tracing is opt-in. If TRACE_FLASH is unset, no subscriber is installed,
+    // no log file is created, and tracing events are dropped.
+    let _trace_guard = init_tracing_if_enabled();
 
     // Redirect stdout and stderr to /dev/null (Unix) or NUL (Windows) so
     // that libpepflashplayer (and any other native code) cannot write to
@@ -146,7 +117,6 @@ fn main() {
     }
 
     tracing::info!("Flash Player Native Messaging Host starting");
-    tracing::info!("Log file: {}", log_path.display());
 
     let mut player = FlashPlayer::new();
     let frame_handle = player.latest_frame();
@@ -331,6 +301,40 @@ fn main() {
 
     player.shutdown();
     tracing::info!("Flash Player Native Messaging Host exiting");
+}
+
+fn init_tracing_if_enabled() -> Option<WorkerGuard> {
+    if std::env::var_os("TRACE_FLASH").is_none() {
+        return None;
+    }
+
+    let filter = EnvFilter::new("trace");
+    let log_dir = std::env::var("FLASH_PLAYER_LOG_DIR")
+        .unwrap_or_else(|_| "/home/user/flash-player-host".into());
+    let _ = std::fs::create_dir_all(&log_dir);
+    let timestamp = chrono_timestamp();
+    let log_filename = format!("flash-player-host-{}.log", timestamp);
+    let log_path = std::path::Path::new(&log_dir).join(&log_filename);
+    let log_file = std::fs::File::create(&log_path).expect("failed to create log file");
+
+    use std::io::Write;
+    let mut header_file = log_file.try_clone().expect("failed to clone log file handle");
+    let _ = writeln!(header_file, "=== Flash Player Native Messaging Host ===");
+    let _ = writeln!(header_file, "=== Started: {} ===", timestamp);
+    let _ = writeln!(header_file);
+
+    let (file_writer, guard) = tracing_appender::non_blocking(log_file);
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(file_writer)
+        .with_ansi(false);
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(file_layer)
+        .init();
+
+    tracing::info!("Log file: {}", log_path.display());
+    Some(guard)
 }
 
 // ===========================================================================
