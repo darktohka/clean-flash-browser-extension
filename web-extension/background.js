@@ -117,10 +117,17 @@ function createNativePort(instanceId, port) {
     }
     nativePorts.delete(instanceId);
     pendingChunks.delete(instanceId);
+
+    // Detect "host not found / not installed" vs normal crash.
+    const errMsg = error ? error.message || "" : "";
+    const notInstalled =
+      /not found|not installed|host.*not.*registered/i.test(errMsg);
+
     // Notify the instance with an inline error.
     try {
       port.postMessage({
-        error: "Native host disconnected" + (error ? ": " + error.message : ""),
+        error: "Native host disconnected" + (error ? ": " + errMsg : ""),
+        notInstalled,
       });
     } catch {
       // ignore

@@ -812,7 +812,13 @@ async function startInstance(instanceId, meta) {
     // Extension-originated error (e.g. host disconnect).
     if (msg.error) {
       console.error("[Flash Player]", msg.error);
-      if (!navigatingAway) showCrashOverlay(instanceId);
+      if (!navigatingAway) {
+        if (msg.notInstalled) {
+          showNotInstalledOverlay(instanceId);
+        } else {
+          showCrashOverlay(instanceId);
+        }
+      }
       return;
     }
     // Binary message from the host, base64-encoded.
@@ -973,6 +979,131 @@ function showCrashOverlay(instanceId) {
     `;
     document.head.appendChild(style);
   }
+
+  container.appendChild(overlay);
+}
+
+/**
+ * Show an overlay explaining that the extension is installed but Flash
+ * Player (the native host) is missing.
+ */
+function showNotInstalledOverlay(instanceId) {
+  const meta = instanceMeta.get(instanceId);
+  if (!meta) return;
+
+  const { container } = meta;
+
+  // Don't stack overlays.
+  if (container.querySelector(".flash-notinstalled-overlay")) return;
+  // Also remove any crash overlay that might have appeared first.
+  const existing = container.querySelector(".flash-crash-overlay");
+  if (existing) existing.remove();
+
+  const overlay = document.createElement("div");
+  overlay.className = "flash-notinstalled-overlay";
+  Object.assign(overlay.style, {
+    position: "absolute",
+    inset: "0",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    background:
+      "linear-gradient(135deg, #0b1a3e 0%, #162d6b 40%, #1e3f8f 70%, #2557b8 100%)",
+    color: "#fff",
+    fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
+    textAlign: "center",
+    zIndex: "999999",
+    overflow: "hidden",
+    userSelect: "none",
+    padding: "24px",
+  });
+
+  // Subtle grid-line pattern.
+  const pattern = document.createElement("div");
+  Object.assign(pattern.style, {
+    position: "absolute",
+    inset: "0",
+    backgroundImage:
+      "linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px), " +
+      "linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px)",
+    backgroundSize: "40px 40px",
+    pointerEvents: "none",
+  });
+  overlay.appendChild(pattern);
+
+  // Checkmark icon.
+  const icon = document.createElement("div");
+  icon.textContent = "\u2705"; // ✅
+  Object.assign(icon.style, {
+    fontSize: "48px",
+    marginBottom: "12px",
+    position: "relative",
+    zIndex: "1",
+  });
+  overlay.appendChild(icon);
+
+  // Title.
+  const title = document.createElement("div");
+  title.textContent = "Extension installed - Flash Player not found";
+  Object.assign(title.style, {
+    fontSize: "20px",
+    fontWeight: "700",
+    letterSpacing: "0.3px",
+    marginBottom: "10px",
+    textShadow: "0 2px 12px rgba(0,0,0,0.5)",
+    position: "relative",
+    zIndex: "1",
+  });
+  overlay.appendChild(title);
+
+  // Explanation.
+  const desc = document.createElement("div");
+  desc.textContent =
+    "The Clean Flash Player browser extension is working, " +
+    "but Flash Player is not yet installed on your system.";
+  Object.assign(desc.style, {
+    fontSize: "13px",
+    opacity: "0.8",
+    maxWidth: "420px",
+    lineHeight: "1.5",
+    marginBottom: "20px",
+    position: "relative",
+    zIndex: "1",
+  });
+  overlay.appendChild(desc);
+
+  // Download button.
+  const btn = document.createElement("a");
+  btn.href = "https://gitlab.com/cleanflash/installer/-/releases";
+  btn.target = "_blank";
+  btn.rel = "noopener noreferrer";
+  btn.textContent = "\u2B07  Download Installer";
+  Object.assign(btn.style, {
+    display: "inline-block",
+    padding: "10px 32px",
+    fontSize: "14px",
+    fontWeight: "600",
+    color: "#0b1a3e",
+    background: "linear-gradient(135deg, #7ec8f2, #b4dff7)",
+    border: "none",
+    borderRadius: "8px",
+    cursor: "pointer",
+    boxShadow:
+      "0 4px 20px rgba(30, 63, 143, 0.45), inset 0 1px 0 rgba(255,255,255,0.4)",
+    transition: "0.5s ease",
+    position: "relative",
+    zIndex: "1",
+    letterSpacing: "0.5px",
+    textDecoration: "none",
+  });
+  btn.addEventListener("mouseenter", () => {
+    btn.style.background = "linear-gradient(135deg, #8ed0f4, #c0e5fb)";
+  });
+  btn.addEventListener("mouseleave", () => {
+    btn.style.background = "linear-gradient(135deg, #7ec8f2, #b4dff7)";
+  });
+  overlay.appendChild(btn);
 
   container.appendChild(overlay);
 }
