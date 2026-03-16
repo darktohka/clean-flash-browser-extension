@@ -13,8 +13,8 @@
 // ---------------------------------------------------------------------------
 // Debug mode — set to true to show a live statistics panel below each canvas.
 // ---------------------------------------------------------------------------
-const FLASH_DEBUG = true;
-const LOG_HOST_EVENTS = true;
+const FLASH_DEBUG = false;
+const LOG_HOST_EVENTS = false;
 
 // ---------------------------------------------------------------------------
 // Utilities
@@ -160,8 +160,18 @@ let _qoiMemory = null;
 /** Resolves when the QOI WASM module is ready (or failed). */
 const _qoiReady = (async () => {
   try {
-    const url = chrome.runtime.getURL("qoiopt.wasm");
-    const wasmBytes = await fetch(url).then((r) => r.arrayBuffer());
+    const b64 = "AGFzbQEAAAABDgNgAX8AYAABf2ABfwF/AwoJAAABAAAAAAACBAUBcAEEBAUDAQABBhoFfwFBAAt/AUEAC38BQQALfwFBAAt/AUEACwcvBQZtZW1vcnkCAAtvdXRwdXRfYmFzZQMBBGlwdHIDAwRvcHRyAwQGZGVjb2RlAAgJCgEAQQALBAQGBwUK3gUJJAAjBCAAaiQEA0AjBD8AQRB0TwRAQQFAAEEASARAAAsMAQsLCw0AIwQgADYCAEEEEAALKgECf0EEIQADQCMDLQAAIAFBCHdyIQEjA0EBaiQDIABBAWsiAA0ACyABC0oAIwAgADYCACMAIABBCHZB/wFxQQVsIABB/wFxQQNsaiAAQRB2Qf8BcUEHbGogAEEYdkELbGpBP3FBAnRBBGpqIAA2AgAgABABCxIAIwAgAEECdEEEamooAgAQAwscACAAQQFqIQADQCMAKAIAEAMgAEEBayIADQALC3ABAX8jACgCACIBQf//g3hxIABBA3FBAmsgAUEQdkH/AXFqQf8BcUEQdHIiAUH/gXxxIABBAnYiAEEDcUECayABQQh2Qf8BcWpB/wFxQQh0ciIBQYB+cSAAQQJ2QQNxQQJrIAFB/wFxakH/AXFyEAMLewECfyMAKAIAIgFBgH5xIwMtAAAhAiMDQQFqJAMgAEEgayIAIAJBBHZBCGtqIAFB/wFxakH/AXFyIgFB/4F8cSAAIAFBCHZB/wFxakH/AXFBCHRyIgFB//+DeHEgAkEPcUEIayAAaiABQRB2Qf8BcWpB/wFxQRB0chADC5UCACAAJAJBACQDIABBfHFBBGokACMAQYQCaiQBIwBBgICAeDYCACMBJARBABAAIwMtAAAjA0EBaiQDQfEARwRAAAsjAy0AACMDQQFqJANB7wBHBEAACyMDLQAAIwNBAWokA0HpAEcEQAALIwMtAAAjA0EBaiQDQeYARwRAAAsQAhABEAIQASMDLQAAGiMDQQFqJAMjAy0AABojA0EBaiQDA0AjAy0AACEAIwNBAWokAwJAIABB/gFGBEAjAygCACMDQQRqJAMjA0EBayQDQf///wdxIwAoAgBBgICAeHFyEAMMAQsgAEH/AUYEQCMDKAIAIwNBBGokAxADDAELIABBP3EgAEEGdhEAAAsjAyMCRw0ACyMBCw==";
+
+    let wasmBytes;
+    if (typeof Uint8Array.fromBase64 === "function") {
+      wasmBytes = Uint8Array.fromBase64(b64);
+    } else {
+      const bin = atob(b64);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      wasmBytes = out;
+    }
+
     const { instance } = await WebAssembly.instantiate(wasmBytes);
     _qoiDecode = instance.exports.decode;
     _qoiMemory = instance.exports.memory;
@@ -529,10 +539,9 @@ function replaceFlashElement(elem) {
     meta._pendingDebugPanel = true;
   }
 
-  // ---- Connect and start ----
-  startInstance(instanceId, meta);
-
   // ---- Replace the original element in the DOM ----
+  // Must happen BEFORE startInstance so that collectViewInfo can measure the
+  // canvas via getBoundingClientRect and report isVisible correctly.
   if (elem.tagName === "EMBED") {
     // For <embed>, insert the container and hide the original (some pages
     // reference the embed by id afterwards).
@@ -545,6 +554,9 @@ function replaceFlashElement(elem) {
     elem.appendChild(container);
   }
   elem.setAttribute("data-flash-player", instanceId);
+
+  // ---- Connect and start ----
+  startInstance(instanceId, meta);
 
   // Now that the container is in the DOM, measure the actual rendered size.
   // This corrects the initial dimensions when the element uses percentage or
@@ -772,8 +784,14 @@ document.addEventListener("pointerlockchange", handlePointerLockChange);
  * Start (or restart) a Flash instance by opening a new port to the
  * background service worker and wiring up message handlers.
  */
-function startInstance(instanceId, meta) {
+async function startInstance(instanceId, meta) {
   const { canvas, ctx, swfUrl, didCreateArgs, origWidth, origHeight } = meta;
+
+  // Ensure the QOI WASM decoder is ready before we tell the native host to
+  // start sending frames.  Without this, early frames arrive before
+  // _qoiDecode is set and are silently dropped — leaving a black screen
+  // until something (resize, devtools) triggers a re-render.
+  await _qoiReady;
 
   const port = chrome.runtime.connect({ name: "flash-instance" });
   meta.port = port;

@@ -32,7 +32,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["qoiopt.wasm"],
+      "resources": [],
       "matches": ["<all_urls>"]
     }
   ],
