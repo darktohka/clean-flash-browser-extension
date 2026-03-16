@@ -40,7 +40,7 @@
 //! messaging channel, we write to a duplicated fd/handle that was saved
 //! before the redirect.
 
-use std::io::{self, BufWriter, Read, Write};
+use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::OnceLock;
 
@@ -66,64 +66,84 @@ static SEQ: AtomicU32 = AtomicU32::new(0);
 // Saved stdout
 // -----------------------------------------------------------------------
 
-/// Size of the write buffer for the saved stdout handle.  256 KiB keeps
-/// syscalls to a minimum even when many small messages (cursor, state,
-/// audio control) are sent in quick succession, while still being tiny
-/// relative to the ~1 MB native-messaging chunk limit.
-const STDOUT_BUF_SIZE: usize = 256 * 1024;
-
-/// The saved stdout file, initialised by [`init_saved_stdout`] before
+/// The saved stdout file, initialised by [`init_saved_handles`] before
 /// the real stdout is redirected to `/dev/null`.
-static SAVED_STDOUT: OnceLock<parking_lot::Mutex<BufWriter<std::fs::File>>> = OnceLock::new();
+static SAVED_STDOUT: OnceLock<parking_lot::Mutex<std::fs::File>> = OnceLock::new();
 
-/// Duplicate the current stdout fd and store it for later use.
+/// Saved stdin file, initialised by [`init_saved_handles`] before
+/// the native plugin is loaded (which could interfere with standard
+/// handles via SetStdHandle or CRT `_dup2`).
+static SAVED_STDIN: OnceLock<parking_lot::Mutex<std::fs::File>> = OnceLock::new();
+
+/// Duplicate the current stdout **and stdin** fds and store them.
 /// Must be called **before** stdout is redirected.
 #[cfg(unix)]
-pub fn init_saved_stdout() {
-    let raw: RawFd = unsafe { libc::dup(1) };
-    assert!(raw >= 0, "failed to dup stdout");
-    let file = unsafe { std::fs::File::from_raw_fd(raw) };
+pub fn init_saved_handles() {
+    let raw_out: RawFd = unsafe { libc::dup(1) };
+    assert!(raw_out >= 0, "failed to dup stdout");
+    let file_out = unsafe { std::fs::File::from_raw_fd(raw_out) };
     SAVED_STDOUT
-        .set(parking_lot::Mutex::new(BufWriter::with_capacity(STDOUT_BUF_SIZE, file)))
+        .set(parking_lot::Mutex::new(file_out))
         .ok()
-        .expect("init_saved_stdout called twice");
+        .expect("init_saved_handles called twice");
+
+    let raw_in: RawFd = unsafe { libc::dup(0) };
+    assert!(raw_in >= 0, "failed to dup stdin");
+    let file_in = unsafe { std::fs::File::from_raw_fd(raw_in) };
+    SAVED_STDIN
+        .set(parking_lot::Mutex::new(file_in))
+        .ok()
+        .expect("init_saved_handles called twice (stdin)");
 }
 
-/// Duplicate the current stdout handle and store it for later use.
+/// Duplicate the current stdout **and stdin** handles and store them.
 /// Must be called **before** stdout is redirected.
 #[cfg(windows)]
-pub fn init_saved_stdout() {
+pub fn init_saved_handles() {
     use windows_sys::Win32::Foundation::{
         DuplicateHandle, DUPLICATE_SAME_ACCESS, INVALID_HANDLE_VALUE,
     };
-    use windows_sys::Win32::System::Console::{GetStdHandle, STD_OUTPUT_HANDLE};
+    use windows_sys::Win32::System::Console::{GetStdHandle, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE};
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
     unsafe {
+        let process = GetCurrentProcess();
+
+        // ---- stdout ----
         let stdout_handle = GetStdHandle(STD_OUTPUT_HANDLE);
         assert!(
             stdout_handle != INVALID_HANDLE_VALUE && !stdout_handle.is_null(),
             "failed to get stdout handle",
         );
-
-        let process = GetCurrentProcess();
-        let mut dup_handle: *mut std::ffi::c_void = std::ptr::null_mut();
+        let mut dup_out: *mut std::ffi::c_void = std::ptr::null_mut();
         let ok = DuplicateHandle(
-            process,
-            stdout_handle,
-            process,
-            &mut dup_handle,
-            0,            // dwDesiredAccess (ignored with DUPLICATE_SAME_ACCESS)
-            0,            // bInheritHandle = FALSE
-            DUPLICATE_SAME_ACCESS,
+            process, stdout_handle, process, &mut dup_out,
+            0, 0, DUPLICATE_SAME_ACCESS,
         );
         assert!(ok != 0, "failed to duplicate stdout handle");
-
-        let file = std::fs::File::from_raw_handle(dup_handle as RawHandle);
+        let file_out = std::fs::File::from_raw_handle(dup_out as RawHandle);
         SAVED_STDOUT
-            .set(parking_lot::Mutex::new(BufWriter::with_capacity(STDOUT_BUF_SIZE, file)))
+            .set(parking_lot::Mutex::new(file_out))
             .ok()
-            .expect("init_saved_stdout called twice");
+            .expect("init_saved_handles called twice");
+
+        // ---- stdin ----
+        let stdin_handle = GetStdHandle(STD_INPUT_HANDLE);
+        assert!(
+            stdin_handle != INVALID_HANDLE_VALUE && !stdin_handle.is_null(),
+            "failed to get stdin handle",
+        );
+        let mut dup_in: *mut std::ffi::c_void = std::ptr::null_mut();
+        let ok = DuplicateHandle(
+            process, stdin_handle, process, &mut dup_in,
+            0, 0, DUPLICATE_SAME_ACCESS,
+        );
+        assert!(ok != 0, "failed to duplicate stdin handle");
+        let file_in = std::fs::File::from_raw_handle(dup_in as RawHandle);
+        SAVED_STDIN
+            .set(parking_lot::Mutex::new(file_in))
+            .ok()
+            .expect("init_saved_handles called twice (stdin)");
     }
 }
 
@@ -131,18 +151,33 @@ pub fn init_saved_stdout() {
 // Read (extension → host) — still plain JSON
 // -----------------------------------------------------------------------
 
-/// Read one native messaging frame from stdin.
+/// Read one native messaging frame from the saved stdin handle.
+///
+/// Uses the handle duplicated at startup by [`init_saved_handles`] so
+/// that the read is immune to later `SetStdHandle` / CRT `_dup2` calls
+/// by the Flash plugin or other native code.
 ///
 /// Returns `None` on EOF (extension disconnected).
 pub fn read_message() -> io::Result<Option<serde_json::Value>> {
-    let stdin = io::stdin();
-    let mut handle = stdin.lock();
+    let saved = SAVED_STDIN
+        .get()
+        .expect("init_saved_handles was not called");
+    let mut handle = saved.lock();
 
     let mut len_buf = [0u8; 4];
     match handle.read_exact(&mut len_buf) {
         Ok(()) => {}
-        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(e) => return Err(e),
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+            tracing::warn!("stdin read_exact returned UnexpectedEof (pipe closed by browser)");
+            return Ok(None);
+        }
+        Err(e) => {
+            tracing::warn!(
+                "stdin read_exact error: kind={:?} os_error={:?} — {}",
+                e.kind(), e.raw_os_error(), e,
+            );
+            return Err(e);
+        }
     }
 
     let msg_len = u32::from_ne_bytes(len_buf) as usize;
@@ -469,7 +504,7 @@ pub fn send_host_message(msg: &HostMessage<'_>) -> io::Result<()> {
 
     let saved = SAVED_STDOUT
         .get()
-        .expect("init_saved_stdout was not called");
+        .expect("init_saved_handles was not called");
     let mut handle = saved.lock();
 
     for i in 0..total_chunks {

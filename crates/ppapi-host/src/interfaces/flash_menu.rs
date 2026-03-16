@@ -75,6 +75,8 @@ unsafe fn parse_menu(menu: *const PP_Flash_Menu) -> Vec<MenuItem> {
                 .to_string()
         };
 
+        let name = name.replace("Adobe Flash", "Clean Flash");
+
         let submenu = if item.type_ == PP_FLASH_MENUITEM_TYPE_SUBMENU {
             unsafe { parse_menu(item.submenu as *const PP_Flash_Menu) }
         } else {

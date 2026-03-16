@@ -251,6 +251,19 @@ unsafe extern "C" fn navigate(
             tracing::warn!("PPB_Flash::Navigate: no URL found in request_info {}", _request_info);
             return PP_ERROR_BADARGUMENT;
         }
+    }; 
+
+    // Redirect Adobe-hosted informational URLs to the CleanFlash installer.
+    let url = match url.as_str() {
+        "https://www.adobe.com/go/about_flash_player" => {
+            tracing::info!("PPB_Flash::Navigate: redirecting about_flash_player to CleanFlash installer");
+            "https://gitlab.com/cleanflash/installer".to_owned()
+        }
+        "https://www.adobe.com/go/check_for_flash_player_updates" => {
+            tracing::info!("PPB_Flash::Navigate: redirecting check_for_flash_player_updates to CleanFlash releases");
+            "https://gitlab.com/cleanflash/installer/-/releases".to_owned()
+        }
+        _ => url,
     };
 
     tracing::info!("PPB_Flash::Navigate: url={:?}, target={:?}", url, target_str);

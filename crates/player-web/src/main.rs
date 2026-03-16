@@ -49,8 +49,10 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
-    // Save the real stdout fd before we redirect it to /dev/null.
-    protocol::init_saved_stdout();
+    // Save the real stdout and stdin fds before we redirect stdout to
+    // /dev/null.  Using saved handles makes the host immune to any later
+    // interference (CRT _dup2, SetStdHandle, or Flash plugin side-effects).
+    protocol::init_saved_handles();
 
     // Set up logging: write to log file ONLY.
     // stdout is reserved for native messaging; stderr is silenced so that
@@ -102,25 +104,45 @@ fn main() {
 
     #[cfg(windows)]
     {
-        use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::System::Console::{
             SetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
         };
 
-        // Open the NUL device (Windows equivalent of /dev/null).
-        let nul = std::fs::OpenOptions::new()
-            .write(true)
-            .open("NUL")
-            .expect("failed to open NUL device");
-        let nul_handle = nul.as_raw_handle();
-
-        unsafe {
-            SetStdHandle(STD_OUTPUT_HANDLE, nul_handle); // stdout → NUL
-            SetStdHandle(STD_ERROR_HANDLE, nul_handle);  // stderr → NUL
+        extern "C" {
+            fn _open(filename: *const i8, oflag: i32, ...) -> i32;
+            fn _dup2(fd1: i32, fd2: i32) -> i32;
+            fn _get_osfhandle(fd: i32) -> isize;
         }
 
-        // Leak so the handle stays valid for the entire process lifetime.
-        std::mem::forget(nul);
+        unsafe {
+            // Open NUL via the C runtime so we get a proper CRT file descriptor.
+            let nul_fd = _open(b"NUL\0".as_ptr().cast::<i8>(), 1 /*_O_WRONLY*/);
+            assert!(nul_fd >= 0, "failed to open NUL device");
+
+            // Redirect CRT file descriptors 1 (stdout) and 2 (stderr) to NUL.
+            //
+            // The previous approach used only SetStdHandle(), which updates
+            // the Win32-level handle returned by GetStdHandle().  However the
+            // MSVC/UCRT runtime keeps its own fd→handle table that is NOT
+            // touched by SetStdHandle.  Native code loaded into the process
+            // (libpepflashplayer) that calls printf() or _write(1, …) goes
+            // through the CRT layer, so without _dup2 those writes still
+            // reached Chrome's original stdout pipe and corrupted the
+            // native-messaging channel — causing Chrome to disconnect and the
+            // host to see an unexpected EOF on stdin.
+            //
+            // On Unix, dup2() covers both layers because the CRT fd IS the
+            // kernel fd.  On Windows they are separate, so we must update both.
+            _dup2(nul_fd, 1); // CRT stdout → NUL
+            _dup2(nul_fd, 2); // CRT stderr → NUL
+
+            // Also update the Win32-level standard handles so that Rust's
+            // io::stdout()/io::stderr() (which call GetStdHandle) see NUL.
+            // MSVC's _dup2 already does this for fds 0–2, but we call
+            // SetStdHandle explicitly to be safe across CRT versions.
+            SetStdHandle(STD_OUTPUT_HANDLE, _get_osfhandle(1) as *mut std::ffi::c_void);
+            SetStdHandle(STD_ERROR_HANDLE, _get_osfhandle(2) as *mut std::ffi::c_void);
+        }
     }
 
     tracing::info!("Flash Player Native Messaging Host starting");

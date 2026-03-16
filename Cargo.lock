@@ -3526,7 +3526,7 @@ dependencies = [
 [[package]]
 name = "rustls-platform-verifier"
 version = "0.6.2"
-source = "git+https://github.com/darktohka/rustls-platform-verifier#7b0a55c7a379ac62df1884608c4167eee0487217"
+source = "git+https://github.com/darktohka/rustls-platform-verifier#a7495bd478fc95391e92b5c48d4e3bd6478cc32a"
 dependencies = [
  "core-foundation 0.10.1",
  "core-foundation-sys",
@@ -3540,13 +3540,12 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
 ]
 
 [[package]]
 name = "rustls-platform-verifier-android"
 version = "0.1.1"
-source = "git+https://github.com/darktohka/rustls-platform-verifier#7b0a55c7a379ac62df1884608c4167eee0487217"
+source = "git+https://github.com/darktohka/rustls-platform-verifier#a7495bd478fc95391e92b5c48d4e3bd6478cc32a"
 
 [[package]]
 name = "rustls-webpki"

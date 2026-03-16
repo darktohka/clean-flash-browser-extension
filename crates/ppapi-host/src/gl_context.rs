@@ -17,9 +17,7 @@ use glutin::config::ConfigTemplateBuilder;
 use glutin::context::{ContextApi, ContextAttributesBuilder, NotCurrentGlContext, Version};
 use glutin::display::{Display, GlDisplay};
 use glutin::surface::{PbufferSurface, Surface, SurfaceAttributesBuilder};
-#[cfg(not(target_os = "windows"))]
 use glutin::display::DisplayApiPreference;
-#[cfg(not(target_os = "windows"))]
 use raw_window_handle::RawDisplayHandle;
 
 // GL constants
@@ -131,6 +129,23 @@ impl GlState {
                 }
                 Err(e) => {
                     tracing::debug!("glutin: Wayland EGL display failed: {}", e);
+                }
+            }
+        }
+
+        // Attempt 1: on Windows
+        #[cfg(target_os = "windows")]
+        {
+            let raw_display = RawDisplayHandle::Windows(
+                raw_window_handle::WindowsDisplayHandle::new(),
+            );
+            match unsafe { Display::new(raw_display, DisplayApiPreference::Egl) } {
+                Ok(d) => {
+                    tracing::info!("glutin: created EGL display via Windows handle");
+                    return Ok(d);
+                }
+                Err(e) => {
+                    tracing::debug!("glutin: Windows EGL display failed: {}", e);
                 }
             }
         }

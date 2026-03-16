@@ -62,10 +62,20 @@ struct UrlLoadResponse {
 }
 
 #[cfg(feature = "url-reqwest")]
+fn reqwest_tls_config() -> rustls::ClientConfig {
+    let mut root_store = rustls::RootCertStore::empty();
+    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    rustls::ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth()
+}
+
+#[cfg(feature = "url-reqwest")]
 fn http_client() -> &'static reqwest::blocking::Client {
     static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::blocking::Client::builder()
+            .tls_backend_preconfigured(reqwest_tls_config())
             .redirect(reqwest::redirect::Policy::custom(|attempt| {
                 if attempt.previous().len() >= 20 {
                     attempt.error("too many redirects")
@@ -91,6 +101,7 @@ fn http_client_no_redirect() -> &'static reqwest::blocking::Client {
     static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::blocking::Client::builder()
+            .tls_backend_preconfigured(reqwest_tls_config())
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(std::time::Duration::from_secs(30))
             .timeout(std::time::Duration::from_secs(120))
