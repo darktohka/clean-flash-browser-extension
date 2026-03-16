@@ -19,7 +19,7 @@
 
 "use strict";
 
-const NATIVE_HOST_NAME = "org.nickvision.flash_player";
+const NATIVE_HOST_NAME = "org.cleanflash.flash_player";
 
 /**
  * Map of instanceId -> content script port.

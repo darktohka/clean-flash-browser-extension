@@ -17,10 +17,10 @@ import sys
 from pathlib import Path
 from typing import NoReturn
 
-HOST_NAME = "org.nickvision.flash_player"
+HOST_NAME = "org.cleanflash.flash_player"
 HOST_DESCRIPTION = "Flash Player Native Messaging Host"
 CHROME_EXTENSION_ID = "anhpdblalmhfhailclfnnlflfanhgohn"
-FIREFOX_EXTENSION_ID = "flash-player@nickvision.org"
+FIREFOX_EXTENSION_ID = "flash-player@cleanflash.org"
 
 
 def parse_args() -> argparse.Namespace:

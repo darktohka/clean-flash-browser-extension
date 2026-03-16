@@ -1,7 +1,7 @@
 {
-  "name": "org.nickvision.flash_player",
+  "name": "org.cleanflash.flash_player",
   "description": "Flash Player Native Messaging Host",
   "path": "/usr/local/bin/flash-player-host",
   "type": "stdio",
-  "allowed_extensions": ["flash-player@nickvision.org"]
+  "allowed_origins": ["chrome-extension://anhpdblalmhfhailclfnnlflfanhgohn/"]
 }

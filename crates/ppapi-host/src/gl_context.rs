@@ -100,7 +100,7 @@ impl GlState {
 
     fn create_display() -> Result<Display, String> {
         // Attempt 1: EGL via X11 display — works on X11/XWayland.
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(all(unix, not(target_os = "macos")))]
         {
             let raw_display = RawDisplayHandle::Xlib(
                 raw_window_handle::XlibDisplayHandle::new(None, 0),
@@ -117,7 +117,7 @@ impl GlState {
         }
 
         // Attempt 2: EGL via Wayland handle.
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(all(unix, not(target_os = "macos")))]
         {
             let raw_display = RawDisplayHandle::Wayland(
                 raw_window_handle::WaylandDisplayHandle::new(),
@@ -149,8 +149,25 @@ impl GlState {
                 }
             }
         }
-        
-        // TODO: maybe support DRM here? Could be nice...
+
+        // Attempt 1: on macOS
+        #[cfg(target_os = "macos")]
+        {
+            let raw_display = RawDisplayHandle::AppKit(
+                raw_window_handle::AppKitDisplayHandle::new(),
+            );
+            match unsafe { Display::new(raw_display, DisplayApiPreference::Egl) } {
+                Ok(d) => {
+                    tracing::info!("glutin: created EGL display via AppKit handle");
+                    return Ok(d);
+                }
+                Err(e) => {
+                    tracing::debug!("glutin: AppKit EGL display failed: {}", e);
+                }
+            }
+        }
+
+        // TODO: maybe support Linux DRM here? Could be nice...
         // But also, forcing DRM would make things awkward if DRM works but nothing else is available
         // since it would pretty much destroy the current screen during initialization
 

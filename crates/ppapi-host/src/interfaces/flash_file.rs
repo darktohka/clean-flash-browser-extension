@@ -33,7 +33,11 @@ pub unsafe fn register(registry: &mut InterfaceRegistry) {
 
 /// Get the Flash data directory.
 fn data_dir() -> PathBuf {
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
+    let base = std::env::var("HOME")
+        .map(|h| format!("{}/Library/Application Support", h))
+        .unwrap_or_else(|_| "/tmp".to_string());
+    #[cfg(all(unix, not(target_os = "macos")))]
     let base = {
         std::env::var("XDG_DATA_HOME")
             .or_else(|_| std::env::var("HOME").map(|h| format!("{}/.local/share", h)))
@@ -44,7 +48,7 @@ fn data_dir() -> PathBuf {
         std::env::var("APPDATA")
             .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned())
     };
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(any(unix, windows, target_os = "macos")))]
     let base = std::env::temp_dir().to_string_lossy().into_owned();
 
     let dir = PathBuf::from(base).join("flash-player").join("PepperFlash");

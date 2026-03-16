@@ -172,7 +172,10 @@ fn main() {
     #[cfg(windows)]
     let plugin_path =
         std::env::var("FLASH_PLUGIN_PATH").unwrap_or_else(|_| "pepflashplayer.dll".into());
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    let plugin_path =
+        std::env::var("FLASH_PLUGIN_PATH").unwrap_or_else(|_| "PepperFlashPlayer".into());
+    #[cfg(all(unix, not(target_os = "macos")))]
     let plugin_path =
         std::env::var("FLASH_PLUGIN_PATH").unwrap_or_else(|_| "libpepflashplayer.so".into());
 

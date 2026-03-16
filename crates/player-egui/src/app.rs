@@ -72,7 +72,10 @@ impl FlashPlayerApp {
         #[cfg(windows)]
         let plugin_path =
             std::env::var("FLASH_PLUGIN_PATH").unwrap_or_else(|_| String::from("pepflashplayer.dll"));
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        let plugin_path =
+            std::env::var("FLASH_PLUGIN_PATH").unwrap_or_else(|_| String::from("PepperFlashPlayer"));
+        #[cfg(all(unix, not(target_os = "macos")))]
         let plugin_path =
             std::env::var("FLASH_PLUGIN_PATH").unwrap_or_else(|_| String::from("libpepflashplayer.so"));
 

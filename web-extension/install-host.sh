@@ -22,7 +22,7 @@ if [[ ! -x "$HOST_BIN" ]]; then
   exit 1
 fi
 
-HOST_NAME="org.nickvision.flash_player"
+HOST_NAME="org.cleanflash.flash_player"
 
 # ---- Firefox ----
 FIREFOX_DIR="$HOME/.mozilla/native-messaging-hosts"
@@ -34,7 +34,7 @@ cat > "$FIREFOX_DIR/$HOST_NAME.json" <<EOF
   "description": "Flash Player Native Messaging Host",
   "path": "$HOST_BIN",
   "type": "stdio",
-  "allowed_extensions": ["flash-player@nickvision.org"]
+  "allowed_extensions": ["flash-player@cleanflash.org"]
 }
 EOF
 echo "Installed Firefox manifest: $FIREFOX_DIR/$HOST_NAME.json"

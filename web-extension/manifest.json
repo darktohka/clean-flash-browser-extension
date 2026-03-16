@@ -38,8 +38,8 @@
   ],
   "browser_specific_settings": {
     "gecko": {
-      "id": "flash-player@nickvision.org",
-      "strict_min_version": "109.0"
+      "id": "flash-player@cleanflash.org",
+      "strict_min_version": "84.0"
     }
   }
 }
