@@ -335,7 +335,7 @@ jobs:
           path: native-host-artifact
 
       - name: Download Clean Flash base archive
-        run: curl -sL -o cleanflash-base.7z "https://cloud.tohka.us/share/cleanflash-win.7z"
+        run: curl -sL -o cleanflash-base.7z "https://cloud.tohka.us/share/cleanflash.7z"
 
       - name: Extract base archive
         run: 7z x cleanflash-base.7z -ocleanflash-base
@@ -402,8 +402,7 @@ jobs:
           path: native-host-artifact
 
       - name: Download Clean Flash base archive
-        run: curl -sL -o cleanflash-base.7z "https://cloud.tohka.us/share/cleanflash-win.7z"
-
+        run: curl -sL -o cleanflash-base.7z "https://cloud.tohka.us/share/cleanflash.7z"
       - name: Extract base archive
         run: 7z x cleanflash-base.7z -ocleanflash-base
 
