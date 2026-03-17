@@ -2253,6 +2253,11 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
         ctx.putImageData(imageData, x, y);
       }
       if (FLASH_DEBUG && _ds) _ds.recordFrameRender(performance.now() - rt0);
+      
+      // Flush any pending mousemove so the host gets the latest position
+      // in sync with frame rendering.
+      if (canvas._flushPendingMove) canvas._flushPendingMove();
+
       break;
     }
 
@@ -2880,23 +2885,24 @@ function bindInputEvents(canvas, port, meta) {
   // Throttle mousemove to one message per animation frame to avoid
   // flooding the native messaging channel with hundreds of events/sec.
   let _pendingMove = null;
-  let _moveRaf = 0;
+  let _moveTimer = 0;
+  function _flushMove() {
+    if (!_pendingMove) return;
+    const pos = canvasPos(canvas, _pendingMove, meta);
+    port.postMessage({
+      type: "mousemove",
+      x: pos.x,
+      y: pos.y,
+      modifiers: getModifiers(_pendingMove),
+    });
+    _pendingMove = null;
+    if (_moveTimer) { clearTimeout(_moveTimer); _moveTimer = 0; }
+  }
+  canvas._flushPendingMove = _flushMove;
   canvas.addEventListener("mousemove", (e) => {
     _pendingMove = e;
-    if (!_moveRaf) {
-      _moveRaf = requestAnimationFrame(() => {
-        _moveRaf = 0;
-        if (_pendingMove) {
-          const pos = canvasPos(canvas, _pendingMove, meta);
-          port.postMessage({
-            type: "mousemove",
-            x: pos.x,
-            y: pos.y,
-            modifiers: getModifiers(_pendingMove),
-          });
-          _pendingMove = null;
-        }
-      });
+    if (!_moveTimer) {
+      _moveTimer = setTimeout(() => { _moveTimer = 0; _flushMove(); }, 50);
     }
   });
 
