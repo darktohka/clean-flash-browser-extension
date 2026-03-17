@@ -44,7 +44,7 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "flash-player@cleanflash.org",
-      "strict_min_version": "84.0"
+      "strict_min_version": "111.0"
     }
   }
 }

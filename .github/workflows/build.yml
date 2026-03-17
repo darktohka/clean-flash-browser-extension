@@ -27,7 +27,7 @@ jobs:
         run: cargo build --profile release-lto --package player-web --target x86_64-unknown-linux-gnu
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: flash-player-host-linux
           path: target/x86_64-unknown-linux-gnu/release-lto/flash-player-host
@@ -52,7 +52,7 @@ jobs:
         run: cargo build --profile release-lto --package player-web --target x86_64-apple-darwin
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: flash-player-host-macos
           path: target/x86_64-apple-darwin/release-lto/flash-player-host
@@ -77,7 +77,7 @@ jobs:
         run: cargo build --profile release-lto --package player-web --target x86_64-pc-windows-msvc
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: flash-player-host-windows
           path: target/x86_64-pc-windows-msvc/release-lto/flash-player-host.exe
@@ -102,7 +102,7 @@ jobs:
         run: cargo build --profile release-lto --package player-web --target i686-pc-windows-msvc
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: flash-player-host-windows-32
           path: target/i686-pc-windows-msvc/release-lto/flash-player-host.exe
@@ -123,35 +123,44 @@ jobs:
       - name: Install tools
         run: npm install -g crx web-ext
 
-      - name: Prepare extension directory
+      - name: Prepare Chrome extension directory
         run: |
           cp -r web-extension ext-stage
           rm -f ext-stage/install-host.sh ext-stage/install-host.py
 
+      - name: Prepare Firefox extension directory
+        run: |
+          cp -r ext-stage ext-stage-firefox
+          jq 'del(.key) | .background = {"scripts": [.background.service_worker]}' \
+            ext-stage/manifest.json > ext-stage-firefox/manifest.json
+
       # ---- Unsigned artifacts (always) ----
 
-      - name: Build unsigned ZIP & XPI (web-ext)
+      - name: Build unsigned Chrome ZIP
         run: |
           web-ext build --source-dir ext-stage --artifacts-dir . --filename web-extension.zip --overwrite-dest
-          cp web-extension.zip web-extension.xpi
+
+      - name: Build unsigned Firefox XPI
+        run: |
+          web-ext build --source-dir ext-stage-firefox --artifacts-dir . --filename web-extension.xpi --overwrite-dest
 
       - name: Build unsigned CRX
         run: crx pack ext-stage -o web-extension-unsigned.crx
 
       - name: Upload unsigned ZIP
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: web-extension
           path: web-extension.zip
 
       - name: Upload XPI
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: web-extension-xpi
           path: web-extension.xpi
 
       - name: Upload unsigned CRX
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: web-extension-unsigned-crx
           path: web-extension-unsigned.crx
@@ -172,7 +181,7 @@ jobs:
 
       - name: Upload signed CRX
         if: github.ref == 'refs/heads/master'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: web-extension-signed-crx
           path: web-extension-signed.crx
@@ -190,7 +199,7 @@ jobs:
         run: git clone --depth 1 https://gitlab.com/cleanflash/installer.git installer-repo
 
       - name: Download flash-player-host artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: flash-player-host-linux
           path: native-host-artifact
@@ -240,7 +249,7 @@ jobs:
           cargo build --profile release-lto -p clean_flash_installer
 
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: cleanflash-installer-linux
           path: installer-repo/rust/target/release-lto/clean_flash_installer
@@ -258,7 +267,7 @@ jobs:
         run: git clone --depth 1 https://gitlab.com/cleanflash/installer.git installer-repo
 
       - name: Download flash-player-host artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: flash-player-host-macos
           path: native-host-artifact
@@ -310,7 +319,7 @@ jobs:
           cargo build --profile release-lto --target x86_64-apple-darwin -p clean_flash_installer
 
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: cleanflash-installer-macos
           path: installer-repo/rust/target/x86_64-apple-darwin/release-lto/clean_flash_installer
@@ -329,7 +338,7 @@ jobs:
         run: git clone --depth 1 https://gitlab.com/cleanflash/installer.git installer-repo
 
       - name: Download flash-player-host artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: flash-player-host-windows
           path: native-host-artifact
@@ -377,7 +386,7 @@ jobs:
           cargo build --profile release-lto -p clean_flash_installer
 
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: cleanflash-installer-windows-64
           path: installer-repo/rust/target/release-lto/clean_flash_installer.exe
@@ -396,7 +405,7 @@ jobs:
         run: git clone --depth 1 https://gitlab.com/cleanflash/installer.git installer-repo
 
       - name: Download flash-player-host artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: flash-player-host-windows-32
           path: native-host-artifact
@@ -443,7 +452,7 @@ jobs:
           cargo build --profile release-lto -p clean_flash_installer
 
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: cleanflash-installer-windows-32
           path: installer-repo/rust/target/release-lto/clean_flash_installer.exe
