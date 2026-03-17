@@ -14,6 +14,7 @@
 const FLASH_DEBUG = false;
 const LOG_HOST_EVENTS = false;
 const IS_FIREFOX = typeof navigator !== "undefined" && /\bFirefox\//.test(navigator.userAgent);
+let USE_SAFE_IMAGE_DATA_PATH = IS_FIREFOX;
 
 // ---------------------------------------------------------------------------
 // Utilities
@@ -2106,12 +2107,33 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
       const ptr = _qoiDecode(qoiLen);
       const pixelLen = width * height * 4;
       const rgbaView = new Uint8ClampedArray(_qoiMemory.buffer, ptr + 8, pixelLen);
-      // Firefox rejects putImageData when ImageData is backed by WASM memory.
-      const rgba = IS_FIREFOX ? rgbaView.slice() : rgbaView;
 
-      const imageData = new ImageData(rgba, width, height);
+      let imageData;
+      if (USE_SAFE_IMAGE_DATA_PATH) {
+        // Firefox security checks can reject cross-compartment ImageData.
+        imageData = ctx.createImageData(width, height);
+        imageData.data.set(rgbaView);
+      } else {
+        imageData = new ImageData(rgbaView, width, height);
+      }
+
       const rt0 = FLASH_DEBUG ? performance.now() : 0;
-      ctx.putImageData(imageData, x, y);
+      try {
+        ctx.putImageData(imageData, x, y);
+      } catch (e) {
+        const msg = e && e.message ? String(e.message) : "";
+        const isSecurityCheckError =
+          e && e.name === "InvalidStateError" && /security check failed/i.test(msg);
+
+        if (isSecurityCheckError && !USE_SAFE_IMAGE_DATA_PATH) {
+          USE_SAFE_IMAGE_DATA_PATH = true;
+          const safeImageData = ctx.createImageData(width, height);
+          safeImageData.data.set(rgbaView);
+          ctx.putImageData(safeImageData, x, y);
+        } else {
+          throw e;
+        }
+      }
       if (FLASH_DEBUG && _ds) _ds.recordFrameRender(performance.now() - rt0);
       break;
     }
