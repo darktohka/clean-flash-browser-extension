@@ -24,7 +24,7 @@ The extension also implements a full **ExternalInterface** bridge so that page J
 | Google Chrome | ✅ |
 | Chromium | ✅ |
 | Brave | ✅ |
-| Mozilla Firefox | ✅ |
+| Mozilla Firefox | ❌ |
 
 ### Installation
 
