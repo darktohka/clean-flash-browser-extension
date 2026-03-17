@@ -13,6 +13,7 @@
 // ---------------------------------------------------------------------------
 const FLASH_DEBUG = false;
 const LOG_HOST_EVENTS = false;
+const IS_FIREFOX = typeof navigator !== "undefined" && /\bFirefox\//.test(navigator.userAgent);
 
 // ---------------------------------------------------------------------------
 // Utilities
@@ -2104,7 +2105,9 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
       // Decode - returns pointer to [u32 width, u32 height, ...RGBA pixels].
       const ptr = _qoiDecode(qoiLen);
       const pixelLen = width * height * 4;
-      const rgba = new Uint8ClampedArray(_qoiMemory.buffer, ptr + 8, pixelLen);
+      const rgbaView = new Uint8ClampedArray(_qoiMemory.buffer, ptr + 8, pixelLen);
+      // Firefox rejects putImageData when ImageData is backed by WASM memory.
+      const rgba = IS_FIREFOX ? rgbaView.slice() : rgbaView;
 
       const imageData = new ImageData(rgba, width, height);
       const rt0 = FLASH_DEBUG ? performance.now() : 0;
