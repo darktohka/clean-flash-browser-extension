@@ -62,17 +62,64 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Remove install-host scripts
-        run: |
-          rm web-extension/install-host.sh
-          rm web-extension/install-host.py
-      - name: Create web-extension zip
-        run: |
-          cd web-extension
-          zip -r ../web-extension.zip .
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
 
-      - name: Upload web-extension artifact
+      - name: Install tools
+        run: npm install -g crx web-ext
+
+      - name: Prepare extension directory
+        run: |
+          cp -r web-extension ext-stage
+          rm -f ext-stage/install-host.sh ext-stage/install-host.py
+
+      # ---- Unsigned artifacts (always) ----
+
+      - name: Build unsigned ZIP & XPI (web-ext)
+        run: |
+          web-ext build --source-dir ext-stage --artifacts-dir . --filename web-extension.zip --overwrite-dest
+          cp web-extension.zip web-extension.xpi
+
+      - name: Build unsigned CRX
+        run: crx pack ext-stage -o web-extension-unsigned.crx
+
+      - name: Upload unsigned ZIP
         uses: actions/upload-artifact@v6
         with:
           name: web-extension
           path: web-extension.zip
+
+      - name: Upload XPI
+        uses: actions/upload-artifact@v6
+        with:
+          name: web-extension-xpi
+          path: web-extension.xpi
+
+      - name: Upload unsigned CRX
+        uses: actions/upload-artifact@v6
+        with:
+          name: web-extension-unsigned-crx
+          path: web-extension-unsigned.crx
+
+      # ---- Signed artifacts (master branch only) ----
+
+      - name: Write signing key
+        if: github.ref == 'refs/heads/master' && secrets.EXTENSION_PEM != ''
+        run: echo "${{ secrets.EXTENSION_PEM }}" > /tmp/extension.pem
+
+      - name: Build signed CRX
+        if: github.ref == 'refs/heads/master' && secrets.EXTENSION_PEM != ''
+        run: crx pack ext-stage --key /tmp/extension.pem -o web-extension-signed.crx
+
+      - name: Clean up signing key
+        if: always()
+        run: rm -f /tmp/extension.pem
+
+      - name: Upload signed CRX
+        if: github.ref == 'refs/heads/master' && secrets.EXTENSION_PEM != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: web-extension-signed-crx
+          path: web-extension-signed.crx
