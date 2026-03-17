@@ -212,3 +212,151 @@ chrome.runtime.onConnect.addListener((port) => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Cookie API — chrome.cookies access for content scripts
+//
+// Content scripts cannot use chrome.cookies directly, so they send
+// messages here.  We use chrome.cookies.getAll() to retrieve matching
+// cookies for a URL, and chrome.cookies.set() to store Set-Cookie
+// response headers received by the native HTTP client.
+// ---------------------------------------------------------------------------
+
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg.type === "getCookies") {
+    const url = msg.url;
+    if (!url || !chrome.cookies) {
+      sendResponse({ cookies: "" });
+      return false;
+    }
+    chrome.cookies.getAll({ url })
+      .then((cookies) => {
+        const cookieStr = cookies
+          .map((c) => c.name + "=" + c.value)
+          .join("; ");
+        sendResponse({ cookies: cookieStr });
+      })
+      .catch((e) => {
+        console.warn("[Flash Player] chrome.cookies.getAll error:", e);
+        sendResponse({ cookies: "" });
+      });
+    return true; // async sendResponse
+  }
+
+  if (msg.type === "setCookies") {
+    const url = msg.url;
+    const cookieHeaders = msg.cookies; // array of Set-Cookie header strings
+    if (!url || !cookieHeaders || !chrome.cookies) {
+      sendResponse({ ok: true });
+      return false;
+    }
+    // Parse each Set-Cookie header and store via chrome.cookies.set().
+    const promises = cookieHeaders.map((header) => {
+      const parsed = parseSetCookieHeader(header, url);
+      if (!parsed) return Promise.resolve();
+      return chrome.cookies.set(parsed).catch((e) => {
+        console.warn("[Flash Player] chrome.cookies.set error:", e, parsed);
+      });
+    });
+    Promise.all(promises)
+      .then(() => sendResponse({ ok: true }))
+      .catch(() => sendResponse({ ok: true }));
+    return true; // async sendResponse
+  }
+
+  return false;
+});
+
+/**
+ * Parse a Set-Cookie header string into a chrome.cookies.set() details object.
+ *
+ * @param {string} header - Raw Set-Cookie header value, e.g.
+ *   "name=value; Path=/; Domain=.example.com; Secure; HttpOnly; SameSite=Lax; Max-Age=3600"
+ * @param {string} requestUrl - The URL that produced this Set-Cookie header,
+ *   used as fallback for domain/path and as the `url` parameter.
+ * @returns {object|null} chrome.cookies.set() details, or null if unparseable.
+ */
+function parseSetCookieHeader(header, requestUrl) {
+  const parts = header.split(";").map((s) => s.trim());
+  if (parts.length === 0) return null;
+
+  // First part is "name=value".
+  const firstEq = parts[0].indexOf("=");
+  if (firstEq < 0) return null;
+  const name = parts[0].substring(0, firstEq).trim();
+  const value = parts[0].substring(firstEq + 1).trim();
+  if (!name) return null;
+
+  let domain = null;
+  let path = null;
+  let secure = false;
+  let httpOnly = false;
+  let sameSite = undefined;
+  let expirationDate = undefined;
+
+  for (let i = 1; i < parts.length; i++) {
+    const part = parts[i];
+    const eqIdx = part.indexOf("=");
+    const attrName = (eqIdx >= 0 ? part.substring(0, eqIdx) : part)
+      .trim()
+      .toLowerCase();
+    const attrVal = eqIdx >= 0 ? part.substring(eqIdx + 1).trim() : "";
+
+    switch (attrName) {
+      case "domain":
+        domain = attrVal;
+        break;
+      case "path":
+        path = attrVal;
+        break;
+      case "secure":
+        secure = true;
+        break;
+      case "httponly":
+        httpOnly = true;
+        break;
+      case "samesite":
+        switch (attrVal.toLowerCase()) {
+          case "strict":
+            sameSite = "strict";
+            break;
+          case "none":
+            sameSite = "no_restriction";
+            break;
+          case "lax":
+          default:
+            sameSite = "lax";
+            break;
+        }
+        break;
+      case "max-age": {
+        const secs = parseInt(attrVal, 10);
+        if (!isNaN(secs)) {
+          expirationDate = Math.floor(Date.now() / 1000) + secs;
+        }
+        break;
+      }
+      case "expires": {
+        const d = new Date(attrVal);
+        if (!isNaN(d.getTime())) {
+          expirationDate = Math.floor(d.getTime() / 1000);
+        }
+        break;
+      }
+    }
+  }
+
+  const details = {
+    url: requestUrl,
+    name,
+    value,
+  };
+  if (domain) details.domain = domain;
+  if (path) details.path = path;
+  if (secure) details.secure = true;
+  if (httpOnly) details.httpOnly = true;
+  if (sameSite) details.sameSite = sameSite;
+  if (expirationDate !== undefined) details.expirationDate = expirationDate;
+
+  return details;
+}

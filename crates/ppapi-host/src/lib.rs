@@ -164,6 +164,10 @@ pub struct HostState {
     /// Video capture provider for webcam access.
     /// When set, PPB_VideoCapture(Dev) uses this to capture from a real camera.
     pub video_capture_provider: Mutex<Option<Arc<dyn player_ui_traits::VideoCaptureProvider>>>,
+    /// Cookie provider for HTTP cookie storage.
+    /// When set, the URL loader uses this to attach `Cookie` headers to
+    /// outgoing requests and store `Set-Cookie` headers from responses.
+    pub cookie_provider: Mutex<Option<Arc<dyn player_ui_traits::CookieProvider>>>,
     /// Number of pending interactive operations (context menus, file dialogs)
     /// that are waiting for user input.  While > 0, the Flash nested message
     /// loop skips its safety-net timeout so the user has time to interact.
@@ -229,6 +233,7 @@ impl HostState {
                 context_menu_provider: Mutex::new(None),
                 print_provider: Mutex::new(None),
                 video_capture_provider: Mutex::new(None),
+                cookie_provider: Mutex::new(None),
                 pending_interactive_ops: AtomicI32::new(0),
                 flash_command_line_args: Mutex::new(String::new()),
                 instance_object: Mutex::new(None),
@@ -361,6 +366,16 @@ impl HostState {
     /// Get a cloned `Arc` handle to the video capture provider, if set.
     pub fn get_video_capture_provider(&self) -> Option<Arc<dyn player_ui_traits::VideoCaptureProvider>> {
         self.video_capture_provider.lock().clone()
+    }
+
+    /// Set the cookie provider for HTTP cookie storage.
+    pub fn set_cookie_provider(&self, provider: Box<dyn player_ui_traits::CookieProvider>) {
+        *self.cookie_provider.lock() = Some(Arc::from(provider));
+    }
+
+    /// Get a cloned `Arc` handle to the cookie provider, if set.
+    pub fn get_cookie_provider(&self) -> Option<Arc<dyn player_ui_traits::CookieProvider>> {
+        self.cookie_provider.lock().clone()
     }
 
     /// Set the command-line string returned by

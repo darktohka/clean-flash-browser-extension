@@ -219,6 +219,12 @@ fn main() {
         host.set_file_chooser_provider(Box::new(
             player_ui_traits::RfdFileChooserProvider::new(),
         ));
+
+        // Set up the cookie provider so that HTTP cookies from the browser
+        // are attached to URLLoader requests and Set-Cookie responses are
+        // stored back in the browser cookie jar.
+        let cookie_bridge = SCRIPT_BRIDGE.get().expect("SCRIPT_BRIDGE not initialised").clone();
+        host.set_cookie_provider(Box::new(WebCookieProvider::new(cookie_bridge)));
     }
 
     // Load the Flash plugin now that all providers are set up.
@@ -1635,5 +1641,42 @@ impl player_ui_traits::PrintProvider for WebPrintProvider {
     fn print(&self) -> bool {
         tracing::debug!("WebPrintProvider::print - sending Print message to browser");
         protocol::send_host_message(&protocol::HostMessage::Print).is_ok()
+    }
+}
+
+// ===========================================================================
+// Cookie provider — uses the script bridge to get/set HTTP cookies
+// ===========================================================================
+
+struct WebCookieProvider {
+    bridge: Arc<script_bridge::ScriptBridge>,
+}
+
+impl WebCookieProvider {
+    fn new(bridge: Arc<script_bridge::ScriptBridge>) -> Self {
+        Self { bridge }
+    }
+}
+
+impl player_ui_traits::CookieProvider for WebCookieProvider {
+    fn get_cookies_for_url(&self, url: &str) -> Option<String> {
+        let resp = self.bridge.request(serde_json::json!({
+            "op": "getCookiesForUrl",
+            "url": url,
+        }));
+        resp.as_ref()
+            .and_then(|r| r.get("value"))
+            .and_then(|v| v.get("v"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    }
+
+    fn set_cookies_from_response(&self, url: &str, set_cookie_headers: &[String]) {
+        let _ = self.bridge.request(serde_json::json!({
+            "op": "setCookiesFromResponse",
+            "url": url,
+            "cookies": set_cookie_headers,
+        }));
     }
 }

@@ -2,11 +2,16 @@
   "manifest_version": 3,
   "name": "Flash Player",
   "version": "1.0.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvKCCXoekk9I3Q5fYYF9MlZoFdjEcKRr+bC3nRyxpcYFidl0CFky31ZxFM2ALzth1i2EBxa73aibWIWj/pcPPg/cEh+6Rk5/WU3enlbWGc3PvC+rKKWfNBquo160ye50IjifmNJpKmLvlvjP1rUS5idLWlE0E2L/3b5Bfp4aHJKupYoyuqnTdgnphLiO1txFuiFsqR9aNvtdeYSGCvVrJkj2JOCljP+6NvNIfNYMu6awqZjfRX5Wu+RZnodhu2WNsV1xc6RjP0r7zhpHIRjDs+RdM/qc8WIxS6uP7pLVyXBMwzgtAo9jUnBitEAYKLLocbE0d3L0yUuKJFH4JczPDTwIDAQAB",
   "description": "Replaces Flash content with a native Flash Player via Native Messaging",
   "permissions": [
     "nativeMessaging",
+    "cookies",
     "clipboardRead",
     "clipboardWrite"
+  ],
+  "host_permissions": [
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"
