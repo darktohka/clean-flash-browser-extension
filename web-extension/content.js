@@ -613,6 +613,10 @@ function replaceFlashElement(elem) {
   // that percentage-based Flash elements stay in sync.
   observeResize(meta);
 
+  // Watch for attribute/style changes on the original <embed>/<object> so
+  // that dimension changes made by page scripts propagate to the canvas.
+  observeElementMutations(meta);
+
   // Now that the container is in the DOM, create the debug panel if needed.
   // For <object>, the container lives *inside* the element, so anchor the
   // panel to the <object> itself so it appears outside/after it.
@@ -690,6 +694,97 @@ function observeResize(meta) {
   });
   ro.observe(meta.canvas);
   meta._resizeObserver = ro;
+}
+
+/**
+ * Observe attribute changes (width, height, style) on the original
+ * <embed> or <object> element so that dimension changes made by page
+ * scripts propagate down to the internal container and canvas — matching
+ * the old browser plugin behaviour where the <embed> *was* the canvas.
+ */
+function observeElementMutations(meta) {
+  const elem = meta.elem;
+  if (!elem) return;
+
+  const mo = new MutationObserver((mutations) => {
+    let needsUpdate = false;
+    for (const m of mutations) {
+      if (m.type === "attributes") {
+        const attr = m.attributeName.toLowerCase();
+        if (attr === "width" || attr === "height" || attr === "style") {
+          needsUpdate = true;
+          break;
+        }
+      }
+    }
+    if (!needsUpdate) return;
+    syncDimensionsFromElement(meta);
+  });
+
+  mo.observe(elem, { attributes: true, attributeFilter: ["width", "height", "style"] });
+  meta._mutationObserver = mo;
+
+  // For <object>, the element still wraps the container in the DOM tree,
+  // so also watch it with ResizeObserver to catch CSS-driven resizes
+  // (e.g. flexbox / grid layout changes) that don't touch attributes.
+  if (elem.tagName === "OBJECT" && typeof ResizeObserver !== "undefined") {
+    const ero = new ResizeObserver(() => {
+      syncDimensionsFromElement(meta);
+    });
+    ero.observe(elem);
+    meta._elemResizeObserver = ero;
+  }
+}
+
+/**
+ * Read the current dimensions from the original <embed>/<object> element
+ * and propagate them to the container <div> and internal <canvas>.
+ */
+function syncDimensionsFromElement(meta) {
+  const { elem, canvas, container } = meta;
+  if (!elem || !canvas || !container) return;
+
+  // Don't sync during fullscreen — fullscreen logic manages its own sizes.
+  if (document.fullscreenElement || document.webkitFullscreenElement) return;
+
+  const widthRaw = elem.getAttribute("width") || elem.style.width || "";
+  const heightRaw = elem.getAttribute("height") || elem.style.height || "";
+  if (!widthRaw && !heightRaw) return;
+
+  const isRelativeWidth = widthRaw && !/^\d+$/.test(widthRaw.trim()) && !/^\d+px$/i.test(widthRaw.trim());
+  const isRelativeHeight = heightRaw && !/^\d+$/.test(heightRaw.trim()) && !/^\d+px$/i.test(heightRaw.trim());
+
+  // Update CSS dimensions on container and canvas.
+  const cssWidth = isRelativeWidth ? widthRaw.trim() : (parseInt(widthRaw, 10) || meta.origWidth) + "px";
+  const cssHeight = isRelativeHeight ? heightRaw.trim() : (parseInt(heightRaw, 10) || meta.origHeight) + "px";
+
+  container.style.width = cssWidth;
+  container.style.height = cssHeight;
+  canvas.style.width = cssWidth;
+  canvas.style.height = cssHeight;
+
+  // Determine pixel dimensions for the canvas buffer.
+  let w, h;
+  if (isRelativeWidth || isRelativeHeight) {
+    const measured = measureRenderedSize(canvas, meta.origWidth, meta.origHeight);
+    w = measured.w;
+    h = measured.h;
+  } else {
+    w = parseInt(widthRaw, 10) || meta.origWidth;
+    h = parseInt(heightRaw, 10) || meta.origHeight;
+  }
+
+  if (w === canvas.width && h === canvas.height) return;
+
+  canvas.width = w;
+  canvas.height = h;
+  meta.origWidth = w;
+  meta.origHeight = h;
+
+  if (meta.port) {
+    console.log("Element dimension change detected, updating with", { width: w, height: h, ...collectViewInfo(canvas) });
+    meta.port.postMessage({ type: "resize", width: w, height: h, ...collectViewInfo(canvas) });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -3029,6 +3124,10 @@ function destroyAllInstances() {
     // Remove any crash overlay that may be showing.
     const overlay = meta.container.querySelector(".flash-crash-overlay");
     if (overlay) overlay.remove();
+    // Disconnect mutation / resize observers on the original element.
+    if (meta._mutationObserver) { meta._mutationObserver.disconnect(); meta._mutationObserver = null; }
+    if (meta._elemResizeObserver) { meta._elemResizeObserver.disconnect(); meta._elemResizeObserver = null; }
+    if (meta._resizeObserver) { meta._resizeObserver.disconnect(); meta._resizeObserver = null; }
     // Stop debug stats.
     const ds = debugStatsMap.get(id);
     if (ds) { ds.stop(); debugStatsMap.delete(id); }
@@ -3091,10 +3190,14 @@ window.addEventListener("pagehide", () => {
   destroyAllInstances();
 });
 
-window.addEventListener("pageshow", (e) => {
-  if (e.persisted) {
-    // Page was restored from bfcache - ports are dead, restart everything.
-    navigatingAway = false;
-    restartAllInstances();
+let firstReveal = true;
+
+window.addEventListener("pagereveal", (e) => {
+  if (firstReveal) {
+    firstReveal = false;
+    return;
   }
+  // Page was restored from bfcache - ports are dead, restart everything.
+  navigatingAway = false;
+  restartAllInstances();
 });
