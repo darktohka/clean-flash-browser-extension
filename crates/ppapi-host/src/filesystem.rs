@@ -348,8 +348,18 @@ impl FlashFileSystem for OsFileSystem {
 // ===========================================================================
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{Ordering};
 use parking_lot::Mutex;
+
+#[cfg(windows)]
+use std::sync::atomic::AtomicIsize;
+#[cfg(windows)]
+type PpAtomicFileHandle = AtomicIsize;
+
+#[cfg(not(windows))]
+use std::sync::atomic::AtomicI32;
+#[cfg(not(windows))]
+type PpAtomicFileHandle = AtomicI32;
 
 /// In-memory filesystem.  All data lives in process memory and is lost
 /// when the process exits.
@@ -367,7 +377,7 @@ struct MemFsInner {
     nodes: HashMap<String, MemFsNode>,
     /// Maps synthetic fd → path.
     open_handles: HashMap<PP_FileHandle, String>,
-    next_fd: AtomicIsize,
+    next_fd: PpAtomicFileHandle,
 }
 
 impl std::fmt::Debug for MemFsInner {
@@ -385,7 +395,7 @@ impl InMemoryFileSystem {
             inner: Mutex::new(MemFsInner {
                 nodes: HashMap::new(),
                 open_handles: HashMap::new(),
-                next_fd: AtomicIsize::new(1000), // Start high to avoid collisions.
+                next_fd: PpAtomicFileHandle::new(1000), // Start high to avoid collisions.
             }),
         }
     }

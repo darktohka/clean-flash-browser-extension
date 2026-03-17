@@ -3951,6 +3951,7 @@ pub const PPB_FLASH_FILE_FILEREF_INTERFACE_2: &str = "PPB_Flash_File_FileRef;2\0
 /// On Unix, PP_FileHandle is a file descriptor (`int`).
 #[cfg(windows)]
 pub type PP_FileHandle = isize;
+
 #[cfg(not(windows))]
 pub type PP_FileHandle = i32;
 
