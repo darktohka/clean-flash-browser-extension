@@ -759,6 +759,29 @@ function syncDimensionsFromElement(meta) {
   container.style.height = cssHeight;
   canvas.style.width = cssWidth;
   canvas.style.height = cssHeight;
+
+  // After the CSS change has been applied, measure the actual laid-out size
+  // on the next frame and update the canvas buffer.  We cannot rely solely
+  // on ResizeObserver because Firefox content scripts may not fire it
+  // reliably due to Xray wrapper compartment isolation.  The existing
+  // ResizeObserver (observeResize) has a same-size guard so there is no
+  // conflict if both paths run.
+  requestAnimationFrame(() => {
+    const measured = measureRenderedSize(canvas, meta.origWidth, meta.origHeight);
+    const w = measured.w;
+    const h = measured.h;
+    if (w <= 0 || h <= 0) return;
+    if (w === canvas.width && h === canvas.height) return;
+
+    canvas.width = w;
+    canvas.height = h;
+    meta.origWidth = w;
+    meta.origHeight = h;
+
+    if (meta.port) {
+      meta.port.postMessage({ type: "resize", width: w, height: h, ...collectViewInfo(canvas) });
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
