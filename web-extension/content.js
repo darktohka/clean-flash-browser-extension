@@ -14,7 +14,14 @@
 const FLASH_DEBUG = false;
 const LOG_HOST_EVENTS = false;
 const IS_FIREFOX = typeof navigator !== "undefined" && /\bFirefox\//.test(navigator.userAgent);
-let USE_SAFE_IMAGE_DATA_PATH = IS_FIREFOX;
+
+// Firefox content-script OffscreenCanvas cache for frame rendering.
+// putImageData fails in Firefox content scripts because the canvas context
+// lives in the page compartment while ImageData lives in the content-script
+// compartment.  An OffscreenCanvas stays entirely in the content-script
+// compartment, sidestepping the cross-compartment security check.
+let _ffOffscreen = null;
+let _ffOffscreenCtx = null;
 
 // ---------------------------------------------------------------------------
 // Utilities
@@ -2108,31 +2115,22 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
       const pixelLen = width * height * 4;
       const rgbaView = new Uint8ClampedArray(_qoiMemory.buffer, ptr + 8, pixelLen);
 
-      let imageData;
-      if (USE_SAFE_IMAGE_DATA_PATH) {
-        // Firefox security checks can reject cross-compartment ImageData.
-        imageData = ctx.createImageData(width, height);
-        imageData.data.set(rgbaView);
-      } else {
-        imageData = new ImageData(rgbaView, width, height);
-      }
-
       const rt0 = FLASH_DEBUG ? performance.now() : 0;
-      try {
-        ctx.putImageData(imageData, x, y);
-      } catch (e) {
-        const msg = e && e.message ? String(e.message) : "";
-        const isSecurityCheckError =
-          e && e.name === "InvalidStateError" && /security check failed/i.test(msg);
-
-        if (isSecurityCheckError && !USE_SAFE_IMAGE_DATA_PATH) {
-          USE_SAFE_IMAGE_DATA_PATH = true;
-          const safeImageData = ctx.createImageData(width, height);
-          safeImageData.data.set(rgbaView);
-          ctx.putImageData(safeImageData, x, y);
-        } else {
-          throw e;
+      if (IS_FIREFOX) {
+        // Firefox content scripts: putImageData fails with "security check
+        // failed" because the canvas context lives in the page compartment
+        // while ImageData is in the content-script compartment.  Render into
+        // an OffscreenCanvas (same compartment) then blit with drawImage.
+        if (!_ffOffscreen || _ffOffscreen.width !== width || _ffOffscreen.height !== height) {
+          _ffOffscreen = new OffscreenCanvas(width, height);
+          _ffOffscreenCtx = _ffOffscreen.getContext("2d");
         }
+        const imageData = new ImageData(new Uint8ClampedArray(rgbaView), width, height);
+        _ffOffscreenCtx.putImageData(imageData, 0, 0);
+        ctx.drawImage(_ffOffscreen, 0, 0, width, height, x, y, width, height);
+      } else {
+        const imageData = new ImageData(rgbaView, width, height);
+        ctx.putImageData(imageData, x, y);
       }
       if (FLASH_DEBUG && _ds) _ds.recordFrameRender(performance.now() - rt0);
       break;
