@@ -7,24 +7,9 @@ on:
   repository_dispatch:
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact: flash-player-host-linux
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact: flash-player-host-windows
-          - os: windows-latest
-            target: i686-pc-windows-msvc
-            artifact: flash-player-host-windows-32
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            artifact: flash-player-host-macos
-
-    runs-on: ${{ matrix.os }}
+  build-linux:
+    name: Build Host (Linux)
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
@@ -33,29 +18,97 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: x86_64-unknown-linux-gnu
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --profile release-lto --package player-web --target ${{ matrix.target }}
+        run: cargo build --profile release-lto --package player-web --target x86_64-unknown-linux-gnu
 
-      - name: Upload artifact (Unix)
-        if: runner.os != 'Windows'
+      - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:
-          name: ${{ matrix.artifact }}
-          path: target/${{ matrix.target }}/release-lto/flash-player-host
+          name: flash-player-host-linux
+          path: target/x86_64-unknown-linux-gnu/release-lto/flash-player-host
 
-      - name: Upload artifact (Windows)
-        if: runner.os == 'Windows'
+  build-macos:
+    name: Build Host (macOS)
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --profile release-lto --package player-web --target x86_64-apple-darwin
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:
-          name: ${{ matrix.artifact }}
-          path: target/${{ matrix.target }}/release-lto/flash-player-host.exe
+          name: flash-player-host-macos
+          path: target/x86_64-apple-darwin/release-lto/flash-player-host
+
+  build-windows-64:
+    name: Build Host (Windows x64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --profile release-lto --package player-web --target x86_64-pc-windows-msvc
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: flash-player-host-windows
+          path: target/x86_64-pc-windows-msvc/release-lto/flash-player-host.exe
+
+  build-windows-32:
+    name: Build Host (Windows x86)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: i686-pc-windows-msvc
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --profile release-lto --package player-web --target i686-pc-windows-msvc
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: flash-player-host-windows-32
+          path: target/i686-pc-windows-msvc/release-lto/flash-player-host.exe
 
   web-extension:
+    name: Build Web Extension
     runs-on: ubuntu-latest
 
     steps:
@@ -125,7 +178,8 @@ jobs:
           path: web-extension-signed.crx
 
   installer-linux:
-    needs: [build]
+    name: Build Installer (Linux)
+    needs: [build-linux]
     runs-on: ubuntu-latest
 
     steps:
@@ -192,7 +246,8 @@ jobs:
           path: installer-repo/rust/target/release-lto/clean_flash_installer
 
   installer-macos:
-    needs: [build]
+    name: Build Installer (macOS)
+    needs: [build-macos]
     runs-on: macos-latest
 
     steps:
@@ -260,23 +315,14 @@ jobs:
           name: cleanflash-installer-macos
           path: installer-repo/rust/target/x86_64-apple-darwin/release-lto/clean_flash_installer
 
-  installer-windows:
-    needs: [build]
+  installer-windows-64:
+    name: Build Installer (Windows x64)
+    needs: [build-windows-64]
     runs-on: windows-latest
 
     defaults:
       run:
         shell: bash
-
-    strategy:
-      matrix:
-        include:
-          - variant: "64"
-            native_host_artifact: flash-player-host-windows
-            native_host_folder: native-host-64
-          - variant: "32"
-            native_host_artifact: flash-player-host-windows-32
-            native_host_folder: native-host-32
 
     steps:
       - name: Clone installer repository
@@ -285,7 +331,7 @@ jobs:
       - name: Download flash-player-host artifact
         uses: actions/download-artifact@v6
         with:
-          name: ${{ matrix.native_host_artifact }}
+          name: flash-player-host-windows
           path: native-host-artifact
 
       - name: Download Clean Flash base archive
@@ -315,9 +361,9 @@ jobs:
 
       - name: Assemble archive contents
         run: |
-          mkdir -p cleanflash-base/${{ matrix.native_host_folder }}
+          mkdir -p cleanflash-base/native-host-64
           mkdir -p cleanflash-base/uninstaller
-          cp native-host-artifact/flash-player-host.exe cleanflash-base/${{ matrix.native_host_folder }}/
+          cp native-host-artifact/flash-player-host.exe cleanflash-base/native-host-64/
           cp installer-repo/rust/target/release-lto/clean_flash_uninstaller.exe cleanflash-base/uninstaller/
 
       - name: Create cleanflash-win.7z
@@ -333,5 +379,72 @@ jobs:
       - name: Upload installer artifact
         uses: actions/upload-artifact@v6
         with:
-          name: cleanflash-installer-windows-${{ matrix.variant }}
+          name: cleanflash-installer-windows-64
+          path: installer-repo/rust/target/release-lto/clean_flash_installer.exe
+
+  installer-windows-32:
+    name: Build Installer (Windows x86)
+    needs: [build-windows-32]
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Clone installer repository
+        run: git clone --depth 1 https://gitlab.com/cleanflash/installer.git installer-repo
+
+      - name: Download flash-player-host artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: flash-player-host-windows-32
+          path: native-host-artifact
+
+      - name: Download Clean Flash base archive
+        run: curl -sL -o cleanflash-base.7z "https://cloud.tohka.us/share/cleanflash-win.7z"
+
+      - name: Extract base archive
+        run: 7z x cleanflash-base.7z -ocleanflash-base
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: installer-repo/rust
+
+      - name: Create placeholder archives
+        working-directory: installer-repo/rust
+        run: |
+          touch crates/clean_flash_installer/cleanflash-linux.7z
+          touch crates/clean_flash_installer/cleanflash-macos.7z
+          touch crates/clean_flash_installer/cleanflash-win.7z
+
+      - name: Build uninstaller
+        working-directory: installer-repo/rust
+        run: cargo build --profile release-lto -p clean_flash_uninstaller
+
+      - name: Assemble archive contents
+        run: |
+          mkdir -p cleanflash-base/native-host-32
+          mkdir -p cleanflash-base/uninstaller
+          cp native-host-artifact/flash-player-host.exe cleanflash-base/native-host-32/
+          cp installer-repo/rust/target/release-lto/clean_flash_uninstaller.exe cleanflash-base/uninstaller/
+
+      - name: Create cleanflash-win.7z
+        working-directory: cleanflash-base
+        run: 7z a -t7z -m0=lzma2 -mx=9 -mfb=64 -md=32m -ms=on ../cleanflash-win.7z *
+
+      - name: Build installer
+        working-directory: installer-repo/rust
+        run: |
+          cp ../../cleanflash-win.7z crates/clean_flash_installer/cleanflash-win.7z
+          cargo build --profile release-lto -p clean_flash_installer
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: cleanflash-installer-windows-32
           path: installer-repo/rust/target/release-lto/clean_flash_installer.exe
