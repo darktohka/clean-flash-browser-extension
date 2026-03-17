@@ -608,7 +608,7 @@ function collectViewInfo(canvas) {
   }
   return {
     deviceScale: window.devicePixelRatio || 1.0,
-    cssScale: 1.0 / (window.devicePixelRatio || 1.0),
+    cssScale: 1.0, // TO-DO: is it just window.devicePixelRatio?
     scrollX: Math.round(window.scrollX || 0),
     scrollY: Math.round(window.scrollY || 0),
     isFullscreen,
@@ -2542,6 +2542,46 @@ async function handleScriptRequest(req, port) {
     } else {
       sendScriptResponse(port, id, { type: "bool", v: false });
     }
+    return;
+  }
+
+  // ---------------------------------------------------------------
+  // Cookies: use chrome.cookies API (via background service worker)
+  // to get/set cookies for arbitrary URLs.
+  // ---------------------------------------------------------------
+
+  if (op === "getCookiesForUrl") {
+    const url = req.url;
+    try {
+      const resp = await chrome.runtime.sendMessage({
+        type: "getCookies",
+        url: url,
+      });
+      if (resp && typeof resp.cookies === "string") {
+        sendScriptResponse(port, id, { type: "string", v: resp.cookies });
+      } else {
+        sendScriptResponse(port, id, { type: "string", v: "" });
+      }
+    } catch (e) {
+      console.warn("[Flash Player] getCookiesForUrl error:", e);
+      sendScriptResponse(port, id, { type: "string", v: "" });
+    }
+    return;
+  }
+
+  if (op === "setCookiesFromResponse") {
+    const url = req.url;
+    const cookies = req.cookies; // array of Set-Cookie header strings
+    try {
+      await chrome.runtime.sendMessage({
+        type: "setCookies",
+        url: url,
+        cookies: cookies,
+      });
+    } catch (e) {
+      console.warn("[Flash Player] setCookiesFromResponse error:", e);
+    }
+    sendScriptResponse(port, id, { type: "bool", v: true });
     return;
   }
 

@@ -6,8 +6,12 @@
   "description": "Replaces Flash content with a native Flash Player via Native Messaging",
   "permissions": [
     "nativeMessaging",
+    "cookies",
     "clipboardRead",
     "clipboardWrite"
+  ],
+  "host_permissions": [
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"

@@ -723,3 +723,31 @@ impl Default for ViewInfo {
         }
     }
 }
+
+// ===========================================================================
+// Cookie provider — abstracts HTTP cookie storage for the PPAPI host
+// ===========================================================================
+
+/// Provides HTTP cookie storage and retrieval for the PPAPI host.
+///
+/// When set, the URL loader uses this provider to attach `Cookie` headers
+/// to outgoing HTTP requests and to store `Set-Cookie` headers from
+/// responses.  Implementations are responsible for enforcing cookie
+/// domain/path scoping, `Secure` flag, `SameSite` policy, and expiry.
+///
+/// Implementations should be thread-safe; methods may be called from
+/// background I/O threads.
+pub trait CookieProvider: Send + Sync {
+    /// Return the `Cookie` header value that should be sent for the given URL.
+    ///
+    /// The returned string should be in the standard `Cookie` header format:
+    /// `name1=value1; name2=value2`.  Return an empty string (or `None`) if
+    /// no cookies apply.
+    fn get_cookies_for_url(&self, url: &str) -> Option<String>;
+
+    /// Store cookies received in HTTP `Set-Cookie` response headers.
+    ///
+    /// `url` is the URL that produced the response.  `set_cookie_headers`
+    /// contains the raw values of each `Set-Cookie` header line.
+    fn set_cookies_from_response(&self, url: &str, set_cookie_headers: &[String]);
+}

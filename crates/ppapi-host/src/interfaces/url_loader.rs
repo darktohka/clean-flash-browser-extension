@@ -24,6 +24,7 @@ use std::ffi::c_void;
 use std::io::Read;
 use std::sync::OnceLock;
 
+use player_ui_traits::CookieProvider;
 use ppapi_sys::*;
 use tokio::sync::Semaphore;
 
@@ -194,12 +195,13 @@ fn perform_url_open(
     headers: &str,
     body: Option<&[u8]>,
     follow_redirects: bool,
+    cookie_provider: Option<&dyn CookieProvider>,
 ) -> Result<UrlLoadResponse, i32> {
     tracing::info!("URL open requested: {} {}", method, url);
 
     // Suppress unused-variable warnings when reqwest is not enabled.
     #[cfg(not(feature = "url-reqwest"))]
-    let _ = (headers, body, follow_redirects);
+    let _ = (headers, body, follow_redirects, cookie_provider);
 
     // ----- crossdomain.xml interception -----
     if is_crossdomain_xml_request(url) {
@@ -278,13 +280,30 @@ fn perform_url_open(
         let mut req = client.request(http_method, url);
 
         // Parse PPAPI headers: lines separated by \r\n or \n.
+        let mut has_cookie_header = false;
         for line in headers.lines() {
             let line = line.trim();
             if line.is_empty() {
                 continue;
             }
             if let Some((key, value)) = line.split_once(':') {
+                if key.trim().eq_ignore_ascii_case("cookie") {
+                    has_cookie_header = true;
+                }
                 req = req.header(key.trim(), value.trim());
+            }
+        }
+
+        // Inject cookies from the cookie provider if no explicit Cookie
+        // header was supplied by the plugin.
+        if !has_cookie_header {
+            if let Some(provider) = cookie_provider {
+                if let Some(cookie_val) = provider.get_cookies_for_url(url) {
+                    if !cookie_val.is_empty() {
+                        tracing::debug!("URL open: injecting cookies for {}", url);
+                        req = req.header("Cookie", cookie_val);
+                    }
+                }
             }
         }
 
@@ -317,6 +336,24 @@ fn perform_url_open(
                 status_code,
                 url
             );
+        }
+
+        // Store Set-Cookie response headers via the cookie provider.
+        if let Some(provider) = cookie_provider {
+            let set_cookie_values: Vec<String> = response
+                .headers()
+                .get_all("set-cookie")
+                .iter()
+                .filter_map(|v| v.to_str().ok().map(String::from))
+                .collect();
+            if !set_cookie_values.is_empty() {
+                tracing::debug!(
+                    "URL open: storing {} Set-Cookie header(s) for {}",
+                    set_cookie_values.len(),
+                    &final_url
+                );
+                provider.set_cookies_from_response(&final_url, &set_cookie_values);
+            }
         }
 
         let mut resp_headers = String::new();
@@ -582,8 +619,11 @@ fn open_blocking(
 ) -> i32 {
     let body_opt = body.as_deref().filter(|b| !b.is_empty());
 
+    // Obtain the cookie provider once for both the request and response.
+    let cookie_provider = HOST.get().and_then(|h| h.get_cookie_provider());
+
     // Perform the HTTP request synchronously on the calling thread.
-    let response = perform_url_open(&url, &method, &headers, body_opt, follow_redirects);
+    let response = perform_url_open(&url, &method, &headers, body_opt, follow_redirects, cookie_provider.as_deref());
     tracing::warn!("URLLoader (blocking): performed URL open for {} {}", method, url);
 
     let response = match response {
@@ -720,6 +760,9 @@ fn spawn_open_task(
     poster: MessageLoopPoster,
     abort_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
+    // Obtain the cookie provider once, before entering the async task.
+    let cookie_provider = HOST.get().and_then(|h| h.get_cookie_provider());
+
     let rt = crate::tokio_runtime();
     rt.spawn(async move {
         // ---- Step 1: Acquire concurrency permit ----
@@ -749,6 +792,7 @@ fn spawn_open_task(
             let method_c = method.clone();
             let headers_c = headers.clone();
             let body_c = body_opt;
+            let cp = cookie_provider.clone();
             // Run on blocking thread pool since perform_url_open may block.
             tokio::task::spawn_blocking(move || {
                 perform_url_open(
@@ -757,6 +801,7 @@ fn spawn_open_task(
                     &headers_c,
                     body_c.as_deref(),
                     follow_redirects,
+                    cp.as_deref(),
                 )
             })
             .await
