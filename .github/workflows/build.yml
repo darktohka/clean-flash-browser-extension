@@ -123,3 +123,215 @@ jobs:
         with:
           name: web-extension-signed-crx
           path: web-extension-signed.crx
+
+  installer-linux:
+    needs: [build]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install 7-Zip
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq p7zip-full
+
+      - name: Clone installer repository
+        run: git clone --depth 1 https://gitlab.com/cleanflash/installer.git installer-repo
+
+      - name: Download flash-player-host artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: flash-player-host-linux
+          path: native-host-artifact
+
+      - name: Download and extract Pepper Flash plugin
+        run: |
+          curl -sL -o ppapi.tar.gz "https://github.com/darktohka/clean-flash-builds/releases/download/v1.7/flash_player_patched_ppapi_linux.x86_64.tar.gz"
+          tar -xzf ppapi.tar.gz libpepflashplayer.so manifest.json
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: installer-repo/rust
+
+      - name: Create placeholder archives
+        working-directory: installer-repo/rust
+        run: |
+          touch crates/clean_flash_installer/cleanflash-linux.7z
+          touch crates/clean_flash_installer/cleanflash-macos.7z
+          touch crates/clean_flash_installer/cleanflash-win.7z
+
+      - name: Build uninstaller
+        working-directory: installer-repo/rust
+        run: cargo build --profile release-lto -p clean_flash_uninstaller
+
+      - name: Assemble archive contents
+        run: |
+          mkdir -p staging/{pp64,native-host-64,uninstaller}
+          cp libpepflashplayer.so staging/pp64/
+          cp manifest.json staging/pp64/
+          cp native-host-artifact/flash-player-host staging/native-host-64/
+          chmod +x staging/native-host-64/flash-player-host
+          cp installer-repo/rust/target/release-lto/clean_flash_uninstaller staging/uninstaller/
+          chmod +x staging/uninstaller/clean_flash_uninstaller
+
+      - name: Create cleanflash-linux.7z
+        working-directory: staging
+        run: 7z a -t7z -m0=lzma2 -mx=9 -mfb=64 -md=32m -ms=on ../cleanflash-linux.7z *
+
+      - name: Build installer
+        working-directory: installer-repo/rust
+        run: |
+          cp ../../cleanflash-linux.7z crates/clean_flash_installer/cleanflash-linux.7z
+          cargo build --profile release-lto -p clean_flash_installer
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: cleanflash-installer-linux
+          path: installer-repo/rust/target/release-lto/clean_flash_installer
+
+  installer-macos:
+    needs: [build]
+    runs-on: macos-latest
+
+    steps:
+      - name: Install 7-Zip
+        run: brew install p7zip
+
+      - name: Clone installer repository
+        run: git clone --depth 1 https://gitlab.com/cleanflash/installer.git installer-repo
+
+      - name: Download flash-player-host artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: flash-player-host-macos
+          path: native-host-artifact
+
+      - name: Download and extract Pepper Flash plugin
+        run: |
+          curl -sL -o ppapi.zip "https://github.com/darktohka/clean-flash-builds/releases/download/v1.51/ChineseFlash-PPAPI-PepperFlashPlayer.zip"
+          unzip ppapi.zip
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: installer-repo/rust
+
+      - name: Create placeholder archives
+        working-directory: installer-repo/rust
+        run: |
+          touch crates/clean_flash_installer/cleanflash-linux.7z
+          touch crates/clean_flash_installer/cleanflash-macos.7z
+          touch crates/clean_flash_installer/cleanflash-win.7z
+
+      - name: Build uninstaller
+        working-directory: installer-repo/rust
+        run: cargo build --profile release-lto --target x86_64-apple-darwin -p clean_flash_uninstaller
+
+      - name: Assemble archive contents
+        run: |
+          mkdir -p staging/{pp64,native-host-64,uninstaller}
+          cp flash.plugin/Contents/MacOS/PepperFlashPlayer staging/pp64/
+          cp manifest.json staging/pp64/
+          cp native-host-artifact/flash-player-host staging/native-host-64/
+          chmod +x staging/native-host-64/flash-player-host
+          cp installer-repo/rust/target/x86_64-apple-darwin/release-lto/clean_flash_uninstaller staging/uninstaller/
+          chmod +x staging/uninstaller/clean_flash_uninstaller
+
+      - name: Create cleanflash-macos.7z
+        working-directory: staging
+        run: 7z a -t7z -m0=lzma2 -mx=9 -mfb=64 -md=32m -ms=on ../cleanflash-macos.7z *
+
+      - name: Build installer
+        working-directory: installer-repo/rust
+        run: |
+          cp ../../cleanflash-macos.7z crates/clean_flash_installer/cleanflash-macos.7z
+          cargo build --profile release-lto --target x86_64-apple-darwin -p clean_flash_installer
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: cleanflash-installer-macos
+          path: installer-repo/rust/target/x86_64-apple-darwin/release-lto/clean_flash_installer
+
+  installer-windows:
+    needs: [build]
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: bash
+
+    strategy:
+      matrix:
+        include:
+          - variant: "64"
+            native_host_artifact: flash-player-host-windows
+            native_host_folder: native-host-64
+          - variant: "32"
+            native_host_artifact: flash-player-host-windows-32
+            native_host_folder: native-host-32
+
+    steps:
+      - name: Clone installer repository
+        run: git clone --depth 1 https://gitlab.com/cleanflash/installer.git installer-repo
+
+      - name: Download flash-player-host artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ matrix.native_host_artifact }}
+          path: native-host-artifact
+
+      - name: Download Clean Flash base archive
+        run: curl -sL -o cleanflash-base.7z "https://cloud.tohka.us/share/cleanflash-win.7z"
+
+      - name: Extract base archive
+        run: 7z x cleanflash-base.7z -ocleanflash-base
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: installer-repo/rust
+
+      - name: Create placeholder archives
+        working-directory: installer-repo/rust
+        run: |
+          touch crates/clean_flash_installer/cleanflash-linux.7z
+          touch crates/clean_flash_installer/cleanflash-macos.7z
+          touch crates/clean_flash_installer/cleanflash-win.7z
+
+      - name: Build uninstaller
+        working-directory: installer-repo/rust
+        run: cargo build --profile release-lto -p clean_flash_uninstaller
+
+      - name: Assemble archive contents
+        run: |
+          mkdir -p cleanflash-base/${{ matrix.native_host_folder }}
+          mkdir -p cleanflash-base/uninstaller
+          cp native-host-artifact/flash-player-host.exe cleanflash-base/${{ matrix.native_host_folder }}/
+          cp installer-repo/rust/target/release-lto/clean_flash_uninstaller.exe cleanflash-base/uninstaller/
+
+      - name: Create cleanflash-win.7z
+        working-directory: cleanflash-base
+        run: 7z a -t7z -m0=lzma2 -mx=9 -mfb=64 -md=32m -ms=on ../cleanflash-win.7z *
+
+      - name: Build installer
+        working-directory: installer-repo/rust
+        run: |
+          cp ../../cleanflash-win.7z crates/clean_flash_installer/cleanflash-win.7z
+          cargo build --profile release-lto -p clean_flash_installer
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: cleanflash-installer-windows-${{ matrix.variant }}
+          path: installer-repo/rust/target/release-lto/clean_flash_installer.exe
