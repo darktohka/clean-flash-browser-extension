@@ -111,7 +111,7 @@ jobs:
 
       - name: Build signed CRX
         if: github.ref == 'refs/heads/master'
-        run: crx pack ext-stage --key /tmp/extension.pem -o web-extension-signed.crx
+        run: crx pack ext-stage -p /tmp/extension.pem -o web-extension-signed.crx
 
       - name: Clean up signing key
         if: always()
