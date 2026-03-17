@@ -15,6 +15,42 @@ const FLASH_DEBUG = false;
 const LOG_HOST_EVENTS = false;
 const IS_FIREFOX = typeof navigator !== "undefined" && /\bFirefox\//.test(navigator.userAgent);
 
+// Firefox content-script rendering pipeline.
+// putImageData, createImageBitmap(ImageData), and cloneInto(ImageData) all
+// fail in Firefox content scripts due to Xray wrapper security checks on
+// typed arrays crossing compartment boundaries.  We encode the RGBA pixels
+// as a minimal BMP blob and use createImageBitmap(Blob) + drawImage, which
+// bypasses typed-array compartment checks entirely because the Blob
+// constructor copies the data into an opaque internal store.
+let _ffRenderChain = Promise.resolve();
+const _FF_BMP_HDR_SIZE = 14 + 108; // BITMAPFILEHEADER + BITMAPV4HEADER
+
+function _buildBmpBlob(rgba, w, h) {
+  const pxBytes = w * h * 4;
+  const hdr = new ArrayBuffer(_FF_BMP_HDR_SIZE);
+  const u8  = new Uint8Array(hdr);
+  const dv  = new DataView(hdr);
+  u8[0] = 0x42; u8[1] = 0x4D;                      // 'BM'
+  dv.setUint32( 2, _FF_BMP_HDR_SIZE + pxBytes, true); // file size
+  dv.setUint32(10, _FF_BMP_HDR_SIZE, true);           // pixel data offset
+  dv.setUint32(14, 108, true);                        // V4 header size
+  dv.setInt32( 18,  w,  true);                        // width
+  dv.setInt32( 22, -h,  true);                        // height (neg = top-down)
+  dv.setUint16(26,  1,  true);                        // planes
+  dv.setUint16(28, 32,  true);                        // 32 bpp
+  dv.setUint32(30,  3,  true);                        // BI_BITFIELDS
+  dv.setUint32(34, pxBytes, true);                    // image data size
+  // RGBA channel masks — matches native RGBA byte order, no swap needed.
+  dv.setUint32(54, 0x000000FF, true);                 // R mask
+  dv.setUint32(58, 0x0000FF00, true);                 // G mask
+  dv.setUint32(62, 0x00FF0000, true);                 // B mask
+  dv.setUint32(66, 0xFF000000, true);                 // A mask
+  dv.setUint32(70, 0x73524742, true);                 // bV4CSType = 'sRGB'
+  // Blob() copies the typed-array data, so it's safe even though rgba
+  // points into WASM memory that may be overwritten by the next frame.
+  return new Blob([u8, rgba], { type: "image/bmp" });
+}
+
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
@@ -2109,13 +2145,17 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
 
       const rt0 = FLASH_DEBUG ? performance.now() : 0;
       if (IS_FIREFOX) {
-        // Firefox content scripts run in a separate compartment from the page.
-        // All canvas/ImageData web APIs trigger Xray wrapper security checks
-        // that reject typed arrays from the content-script compartment.
-        // cloneInto() is a Firefox content-script API that structured-clones
-        // an object into the page compartment, making putImageData accept it.
-        const imgData = new ImageData(new Uint8ClampedArray(rgbaView), width, height);
-        ctx.putImageData(cloneInto(imgData, window), x, y);
+        // Encode as BMP blob and blit via createImageBitmap + drawImage,
+        // completely avoiding typed-array compartment checks.
+        const blob = _buildBmpBlob(rgbaView, width, height);
+        const localCtx = ctx;
+        const dx = x, dy = y;
+        _ffRenderChain = _ffRenderChain.then(() =>
+          createImageBitmap(blob)
+        ).then(bitmap => {
+          localCtx.drawImage(bitmap, dx, dy);
+          bitmap.close();
+        });
       } else {
         const imageData = new ImageData(rgbaView, width, height);
         ctx.putImageData(imageData, x, y);
