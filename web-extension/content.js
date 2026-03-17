@@ -15,13 +15,6 @@ const FLASH_DEBUG = false;
 const LOG_HOST_EVENTS = false;
 const IS_FIREFOX = typeof navigator !== "undefined" && /\bFirefox\//.test(navigator.userAgent);
 
-// Firefox content-script render chain.  putImageData fails in Firefox
-// content scripts due to Xray wrapper security checks on ALL canvas contexts
-// (including OffscreenCanvas).  We avoid putImageData entirely by using
-// createImageBitmap (async) + drawImage.  The promise chain ensures frames
-// are painted in the order they arrive.
-let _ffRenderChain = Promise.resolve();
-
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
@@ -2116,20 +2109,13 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
 
       const rt0 = FLASH_DEBUG ? performance.now() : 0;
       if (IS_FIREFOX) {
-        // Firefox content scripts: putImageData fails on ALL canvas contexts
-        // (including OffscreenCanvas) due to Xray wrapper security checks.
-        // Avoid putImageData entirely by creating an ImageBitmap and blitting
-        // with drawImage, which does not trigger the compartment check.
-        const pixelsCopy = new Uint8ClampedArray(rgbaView);
-        const imgData = new ImageData(pixelsCopy, width, height);
-        const localCtx = ctx;
-        const dx = x, dy = y;
-        _ffRenderChain = _ffRenderChain.then(() =>
-          createImageBitmap(imgData)
-        ).then(bitmap => {
-          localCtx.drawImage(bitmap, dx, dy);
-          bitmap.close();
-        });
+        // Firefox content scripts run in a separate compartment from the page.
+        // All canvas/ImageData web APIs trigger Xray wrapper security checks
+        // that reject typed arrays from the content-script compartment.
+        // cloneInto() is a Firefox content-script API that structured-clones
+        // an object into the page compartment, making putImageData accept it.
+        const imgData = new ImageData(new Uint8ClampedArray(rgbaView), width, height);
+        ctx.putImageData(cloneInto(imgData, window), x, y);
       } else {
         const imageData = new ImageData(rgbaView, width, height);
         ctx.putImageData(imageData, x, y);
