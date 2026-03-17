@@ -502,7 +502,6 @@ function replaceFlashElement(elem) {
   canvas.width = origWidth;
   canvas.height = origHeight;
   canvas.style.display = "inline-block";
-  canvas.style.backgroundColor = "#000";
   canvas.tabIndex = 0; // Make focusable for keyboard events.
 
   const ctx = canvas.getContext("2d");
@@ -608,7 +607,7 @@ function collectViewInfo(canvas) {
   }
   return {
     deviceScale: window.devicePixelRatio || 1.0,
-    cssScale: 1.0 / (window.devicePixelRatio || 1.0),
+    cssScale: 1.0,
     scrollX: Math.round(window.scrollX || 0),
     scrollY: Math.round(window.scrollY || 0),
     isFullscreen,
