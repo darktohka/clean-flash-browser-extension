@@ -15,13 +15,12 @@ const FLASH_DEBUG = false;
 const LOG_HOST_EVENTS = false;
 const IS_FIREFOX = typeof navigator !== "undefined" && /\bFirefox\//.test(navigator.userAgent);
 
-// Firefox content-script OffscreenCanvas cache for frame rendering.
-// putImageData fails in Firefox content scripts because the canvas context
-// lives in the page compartment while ImageData lives in the content-script
-// compartment.  An OffscreenCanvas stays entirely in the content-script
-// compartment, sidestepping the cross-compartment security check.
-let _ffOffscreen = null;
-let _ffOffscreenCtx = null;
+// Firefox content-script render chain.  putImageData fails in Firefox
+// content scripts due to Xray wrapper security checks on ALL canvas contexts
+// (including OffscreenCanvas).  We avoid putImageData entirely by using
+// createImageBitmap (async) + drawImage.  The promise chain ensures frames
+// are painted in the order they arrive.
+let _ffRenderChain = Promise.resolve();
 
 // ---------------------------------------------------------------------------
 // Utilities
@@ -2117,17 +2116,20 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
 
       const rt0 = FLASH_DEBUG ? performance.now() : 0;
       if (IS_FIREFOX) {
-        // Firefox content scripts: putImageData fails with "security check
-        // failed" because the canvas context lives in the page compartment
-        // while ImageData is in the content-script compartment.  Render into
-        // an OffscreenCanvas (same compartment) then blit with drawImage.
-        if (!_ffOffscreen || _ffOffscreen.width !== width || _ffOffscreen.height !== height) {
-          _ffOffscreen = new OffscreenCanvas(width, height);
-          _ffOffscreenCtx = _ffOffscreen.getContext("2d");
-        }
-        const imageData = new ImageData(new Uint8ClampedArray(rgbaView), width, height);
-        _ffOffscreenCtx.putImageData(imageData, 0, 0);
-        ctx.drawImage(_ffOffscreen, 0, 0, width, height, x, y, width, height);
+        // Firefox content scripts: putImageData fails on ALL canvas contexts
+        // (including OffscreenCanvas) due to Xray wrapper security checks.
+        // Avoid putImageData entirely by creating an ImageBitmap and blitting
+        // with drawImage, which does not trigger the compartment check.
+        const pixelsCopy = new Uint8ClampedArray(rgbaView);
+        const imgData = new ImageData(pixelsCopy, width, height);
+        const localCtx = ctx;
+        const dx = x, dy = y;
+        _ffRenderChain = _ffRenderChain.then(() =>
+          createImageBitmap(imgData)
+        ).then(bitmap => {
+          localCtx.drawImage(bitmap, dx, dy);
+          bitmap.close();
+        });
       } else {
         const imageData = new ImageData(rgbaView, width, height);
         ctx.putImageData(imageData, x, y);
