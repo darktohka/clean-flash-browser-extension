@@ -1032,9 +1032,9 @@ function showNotInstalledOverlay(instanceId) {
   });
   overlay.appendChild(pattern);
 
-  // Checkmark icon.
+  // Warning icon.
   const icon = document.createElement("div");
-  icon.textContent = "\u2705"; // ✅
+  icon.textContent = "\u26A0"; // ⚠️
   Object.assign(icon.style, {
     fontSize: "48px",
     marginBottom: "12px",
@@ -1045,7 +1045,7 @@ function showNotInstalledOverlay(instanceId) {
 
   // Title.
   const title = document.createElement("div");
-  title.textContent = "Extension installed - Flash Player not found";
+  title.textContent = "Clean Flash Player not found";
   Object.assign(title.style, {
     fontSize: "20px",
     fontWeight: "700",
@@ -1059,8 +1059,8 @@ function showNotInstalledOverlay(instanceId) {
 
   // Explanation.
   const desc = document.createElement("div");
-  desc.textContent =
-    "The Clean Flash Player browser extension is working, " +
+  desc.innerHTML =
+    "The Clean Flash Player browser extension is working,<br />" +
     "but Flash Player is not yet installed on your system.";
   Object.assign(desc.style, {
     fontSize: "13px",
