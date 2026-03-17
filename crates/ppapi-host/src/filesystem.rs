@@ -169,17 +169,7 @@ fn file_to_handle(file: std::fs::File) -> Result<PP_FileHandle, i32> {
 #[cfg(windows)]
 fn file_to_handle(file: std::fs::File) -> Result<PP_FileHandle, i32> {
     use std::os::windows::io::IntoRawHandle;
-    let handle = file.into_raw_handle();
-    let fd = unsafe { _open_osfhandle(handle as isize, 0) };
-    if fd == -1 {
-        // Couldn't convert - close the OS handle to avoid leak.
-        unsafe {
-            CloseHandle(handle as isize);
-        }
-        Err(PP_ERROR_FAILED)
-    } else {
-        Ok(fd)
-    }
+    Ok(file.into_raw_handle() as PP_FileHandle)
 }
 
 /// Close a raw `PP_FileHandle`.
@@ -190,7 +180,7 @@ fn close_raw_handle(handle: PP_FileHandle) {
 
 #[cfg(windows)]
 fn close_raw_handle(handle: PP_FileHandle) {
-    unsafe { _close(handle) };
+    unsafe { CloseHandle(handle) };
 }
 
 /// Stat a file by its `PP_FileHandle`.
@@ -209,17 +199,13 @@ fn fstat_raw(handle: PP_FileHandle) -> Result<std::fs::Metadata, i32> {
 #[cfg(windows)]
 fn fstat_raw(handle: PP_FileHandle) -> Result<std::fs::Metadata, i32> {
     use std::os::windows::io::FromRawHandle;
-    let osfhandle = unsafe { _get_osfhandle(handle) };
-    if osfhandle == -1 {
-        return Err(PP_ERROR_FAILED);
-    }
     // Duplicate so we don't take ownership.
     let mut dup_handle: isize = 0;
     let current_process = unsafe { GetCurrentProcess() };
     let ok = unsafe {
         DuplicateHandle(
             current_process,
-            osfhandle,
+            handle,
             current_process,
             &mut dup_handle,
             0,
@@ -234,13 +220,7 @@ fn fstat_raw(handle: PP_FileHandle) -> Result<std::fs::Metadata, i32> {
     file.metadata().map_err(|e| OsFileSystem::io_err_to_pp(&e))
 }
 
-// Windows CRT / kernel32 FFI (only compiled on Windows).
-#[cfg(windows)]
-extern "C" {
-    fn _open_osfhandle(osfhandle: isize, flags: i32) -> i32;
-    fn _close(fd: i32) -> i32;
-    fn _get_osfhandle(fd: i32) -> isize;
-}
+// Windows kernel32 FFI (only compiled on Windows).
 
 #[cfg(windows)]
 extern "system" {
@@ -368,7 +348,7 @@ impl FlashFileSystem for OsFileSystem {
 // ===========================================================================
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicIsize, Ordering};
 use parking_lot::Mutex;
 
 /// In-memory filesystem.  All data lives in process memory and is lost
@@ -386,8 +366,8 @@ enum MemFsNode {
 struct MemFsInner {
     nodes: HashMap<String, MemFsNode>,
     /// Maps synthetic fd → path.
-    open_handles: HashMap<i32, String>,
-    next_fd: AtomicI32,
+    open_handles: HashMap<PP_FileHandle, String>,
+    next_fd: AtomicIsize,
 }
 
 impl std::fmt::Debug for MemFsInner {
@@ -405,7 +385,7 @@ impl InMemoryFileSystem {
             inner: Mutex::new(MemFsInner {
                 nodes: HashMap::new(),
                 open_handles: HashMap::new(),
-                next_fd: AtomicI32::new(1000), // Start high to avoid collisions.
+                next_fd: AtomicIsize::new(1000), // Start high to avoid collisions.
             }),
         }
     }

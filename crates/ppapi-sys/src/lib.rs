@@ -3947,6 +3947,11 @@ unsafe impl Sync for PPB_FileChooserTrusted_0_5 {}
 
 pub const PPB_FLASH_FILE_FILEREF_INTERFACE_2: &str = "PPB_Flash_File_FileRef;2\0";
 
+/// On Windows, PP_FileHandle is a raw OS `HANDLE` (pointer-sized).
+/// On Unix, PP_FileHandle is a file descriptor (`int`).
+#[cfg(windows)]
+pub type PP_FileHandle = isize;
+#[cfg(not(windows))]
 pub type PP_FileHandle = i32;
 
 pub const PP_FILEOPENFLAG_READ: i32 = 1 << 0;

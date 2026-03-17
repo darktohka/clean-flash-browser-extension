@@ -31,7 +31,7 @@ pub enum FileRefType {
 pub struct FileRefResource {
     pub file_type: FileRefType,
     pub path: Option<String>,
-    pub fd: Option<i32>,
+    pub fd: Option<PP_FileHandle>,
 }
 
 impl Resource for FileRefResource {
