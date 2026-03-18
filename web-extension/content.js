@@ -710,6 +710,17 @@ class FlashInstance {
     }
     elem.setAttribute("data-flash-player", this.instanceId);
 
+    // When the embed lives inside a ruffle-player custom element (our
+    // RufflePlayer override), stretch the container and canvas to fill
+    // the parent element completely.
+    const parentTag = (container.parentElement && container.parentElement.tagName || "").toLowerCase();
+    if (parentTag.startsWith("ruffle-player")) {
+      container.style.width = "100%";
+      container.style.height = "100%";
+      canvas.style.width = "100%";
+      canvas.style.height = "100%";
+    }
+
     // ---- Connect and start ----
     this.start();
 

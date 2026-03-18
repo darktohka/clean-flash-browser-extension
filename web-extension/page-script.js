@@ -406,6 +406,587 @@
   installInlineModernSwfobject();
   ppSpoofFlash();
 
+  // ---------------------------------------------------------------------------
+  // Ruffle override
+  //
+  // Prevent the Ruffle browser extension (or page-bundled Ruffle) from
+  // replacing Flash content with its ActionScript emulator.  We provide a
+  // fully functional RufflePlayer PublicAPI whose createPlayer() returns
+  // a custom element that, on load(), creates an <embed type="application/
+  // x-shockwave-flash"> so that our native Flash Player (content.js)
+  // detects it via MutationObserver and takes over rendering.
+  //
+  // The property is frozen with Object.defineProperty so Ruffle cannot
+  // overwrite it.
+  // ---------------------------------------------------------------------------
+
+  // ReadyState enum mirroring Ruffle's public API.
+  var ReadyState = { HaveNothing: 0, Loading: 1, Loaded: 2 };
+
+  // ---- FlashPlayerElement (custom element) --------------------------------
+  // Implements the PlayerElement interface that createPlayer() must return.
+  // Pages call player.load({ url }) or player.load("movie.swf"), and we
+  // translate that into a real <embed> that content.js picks up.
+
+  var _fpElementName = null; // resolved lazily on first createPlayer call
+
+  class FlashPlayerElement extends HTMLElement {
+    constructor() {
+      super();
+      this._config = {};
+      this._loadedConfig = null;
+      this._readyState = ReadyState.HaveNothing;
+      this._metadata = null;
+      this._playing = false;
+      this._volume = 1.0;
+      this._traceObserver = null;
+      this._onFSCommand = null;
+      this._fsCommandHandlers = [];
+      this._embed = null; // the <embed> we create for native Flash
+    }
+
+    // ---- Custom element lifecycle ----
+
+    static get observedAttributes() { return ["width", "height", "align", "src"]; }
+
+    connectedCallback() {
+      this._updateHostStyles();
+      // If src was set before connection, trigger load.
+      var src = this.getAttribute("src");
+      if (src && !this._embed) {
+        this.load(src);
+      }
+    }
+
+    attributeChangedCallback(name, oldValue, newValue) {
+      if (name === "src" && this.isConnected && newValue && newValue !== oldValue) {
+        this.load(newValue);
+      } else {
+        this._updateHostStyles();
+      }
+    }
+
+    disconnectedCallback() {
+      if (this._embed && this._embed.parentNode) {
+        this._embed.parentNode.removeChild(this._embed);
+      }
+      this._embed = null;
+      this._readyState = ReadyState.HaveNothing;
+      this._playing = false;
+    }
+
+    _updateHostStyles() {
+      var w = this.getAttribute("width");
+      var h = this.getAttribute("height");
+      if (w) this.style.width = /^\d+$/.test(w) ? w + "px" : w;
+      if (h) this.style.height = /^\d+$/.test(h) ? h + "px" : h;
+      this.style.display = "inline-block";
+    }
+
+    // ---- Versioned API access (Ruffle v1 interface) ----
+
+    ruffle(version) {
+      // Return a v1-compatible API object backed by this element.
+      return {
+        addFSCommandHandler: function (handler) {
+          this._fsCommandHandlers.push(handler);
+        }.bind(this),
+        config: this._config,
+        get loadedConfig() { return this._loadedConfig; },
+        get readyState() { return this._readyState; },
+        get metadata() { return this._metadata; },
+        reload: this.reload.bind(this),
+        load: this.load.bind(this),
+        get volume() { return this._volume; },
+        set volume(v) { this._volume = v; },
+        get fullscreenEnabled() { return !!document.fullscreenEnabled; },
+        get isFullscreen() { return !!document.fullscreenElement; },
+        requestFullscreen: function () { this.enterFullscreen(); }.bind(this),
+        exitFullscreen: function () { this.exitFullscreen(); }.bind(this),
+        get suspended() { return !this._playing; },
+        suspend: this.pause.bind(this),
+        resume: this.play.bind(this),
+        set traceObserver(o) { this._traceObserver = o; },
+        downloadSwf: this.downloadSwf.bind(this),
+        displayMessage: this.displayMessage.bind(this),
+        callExternalInterface: function (name) {
+          var args = Array.prototype.slice.call(arguments, 1);
+          if (this._embed && typeof this._embed.CallFunction === "function") {
+            var argsXml = "";
+            for (var i = 0; i < args.length; i++) {
+              var a = args[i];
+              if (typeof a === "string") argsXml += "<string>" + a + "</string>";
+              else if (typeof a === "number") argsXml += "<number>" + a + "</number>";
+              else if (typeof a === "boolean") argsXml += (a ? "<true/>" : "<false/>");
+              else argsXml += "<undefined/>";
+            }
+            var xml = '<invoke name="' + name + '" returntype="javascript"><arguments>' + argsXml + '</arguments></invoke>';
+            return this._embed.CallFunction(xml);
+          }
+        }.bind(this),
+      };
+    }
+
+    // ---- Loading ----
+
+    load(options, _isPolyfill) {
+      var url, loadOpts;
+      if (typeof options === "string") {
+        url = options;
+        loadOpts = { url: url };
+      } else if (options && typeof options === "object") {
+        if (options.url) {
+          url = options.url;
+          loadOpts = options;
+        } else if (options.data) {
+          // DataLoadOptions: we need to convert raw data into a blob URL
+          // so we can pass it to an <embed src="...">.
+          var data = options.data;
+          var blob;
+          if (data instanceof ArrayBuffer) {
+            blob = new Blob([data], { type: "application/x-shockwave-flash" });
+          } else if (ArrayBuffer.isView(data)) {
+            blob = new Blob([data], { type: "application/x-shockwave-flash" });
+          } else {
+            // ArrayLike<number>
+            blob = new Blob([new Uint8Array(data)], { type: "application/x-shockwave-flash" });
+          }
+          url = URL.createObjectURL(blob);
+          loadOpts = Object.assign({}, options, { url: url });
+        } else {
+          return Promise.reject(new Error("load options must have url or data"));
+        }
+      } else {
+        return Promise.reject(new Error("invalid load options"));
+      }
+
+      // Merge configs: window.RufflePlayer.config < this.config < options
+      var globalConfig = (window.RufflePlayer && window.RufflePlayer.config) || {};
+      this._loadedConfig = Object.assign({}, globalConfig, this._config, loadOpts);
+
+      this._readyState = ReadyState.Loading;
+
+      // Resolve URL against document base.
+      try { url = new URL(url, document.baseURI).href; } catch (_) {}
+
+      // Remove any previous embed.
+      if (this._embed && this._embed.parentNode) {
+        this._embed.parentNode.removeChild(this._embed);
+      }
+
+      // Build a real <embed> for content.js to intercept.
+      var embed = document.createElement("embed");
+      embed.setAttribute("type", "application/x-shockwave-flash");
+      embed.setAttribute("src", url);
+
+      // Forward known Flash params from the merged config.
+      var cfg = this._loadedConfig;
+      if (cfg.base) embed.setAttribute("base", cfg.base);
+      if (cfg.backgroundColor) embed.setAttribute("bgcolor", cfg.backgroundColor);
+      if (cfg.quality) embed.setAttribute("quality", cfg.quality);
+      if (cfg.scale) embed.setAttribute("scale", cfg.scale);
+      if (cfg.salign) embed.setAttribute("salign", cfg.salign);
+      if (cfg.wmode) embed.setAttribute("wmode", cfg.wmode);
+      if (cfg.allowNetworking) embed.setAttribute("allownetworking", cfg.allowNetworking);
+      if (cfg.allowScriptAccess) embed.setAttribute("allowscriptaccess", cfg.allowScriptAccess);
+      if (cfg.allowFullscreen !== undefined) embed.setAttribute("allowfullscreen", String(cfg.allowFullscreen));
+      if (cfg.menu !== undefined) embed.setAttribute("menu", String(cfg.menu));
+      if (cfg.fullScreenAspectRatio) embed.setAttribute("fullscreenaspectratio", cfg.fullScreenAspectRatio);
+
+      // Flash parameters (flashvars).
+      if (cfg.parameters) {
+        var fv;
+        if (typeof cfg.parameters === "string") {
+          fv = cfg.parameters;
+        } else if (typeof cfg.parameters === "object") {
+          var parts = [];
+          for (var k in cfg.parameters) {
+            if (Object.prototype.hasOwnProperty.call(cfg.parameters, k)) {
+              parts.push(encodeURIComponent(k) + "=" + encodeURIComponent(cfg.parameters[k]));
+            }
+          }
+          fv = parts.join("&");
+        }
+        if (fv) embed.setAttribute("flashvars", fv);
+      }
+
+      // Inherit display dimensions from this element.
+      var w = this.getAttribute("width") || this.style.width;
+      var h = this.getAttribute("height") || this.style.height;
+      if (w) embed.setAttribute("width", w.replace(/px$/, ""));
+      if (h) embed.setAttribute("height", h.replace(/px$/, ""));
+
+      this._embed = embed;
+      this._playing = true;
+      this._readyState = ReadyState.Loaded;
+
+      // Insert into this element so it's in the DOM and content.js picks it up.
+      this.appendChild(embed);
+
+      return Promise.resolve();
+    }
+
+    reload() {
+      if (this._loadedConfig) {
+        return this.load(this._loadedConfig);
+      }
+      return Promise.resolve();
+    }
+
+    get loadedConfig() { return this._loadedConfig; }
+
+    get config() { return this._config; }
+    set config(v) { this._config = v || {}; }
+
+    // ---- Playback ----
+
+    play() { this._playing = true; }
+    pause() { this._playing = false; }
+    get isPlaying() { return this._playing; }
+
+    // ---- Audio ----
+
+    get volume() { return this._volume; }
+    set volume(v) { this._volume = v; }
+
+    // ---- Fullscreen ----
+
+    get fullscreenEnabled() { return !!document.fullscreenEnabled; }
+    get isFullscreen() { return !!document.fullscreenElement; }
+
+    setFullscreen(isFull) {
+      if (isFull) this.enterFullscreen();
+      else this.exitFullscreen();
+    }
+
+    enterFullscreen() {
+      var target = this._embed || this;
+      // Try the canvas that content.js created.
+      var canvas = this.querySelector("canvas") || (this._embed && this._embed.previousElementSibling);
+      if (canvas && canvas.tagName === "CANVAS") target = canvas.parentElement || canvas;
+      try {
+        if (target.requestFullscreen) target.requestFullscreen();
+        else if (target.webkitRequestFullscreen) target.webkitRequestFullscreen();
+      } catch (_) {}
+    }
+
+    exitFullscreen() {
+      try {
+        if (document.exitFullscreen) document.exitFullscreen();
+        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+      } catch (_) {}
+    }
+
+    // ---- Metadata ----
+
+    get readyState() { return this._readyState; }
+    get metadata() { return this._metadata; }
+
+    // ---- Misc ----
+
+    set traceObserver(o) { this._traceObserver = o; }
+
+    downloadSwf() {
+      if (this._loadedConfig && this._loadedConfig.url) {
+        var a = document.createElement("a");
+        a.href = this._loadedConfig.url;
+        a.download = this._loadedConfig.url.split("/").pop() || "movie.swf";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }
+      return Promise.resolve();
+    }
+
+    displayMessage(_msg) {
+      // No-op - native Flash Player shows its own error UI.
+    }
+
+    PercentLoaded() {
+      return this._readyState === ReadyState.Loaded ? 100 : 0;
+    }
+
+    // ---- FSCommand ----
+
+    get onFSCommand() { return this._onFSCommand; }
+    set onFSCommand(v) { this._onFSCommand = v; }
+  }
+
+  // ---- Polyfill: replace <object>/<embed> with FlashPlayerElement ----
+  // This mirrors Ruffle's polyfillFlashInstances but creates our element
+  // which in turn emits an <embed> for content.js.
+
+  function isSwfUrl(url) {
+    if (!url) return false;
+    try { url = new URL(url, document.baseURI).pathname; } catch (_) { /* keep as-is */ }
+    return /\.swf(\?.*)?$/i.test(url);
+  }
+
+  function isFlashMime(type) {
+    return type === "application/x-shockwave-flash" || type === "application/futuresplash";
+  }
+
+  var FLASH_CLASSID = "clsid:d27cdb6e-ae6d-11cf-96b8-444553540000";
+
+  function isInterdictableObject(elem) {
+    if (elem.__rufflePolyfilled) return false;
+
+    var data = elem.getAttribute("data") || "";
+    var type = (elem.getAttribute("type") || "").toLowerCase();
+    var classid = (elem.getAttribute("classid") || "").toLowerCase();
+
+    // Get movie param.
+    var movieParam = "";
+    for (var i = 0; i < elem.children.length; i++) {
+      var c = elem.children[i];
+      if (c.nodeName === "PARAM" && c.getAttribute("name") &&
+          c.getAttribute("name").toLowerCase() === "movie") {
+        movieParam = c.getAttribute("value") || "";
+        break;
+      }
+    }
+
+    var src = data || movieParam;
+    if (!src && !classid) return false;
+
+    // Skip if it has a ActiveX classid that isn't Flash.
+    if (classid && classid !== FLASH_CLASSID) return false;
+
+    // Accept by classid, MIME type, or .swf URL.
+    if (classid === FLASH_CLASSID) return true;
+    if (isFlashMime(type)) return true;
+    if (isSwfUrl(src)) return true;
+
+    return false;
+  }
+
+  function isInterdictableEmbed(elem) {
+    if (elem.__rufflePolyfilled) return false;
+    var src = elem.getAttribute("src") || "";
+    var type = (elem.getAttribute("type") || "").toLowerCase();
+    if (!src) return false;
+    if (isFlashMime(type)) return true;
+    if (isSwfUrl(src)) return true;
+    return false;
+  }
+
+  function polyfillFlashInstances() {
+    var objects = document.getElementsByTagName("object");
+    var embeds = document.getElementsByTagName("embed");
+
+    // Replace <object> first (often wraps <embed>).
+    var objectArr = Array.from(objects);
+    for (var i = 0; i < objectArr.length; i++) {
+      var obj = objectArr[i];
+      if (isInterdictableObject(obj)) {
+        var player = createFlashPlayer();
+        copyElementAttrs(obj, player);
+        // Extract params as flashvars / config.
+        var params = {};
+        for (var j = 0; j < obj.children.length; j++) {
+          var p = obj.children[j];
+          if (p.nodeName === "PARAM" && p.getAttribute("name")) {
+            params[p.getAttribute("name").toLowerCase()] = p.getAttribute("value") || "";
+          }
+        }
+        var swfUrl = obj.getAttribute("data") || params.movie || params.src || "";
+        if (params.flashvars) player.setAttribute("flashvars", params.flashvars);
+        if (params.bgcolor) player.setAttribute("bgcolor", params.bgcolor);
+        if (params.base) player.setAttribute("base", params.base);
+        if (params.quality) player.setAttribute("quality", params.quality);
+        if (params.wmode) player.setAttribute("wmode", params.wmode);
+        if (params.scale) player.setAttribute("scale", params.scale);
+        if (params.salign) player.setAttribute("salign", params.salign);
+        if (params.allowscriptaccess) player.setAttribute("allowscriptaccess", params.allowscriptaccess);
+        if (params.allowfullscreen) player.setAttribute("allowfullscreen", params.allowfullscreen);
+        if (params.allownetworking) player.setAttribute("allownetworking", params.allownetworking);
+        obj.__rufflePolyfilled = true;
+        obj.replaceWith(player);
+        if (swfUrl) player.load(swfUrl);
+      }
+    }
+
+    var embedArr = Array.from(embeds);
+    for (var i = 0; i < embedArr.length; i++) {
+      var emb = embedArr[i];
+      if (isInterdictableEmbed(emb)) {
+        var player = createFlashPlayer();
+        copyElementAttrs(emb, player);
+        var swfUrl = emb.getAttribute("src") || "";
+        emb.__rufflePolyfilled = true;
+        emb.replaceWith(player);
+        if (swfUrl) player.load(swfUrl);
+      }
+    }
+  }
+
+  function copyElementAttrs(src, dst) {
+    for (var i = 0; i < src.attributes.length; i++) {
+      var attr = src.attributes[i];
+      var name = attr.name.toLowerCase();
+      // Skip classid, data (we use src), and type.
+      if (name === "classid" || name === "data" || name === "type") continue;
+      try { dst.setAttribute(attr.name, attr.value); } catch (_) {}
+    }
+  }
+
+  function createFlashPlayer() {
+    return document.createElement(_fpElementName);
+  }
+
+  // ---- Register custom element ----
+
+  function registerFlashPlayerElement() {
+    var baseName = "ruffle-player";
+    // Avoid conflicts with the real Ruffle extension's registration.
+    for (var i = 0; i < 1000; i++) {
+      var candidate = i === 0 ? baseName : baseName + "-" + i;
+      try {
+        if (!customElements.get(candidate)) {
+          customElements.define(candidate, FlashPlayerElement);
+          return candidate;
+        }
+      } catch (_) {}
+    }
+    // Last resort: unique name.
+    var unique = "ruffle-player-fp-" + Math.random().toString(36).slice(2, 8);
+    try { customElements.define(unique, FlashPlayerElement); } catch (_) {}
+    return unique;
+  }
+
+  _fpElementName = registerFlashPlayerElement();
+
+  // ---- SourceAPI ----
+
+  var FAKE_VERSION = "99.0.0";
+
+  var fakeSource = {
+    version: FAKE_VERSION,
+
+    polyfill: function () {
+      polyfillFlashInstances();
+      // Watch for dynamically added <object>/<embed>.
+      try {
+        var polyfillObserver = new MutationObserver(function (mutations) {
+          for (var i = 0; i < mutations.length; i++) {
+            var added = mutations[i].addedNodes;
+            for (var j = 0; j < added.length; j++) {
+              var node = added[j];
+              if (node.nodeType !== 1) continue;
+              if (node.tagName === "OBJECT" && isInterdictableObject(node)) {
+                var p = createFlashPlayer();
+                copyElementAttrs(node, p);
+                var params = {};
+                for (var k = 0; k < node.children.length; k++) {
+                  var c = node.children[k];
+                  if (c.nodeName === "PARAM" && c.getAttribute("name")) {
+                    params[c.getAttribute("name").toLowerCase()] = c.getAttribute("value") || "";
+                  }
+                }
+                var url = node.getAttribute("data") || params.movie || "";
+                node.__rufflePolyfilled = true;
+                node.replaceWith(p);
+                if (url) p.load(url);
+              } else if (node.tagName === "EMBED" && isInterdictableEmbed(node)) {
+                var p = createFlashPlayer();
+                copyElementAttrs(node, p);
+                var url = node.getAttribute("src") || "";
+                node.__rufflePolyfilled = true;
+                node.replaceWith(p);
+                if (url) p.load(url);
+              }
+              // Also scan children (e.g. a <div> containing <object>).
+              if (node.querySelectorAll) {
+                var innerObjs = node.querySelectorAll("object");
+                for (var m = 0; m < innerObjs.length; m++) {
+                  if (isInterdictableObject(innerObjs[m])) {
+                    var ip = createFlashPlayer();
+                    copyElementAttrs(innerObjs[m], ip);
+                    innerObjs[m].__rufflePolyfilled = true;
+                    var iUrl = innerObjs[m].getAttribute("data") || "";
+                    innerObjs[m].replaceWith(ip);
+                    if (iUrl) ip.load(iUrl);
+                  }
+                }
+                var innerEmbs = node.querySelectorAll("embed");
+                for (var m = 0; m < innerEmbs.length; m++) {
+                  if (isInterdictableEmbed(innerEmbs[m])) {
+                    var ip = createFlashPlayer();
+                    copyElementAttrs(innerEmbs[m], ip);
+                    innerEmbs[m].__rufflePolyfilled = true;
+                    var iUrl = innerEmbs[m].getAttribute("src") || "";
+                    innerEmbs[m].replaceWith(ip);
+                    if (iUrl) ip.load(iUrl);
+                  }
+                }
+              }
+            }
+          }
+        });
+        polyfillObserver.observe(document.documentElement, { subtree: true, childList: true });
+      } catch (_) {}
+    },
+
+    pluginPolyfill: function () {
+      // ppSpoofFlash() already handles navigator.plugins.
+    },
+
+    createPlayer: function () {
+      return createFlashPlayer();
+    },
+  };
+
+  // ---- PublicAPI ----
+
+  function installFakeRuffle() {
+    var prev = window.RufflePlayer;
+    var prevConfig = (prev && prev.config) ? prev.config : {};
+
+    if (prev && typeof prev.superseded === "function") {
+      try { prev.superseded(); } catch (_) {}
+    }
+
+    var fakePublicApi = {
+      config: prevConfig,
+      sources: { "flash-player": fakeSource },
+      invoked: true,
+      newestName: "flash-player",
+
+      get version() { return "0.1.0"; },
+
+      newestSourceName: function () { return "flash-player"; },
+
+      init: function () {
+        // Already invoked – no-op.
+      },
+
+      newest: function () { return fakeSource; },
+
+      satisfying: function (_req) { return fakeSource; },
+
+      localCompatible: function () { return fakeSource; },
+
+      local: function () { return fakeSource; },
+
+      superseded: function () {
+        // Refuse to be superseded – we always take priority.
+      },
+    };
+
+    try {
+      Object.defineProperty(window, "RufflePlayer", {
+        value: fakePublicApi,
+        writable: false,
+        configurable: false,
+        enumerable: true,
+      });
+    } catch (_) {
+      try { window.RufflePlayer = fakePublicApi; } catch (_2) {}
+    }
+  }
+
+  installFakeRuffle();
+
   // Unique element id - must match the one in content.js.
   const COMM_ID = "__flash_player_comm__";
 
