@@ -192,6 +192,11 @@ impl FlashPlayerApp {
                         dialogs::EguiPrintProvider::new(self.frame_handle.clone()),
                     ));
 
+                    // Set up the HTTP request provider for URL loading.
+                    host.set_http_request_provider(Box::new(
+                        ppapi_host::http_reqwest::ReqwestHttpRequestProvider::new(),
+                    ));
+
                     // Load the Flash plugin now that all providers are set
                     // up.  This activates the seccomp sandbox on the
                     // current thread.

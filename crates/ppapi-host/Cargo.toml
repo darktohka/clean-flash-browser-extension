@@ -20,8 +20,6 @@ audio-cpal = ["dep:cpal"]
 clipboard-arboard = ["dep:arboard"]
 ## Use reqwest for HTTP/HTTPS URL loading (adds native networking).
 url-reqwest = ["dep:reqwest"]
-## Stub URL loader - returns 404 for all HTTP/HTTPS requests.
-url-stub = []
 
 [dependencies]
 ppapi-sys = { workspace = true }

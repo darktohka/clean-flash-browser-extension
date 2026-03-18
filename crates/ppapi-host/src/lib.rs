@@ -15,6 +15,11 @@ pub mod audio_input_cpal;
 #[cfg(feature = "clipboard-arboard")]
 pub mod clipboard_arboard;
 
+#[cfg(feature = "url-reqwest")]
+pub mod http_reqwest;
+
+pub mod http_stub;
+
 pub mod instance;
 pub mod interface_registry;
 pub mod interfaces;
@@ -168,6 +173,10 @@ pub struct HostState {
     /// When set, the URL loader uses this to attach `Cookie` headers to
     /// outgoing requests and store `Set-Cookie` headers from responses.
     pub cookie_provider: Mutex<Option<Arc<dyn player_ui_traits::CookieProvider>>>,
+    /// HTTP request provider for URL loading.
+    /// When set, the URL loader uses this for `http://` and `https://` requests
+    /// instead of the built-in reqwest or stub implementations.
+    pub http_request_provider: Mutex<Option<Arc<dyn player_ui_traits::HttpRequestProvider>>>,
     /// Number of pending interactive operations (context menus, file dialogs)
     /// that are waiting for user input.  While > 0, the Flash nested message
     /// loop skips its safety-net timeout so the user has time to interact.
@@ -234,6 +243,7 @@ impl HostState {
                 print_provider: Mutex::new(None),
                 video_capture_provider: Mutex::new(None),
                 cookie_provider: Mutex::new(None),
+                http_request_provider: Mutex::new(None),
                 pending_interactive_ops: AtomicI32::new(0),
                 flash_command_line_args: Mutex::new(String::new()),
                 instance_object: Mutex::new(None),
@@ -376,6 +386,16 @@ impl HostState {
     /// Get a cloned `Arc` handle to the cookie provider, if set.
     pub fn get_cookie_provider(&self) -> Option<Arc<dyn player_ui_traits::CookieProvider>> {
         self.cookie_provider.lock().clone()
+    }
+
+    /// Set the HTTP request provider for URL loading.
+    pub fn set_http_request_provider(&self, provider: Box<dyn player_ui_traits::HttpRequestProvider>) {
+        *self.http_request_provider.lock() = Some(Arc::from(provider));
+    }
+
+    /// Get a cloned `Arc` handle to the HTTP request provider, if set.
+    pub fn get_http_request_provider(&self) -> Option<Arc<dyn player_ui_traits::HttpRequestProvider>> {
+        self.http_request_provider.lock().clone()
     }
 
     /// Set the command-line string returned by

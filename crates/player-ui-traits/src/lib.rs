@@ -751,3 +751,57 @@ pub trait CookieProvider: Send + Sync {
     /// contains the raw values of each `Set-Cookie` header line.
     fn set_cookies_from_response(&self, url: &str, set_cookie_headers: &[String]);
 }
+
+// ---------------------------------------------------------------------------
+// HTTP request provider
+// ---------------------------------------------------------------------------
+
+/// Response from an HTTP request performed by an [`HttpRequestProvider`].
+pub struct HttpResponse {
+    /// HTTP status code (e.g. 200, 404).
+    pub status_code: u16,
+    /// Full status line (e.g. `"HTTP/1.1 200 OK"`).
+    pub status_line: String,
+    /// Response headers as a single string, each line terminated by `\r\n`,
+    /// with a trailing `\r\n` after the last header.
+    pub headers: String,
+    /// Streaming body reader.
+    pub body: Box<dyn std::io::Read + Send>,
+    /// Content length from the `Content-Length` header, if known.
+    pub content_length: Option<i64>,
+    /// The final URL after any redirects, if different from the request URL.
+    pub final_url: Option<String>,
+}
+
+/// Provides HTTP/HTTPS request execution for the PPAPI URL loader.
+///
+/// Implementations handle the actual network I/O (reqwest, browser fetch API,
+/// or a stub that returns 404).  The URL loader calls
+/// [`HttpRequestProvider::http_request`] for any `http://` or `https://` URL;
+/// `file://` and local paths are handled internally.
+///
+/// Implementations must be thread-safe; requests may be issued from
+/// background I/O threads.
+pub trait HttpRequestProvider: Send + Sync {
+    /// Perform an HTTP request and return the response.
+    ///
+    /// * `url` — fully-qualified `http://` or `https://` URL.
+    /// * `method` — HTTP method (e.g. `"GET"`, `"POST"`).
+    /// * `headers` — request headers, one per line (`Header: value\r\n`).
+    /// * `body` — optional request body bytes.
+    /// * `follow_redirects` — whether to follow 3xx redirects automatically.
+    /// * `cookie_provider` — optional cookie jar for attaching/storing cookies.
+    ///
+    /// Returns `Ok(HttpResponse)` on success (including non-2xx status codes)
+    /// or `Err(error_code)` for transport-level failures, where the error code
+    /// is a `PP_ERROR_*` constant.
+    fn http_request(
+        &self,
+        url: &str,
+        method: &str,
+        headers: &str,
+        body: Option<&[u8]>,
+        follow_redirects: bool,
+        cookie_provider: Option<&dyn CookieProvider>,
+    ) -> Result<HttpResponse, i32>;
+}

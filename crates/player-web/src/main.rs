@@ -34,6 +34,7 @@
 //! {"type": "error", "message": "..."}
 //! ```
 
+mod http_fetch;
 mod protocol;
 mod qoi_encode;
 mod script_bridge;
@@ -225,6 +226,19 @@ fn main() {
         // stored back in the browser cookie jar.
         let cookie_bridge = SCRIPT_BRIDGE.get().expect("SCRIPT_BRIDGE not initialised").clone();
         host.set_cookie_provider(Box::new(WebCookieProvider::new(cookie_bridge)));
+
+        // Set up the HTTP request provider.  In browser-extension mode
+        // (RufflePlayer), use the fetch provider which delegates requests
+        // to the browser's fetch() API via the script bridge.  If fetch
+        // encounters a CORS error, fall back to reqwest (direct HTTP).
+        let fetch_bridge = SCRIPT_BRIDGE.get().expect("SCRIPT_BRIDGE not initialised").clone();
+        let reqwest_fallback = std::sync::Arc::new(
+            ppapi_host::http_reqwest::ReqwestHttpRequestProvider::new(),
+        );
+        host.set_http_request_provider(Box::new(
+            http_fetch::FetchHttpRequestProvider::new(fetch_bridge)
+                .with_fallback(reqwest_fallback),
+        ));
     }
 
     // Load the Flash plugin now that all providers are set up.

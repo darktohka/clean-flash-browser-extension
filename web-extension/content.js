@@ -1320,6 +1320,33 @@ class FlashInstance {
   _bindInputEvents(canvas, port) {
     const inst = this;
 
+    // Use pointer capture so that mouseup fires on the canvas even when the
+    // pointer is released outside the canvas, outside an iframe, or outside
+    // the browser window.  This matches how the real PPAPI Flash plugin
+    // receives mouse-release events.
+    canvas.addEventListener("pointerdown", (e) => {
+      canvas.setPointerCapture(e.pointerId);
+    });
+
+    // Forward mousedown events that occur outside the canvas while it is
+    // focused, so Flash games can detect "click-away" and close their own
+    // internal context menus / popups.  Use the window (not document)
+    // capturing phase so this fires before any page-level listeners.
+    window.addEventListener("mousedown", (e) => {
+      if (e.target === canvas || canvas.contains(e.target)) return;
+      if (inst.contextMenuOpen) return;
+      // Only forward if this canvas was the focused element.
+      if (document.activeElement !== canvas) return;
+      const pos = canvasPos(canvas, e, inst);
+      port.postMessage({
+        type: "mousedown",
+        x: pos.x,
+        y: pos.y,
+        button: mapButton(e),
+        modifiers: getModifiers(e),
+      });
+    }, true);
+
     canvas.addEventListener("mousedown", (e) => {
       e.preventDefault();
       if (inst.contextMenuOpen) return;
@@ -1354,12 +1381,18 @@ class FlashInstance {
       if (!_pendingMove) return;
       if (inst.contextMenuOpen) { _pendingMove = null; return; }
       const pos = canvasPos(canvas, _pendingMove, inst);
-      port.postMessage({
-        type: "mousemove",
-        x: pos.x,
-        y: pos.y,
-        modifiers: getModifiers(_pendingMove),
-      });
+      try {
+        port.postMessage({
+          type: "mousemove",
+          x: pos.x,
+          y: pos.y,
+          modifiers: getModifiers(_pendingMove),
+        });
+      } catch (_) {
+        // Extension context invalidated (e.g. extension updated/reloaded).
+        _pendingMove = null;
+        return;
+      }
       _pendingMove = null;
       if (_moveTimer) { clearTimeout(_moveTimer); _moveTimer = 0; }
     }
@@ -2429,18 +2462,24 @@ function showFlashContextMenu(items, x, y, canvas, port) {
       sendResponse(null);
     }
   }
+  // Close menu if the browser window loses focus entirely.
+  function onWindowBlur() {
+    sendResponse(null);
+  }
 
   // Defer event registration so the current right-click event doesn't
   // immediately close the menu.
   setTimeout(() => {
-    document.addEventListener("mousedown", onDocClick, true);
-    document.addEventListener("keydown", onDocKeydown, true);
+    window.addEventListener("mousedown", onDocClick, true);
+    window.addEventListener("keydown", onDocKeydown, true);
+    window.addEventListener("blur", onWindowBlur);
   }, 0);
 
   // Store cleanup reference so removeFlashContextMenu can tidy up.
   menu._flashCleanup = () => {
-    document.removeEventListener("mousedown", onDocClick, true);
-    document.removeEventListener("keydown", onDocKeydown, true);
+    window.removeEventListener("mousedown", onDocClick, true);
+    window.removeEventListener("keydown", onDocKeydown, true);
+    window.removeEventListener("blur", onWindowBlur);
   };
 }
 
@@ -3002,6 +3041,79 @@ async function handleScriptRequest(req, port) {
       console.warn("[Flash Player] setCookiesFromResponse error:", e);
     }
     sendScriptResponse(port, id, { type: "bool", v: true });
+    return;
+  }
+
+  // ---------------------------------------------------------------
+  // HTTP Fetch: perform HTTP requests via the browser's fetch() API,
+  // bypassing CORS restrictions that would block the native host.
+  // ---------------------------------------------------------------
+
+  if (op === "httpFetch") {
+    const fetchUrl = req.url;
+    const fetchMethod = req.method || "GET";
+    const fetchHeaders = req.headers || {};
+    const bodyB64 = req.body || null;
+    const followRedirects = req.followRedirects !== false;
+
+    try {
+      const fetchOpts = {
+        method: fetchMethod,
+        headers: fetchHeaders,
+        redirect: followRedirects ? "follow" : "manual",
+        credentials: "omit",
+      };
+
+      if (bodyB64 && fetchMethod !== "GET" && fetchMethod !== "HEAD") {
+        // Decode base64 body to ArrayBuffer.
+        const binStr = atob(bodyB64);
+        const bytes = new Uint8Array(binStr.length);
+        for (let i = 0; i < binStr.length; i++) {
+          bytes[i] = binStr.charCodeAt(i);
+        }
+        fetchOpts.body = bytes;
+      }
+
+      const response = await fetch(fetchUrl, fetchOpts);
+
+      // Read the response body as ArrayBuffer and base64-encode it.
+      const arrayBuf = await response.arrayBuffer();
+      const u8 = new Uint8Array(arrayBuf);
+      let bodyStr = "";
+      // Encode in chunks to avoid call-stack overflow on large bodies.
+      const CHUNK = 32768;
+      for (let i = 0; i < u8.length; i += CHUNK) {
+        bodyStr += String.fromCharCode.apply(null, u8.subarray(i, i + CHUNK));
+      }
+      const respBodyB64 = btoa(bodyStr);
+
+      // Collect response headers.
+      const respHeaders = {};
+      response.headers.forEach((value, name) => {
+        respHeaders[name] = value;
+      });
+
+      sendScriptResponse(port, id, {
+        statusCode: response.status,
+        statusText: response.statusText,
+        headers: respHeaders,
+        body: respBodyB64,
+        finalUrl: response.url || fetchUrl,
+      });
+    } catch (e) {
+      const errMsg = e ? e.message || String(e) : "fetch failed";
+      // Detect CORS errors: fetch() throws a TypeError with an opaque
+      // message when a cross-origin request is blocked.
+      const isCors = (e instanceof TypeError) &&
+        (errMsg.toLowerCase().includes("cors") ||
+         errMsg.toLowerCase().includes("failed to fetch") ||
+         errMsg.toLowerCase().includes("cross-origin") ||
+         errMsg.toLowerCase().includes("mixed") ||
+         errMsg.toLowerCase().includes("network") ||
+         errMsg.toLowerCase().includes("load failed"));
+      sendScriptError(port, id,
+        isCors ? "cors: " + errMsg : errMsg);
+    }
     return;
   }
 

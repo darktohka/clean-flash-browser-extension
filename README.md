@@ -24,7 +24,7 @@ The extension also implements a full **ExternalInterface** bridge so that page J
 | Google Chrome | ✅ |
 | Chromium | ✅ |
 | Brave | ✅ |
-| Mozilla Firefox (v111+) | ❌ |
+| Mozilla Firefox | ✅ |
 
 ### Installation
 
@@ -87,7 +87,6 @@ The `ppapi-host` crate is a general-purpose, embeddable PPAPI host implementatio
 | `audio-cpal` | Audio output via cpal |
 | `clipboard-arboard` | Clipboard via arboard |
 | `url-reqwest` | URL loading via reqwest |
-| `url-stub` | Stub URL loader (no-op) |
 
 ### Desktop Players
 

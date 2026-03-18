@@ -799,6 +799,11 @@ impl FlashPlayerApp {
                     host.set_fullscreen_provider(Box::new(
                         dialogs::Win32FullscreenProvider::new(fs_hwnd),
                     ));
+
+                    // Set up the HTTP request provider for URL loading.
+                    host.set_http_request_provider(Box::new(
+                        ppapi_host::http_reqwest::ReqwestHttpRequestProvider::new(),
+                    ));
                 }
                 Err(e) => {
                     *self.status_message.borrow_mut() = format!("Error: {}", e);
