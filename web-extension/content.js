@@ -644,6 +644,8 @@ class FlashInstance {
     this._audioStreamIds = new Set();
     this._audioInputStreamIds = new Set();
     this._videoCaptureStreamIds = new Set();
+    /** True while a Flash context menu is open — suppresses input events. */
+    this.contextMenuOpen = false;
 
     // ---- Create the replacement <canvas> ----
     const canvas = document.createElement("canvas");
@@ -1320,6 +1322,7 @@ class FlashInstance {
 
     canvas.addEventListener("mousedown", (e) => {
       e.preventDefault();
+      if (inst.contextMenuOpen) return;
       canvas.focus();
       const pos = canvasPos(canvas, e, inst);
       port.postMessage({
@@ -1333,6 +1336,7 @@ class FlashInstance {
 
     canvas.addEventListener("mouseup", (e) => {
       e.preventDefault();
+      if (inst.contextMenuOpen) return;
       const pos = canvasPos(canvas, e, inst);
       port.postMessage({
         type: "mouseup",
@@ -1348,6 +1352,7 @@ class FlashInstance {
     let _moveTimer = 0;
     function _flushMove() {
       if (!_pendingMove) return;
+      if (inst.contextMenuOpen) { _pendingMove = null; return; }
       const pos = canvasPos(canvas, _pendingMove, inst);
       port.postMessage({
         type: "mousemove",
@@ -1360,6 +1365,7 @@ class FlashInstance {
     }
     canvas._flushPendingMove = _flushMove;
     canvas.addEventListener("mousemove", (e) => {
+      if (inst.contextMenuOpen) return;
       _pendingMove = e;
       if (!_moveTimer) {
         _moveTimer = setTimeout(() => { _moveTimer = 0; _flushMove(); }, 50);
@@ -1367,15 +1373,18 @@ class FlashInstance {
     });
 
     canvas.addEventListener("mouseenter", () => {
+      if (inst.contextMenuOpen) return;
       port.postMessage({ type: "mouseenter" });
     });
 
     canvas.addEventListener("mouseleave", () => {
+      if (inst.contextMenuOpen) return;
       port.postMessage({ type: "mouseleave" });
     });
 
     canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
+      if (inst.contextMenuOpen) return;
       port.postMessage({
         type: "wheel",
         deltaX: -e.deltaX,
@@ -1386,6 +1395,7 @@ class FlashInstance {
 
     canvas.addEventListener("keydown", (e) => {
       e.preventDefault();
+      if (inst.contextMenuOpen) return;
       port.postMessage({
         type: "rawkeydown",
         keyCode: e.keyCode,
@@ -1424,6 +1434,7 @@ class FlashInstance {
 
     canvas.addEventListener("keyup", (e) => {
       e.preventDefault();
+      if (inst.contextMenuOpen) return;
       port.postMessage({
         type: "keyup",
         keyCode: e.keyCode,
@@ -2242,6 +2253,12 @@ function showFlashContextMenu(items, x, y, canvas, port) {
   // Remove any existing Flash context menu.
   removeFlashContextMenu();
 
+  // Mark the instance so input events are suppressed while the menu is open.
+  const instId = canvas.getAttribute("data-flash-player");
+  const inst = instId != null ? FlashInstance.getById(Number(instId)) : null;
+
+  if (inst) inst.contextMenuOpen = true;
+
   const menu = document.createElement("div");
   menu.className = "flash-context-menu";
   Object.assign(menu.style, {
@@ -2265,6 +2282,7 @@ function showFlashContextMenu(items, x, y, canvas, port) {
   function sendResponse(selectedId) {
     if (responded) return;
     responded = true;
+    if (inst) inst.contextMenuOpen = false;
     port.postMessage({ type: "menuResponse", selectedId: selectedId });
     removeFlashContextMenu();
   }
@@ -2377,8 +2395,6 @@ function showFlashContextMenu(items, x, y, canvas, port) {
   // Use the logical Flash dimensions, not the canvas buffer size which
   // may be at a higher device resolution.
   const rect = canvas.getBoundingClientRect();
-  const instId = canvas.getAttribute("data-flash-player");
-  const inst = instId != null ? FlashInstance.getById(Number(instId)) : null;
   const logicalW = (inst && inst.origWidth) || canvas.width;
   const logicalH = (inst && inst.origHeight) || canvas.height;
   const scaleX = rect.width / (logicalW || 1);
