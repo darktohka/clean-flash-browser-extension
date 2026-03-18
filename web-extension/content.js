@@ -28,17 +28,17 @@ const _FF_BMP_HDR_SIZE = 14 + 108; // BITMAPFILEHEADER + BITMAPV4HEADER
 function _buildBmpBlob(rgba, w, h) {
   const pxBytes = w * h * 4;
   const hdr = new ArrayBuffer(_FF_BMP_HDR_SIZE);
-  const u8  = new Uint8Array(hdr);
-  const dv  = new DataView(hdr);
+  const u8 = new Uint8Array(hdr);
+  const dv = new DataView(hdr);
   u8[0] = 0x42; u8[1] = 0x4D;                      // 'BM'
-  dv.setUint32( 2, _FF_BMP_HDR_SIZE + pxBytes, true); // file size
+  dv.setUint32(2, _FF_BMP_HDR_SIZE + pxBytes, true); // file size
   dv.setUint32(10, _FF_BMP_HDR_SIZE, true);           // pixel data offset
   dv.setUint32(14, 108, true);                        // V4 header size
-  dv.setInt32( 18,  w,  true);                        // width
-  dv.setInt32( 22, -h,  true);                        // height (neg = top-down)
-  dv.setUint16(26,  1,  true);                        // planes
-  dv.setUint16(28, 32,  true);                        // 32 bpp
-  dv.setUint32(30,  3,  true);                        // BI_BITFIELDS
+  dv.setInt32(18, w, true);                        // width
+  dv.setInt32(22, -h, true);                        // height (neg = top-down)
+  dv.setUint16(26, 1, true);                        // planes
+  dv.setUint16(28, 32, true);                        // 32 bpp
+  dv.setUint32(30, 3, true);                        // BI_BITFIELDS
   dv.setUint32(34, pxBytes, true);                    // image data size
   // RGBA channel masks — matches native RGBA byte order, no swap needed.
   dv.setUint32(54, 0x000000FF, true);                 // R mask
@@ -174,16 +174,6 @@ function resolveSwfUrl(src) {
 }
 
 // ---------------------------------------------------------------------------
-// Canvas + port bridge
-// ---------------------------------------------------------------------------
-
-/** Unique instance counter for this content script. */
-let nextInstanceId = 0;
-
-/** Active native messaging port - used by the ExternalInterface bridge. */
-let activePort = null;
-
-// ---------------------------------------------------------------------------
 // QOI WASM decoder - loaded once, reused for every frame.
 // ---------------------------------------------------------------------------
 
@@ -215,15 +205,6 @@ const _qoiReady = (async () => {
     console.error("[Flash Player] Failed to load QOI WASM decoder:", e);
   }
 })();
-
-/**
- * Per-instance metadata used for crash recovery.
- * instanceId -> { canvas, ctx, swfUrl, didCreateArgs, origWidth, origHeight, port, container, elem }
- */
-const instanceMeta = new Map();
-
-/** True while we are intentionally tearing down (page navigation). */
-let navigatingAway = false;
 
 // ---------------------------------------------------------------------------
 // Debug statistics
@@ -452,809 +433,1083 @@ class DebugStats {
   }
 }
 
-/** Map of instanceId -> DebugStats (only populated when FLASH_DEBUG). */
-const debugStatsMap = new Map();
+// ---------------------------------------------------------------------------
+// FlashInstance - encapsulates a single Flash Player instance.
+// ---------------------------------------------------------------------------
 
-/**
- * Create the debug stats DOM panel and attach it after the container.
- * Returns the DebugStats instance.
- */
-function createDebugStatsPanel(instanceId, container, anchorEl) {
-  const panel = document.createElement("div");
-  panel.className = "flash-debug-stats";
-  Object.assign(panel.style, {
-    fontFamily: "'Consolas', 'Menlo', 'Monaco', monospace",
-    fontSize: "11px",
-    lineHeight: "1.5",
-    color: "#c8d6e5",
-    background: "linear-gradient(135deg, #0b1a2e 0%, #142744 100%)",
-    border: "1px solid #1e3a5f",
-    borderTop: "none",
-    padding: "8px 12px",
-    maxWidth: container.style.width,
-    boxSizing: "border-box",
-    overflowX: "auto",
-    userSelect: "text",
-  });
-  panel.innerHTML = "<i>Collecting statistics…</i>";
+class FlashInstance {
+  // ---- Static state ----
 
-  // Insert right after anchorEl (defaults to container).
-  // For <object> elements pass the <object> itself so the panel lands
-  // outside it - otherwise it ends up inside the collapsed object and
-  // has zero height.
-  const insertAfter = anchorEl || container;
-  if (insertAfter.nextSibling) {
-    insertAfter.parentNode.insertBefore(panel, insertAfter.nextSibling);
-  } else if (insertAfter.parentNode) {
-    insertAfter.parentNode.appendChild(panel);
+  /** @type {Map<number, FlashInstance>} All active instances. */
+  static _instances = new Map();
+  static _nextId = 0;
+  /** @type {Port|null} Most recently started port (ExternalInterface bridge). */
+  static _activePort = null;
+  /** True while we are intentionally tearing down (page navigation). */
+  static _navigatingAway = false;
+  /** Pending broadcastViewUpdate timer. */
+  static _viewUpdateTimer = null;
+
+  // ---- Static lookup helpers ----
+
+  /**
+   * Look up a FlashInstance by its numeric instance ID.
+   * @param {number} id - The instance ID.
+   * @returns {FlashInstance|undefined}
+   */
+  static getById(id) {
+    return FlashInstance._instances.get(id);
   }
 
-  const stats = new DebugStats();
-  stats.start(panel);
-  debugStatsMap.set(instanceId, stats);
-  return stats;
-}
-
-/**
- * Replace a Flash element with a <canvas> and wire up the native messaging
- * bridge via the background service worker.
- *
- * Returns true if the element was successfully replaced.
- */
-function replaceFlashElement(elem) {
-  if (elem.parentNode == null) return false;
-
-  const params = getFlashParams(elem);
-  if (!params || !params.src) return false;
-
-  const swfUrl = resolveSwfUrl(params.src);
-  if (!swfUrl) return false;
-  const didCreateArgs = buildDidCreateArgs(params, swfUrl);
-
-  const instanceId = nextInstanceId++;
-
-  // ---- Create the replacement <canvas> ----
-  const canvas = document.createElement("canvas");
-  canvas.setAttribute("data-flash-player", instanceId);
-  canvas.style.border = "0";
-
-  // Inherit dimensions from the original element.
-  // Detect percentage / non-pixel values - parseInt("100%") wrongly gives 100.
-  const widthRaw = elem.getAttribute("width") || elem.style.width || "";
-  const heightRaw = elem.getAttribute("height") || elem.style.height || "";
-  const isRelativeWidth = widthRaw && !/^\d+$/.test(widthRaw.trim()) && !/^\d+px$/i.test(widthRaw.trim());
-  const isRelativeHeight = heightRaw && !/^\d+$/.test(heightRaw.trim()) && !/^\d+px$/i.test(heightRaw.trim());
-
-  // For the CSS display size, preserve percentage / relative values.
-  const cssWidth = isRelativeWidth ? widthRaw.trim() : (parseInt(widthRaw, 10) || 550) + "px";
-  const cssHeight = isRelativeHeight ? heightRaw.trim() : (parseInt(heightRaw, 10) || 400) + "px";
-  canvas.style.width = elem.style.width || cssWidth;
-  canvas.style.height = elem.style.height || cssHeight;
-
-  // For the internal canvas buffer, use absolute pixels.  When the size is
-  // relative we pick a sensible default - we will correct it after DOM
-  // insertion once the actual rendered size can be measured.
-  const origWidth = isRelativeWidth ? 550 : (parseInt(widthRaw, 10) || 550);
-  const origHeight = isRelativeHeight ? 400 : (parseInt(heightRaw, 10) || 400);
-  canvas.width = origWidth;
-  canvas.height = origHeight;
-  canvas.style.display = "inline-block";
-  canvas.tabIndex = 0; // Make focusable for keyboard events.
-
-  const ctx = canvas.getContext("2d");
-
-  // ---- Wrap canvas in a container for crash overlay support ----
-  const container = document.createElement("div");
-  container.style.position = "relative";
-  container.style.display = "inline-block";
-  container.style.width = canvas.style.width;
-  container.style.height = canvas.style.height;
-  container.setAttribute("data-flash-container", instanceId);
-  container.appendChild(canvas);
-
-  // ---- Store instance metadata for crash recovery ----
-  const meta = {
-    canvas,
-    ctx,
-    swfUrl,
-    didCreateArgs,
-    origWidth,
-    origHeight,
-    port: null,
-    container,
-    elem,
-    usesRelativeSize: isRelativeWidth || isRelativeHeight,
-  };
-  instanceMeta.set(instanceId, meta);
-
-  // ---- Debug stats panel (below the canvas) ----
-  if (FLASH_DEBUG) {
-    // Defer panel creation until the container is in the DOM.
-    meta._pendingDebugPanel = true;
+  /**
+   * Find the FlashInstance that owns a particular native messaging port.
+   * @param {Port} port - The chrome.runtime port to search for.
+   * @returns {FlashInstance|null}
+   */
+  static getByPort(port) {
+    for (const inst of FlashInstance._instances.values()) {
+      if (inst.port === port) return inst;
+    }
+    return null;
   }
 
-  // ---- Replace the original element in the DOM ----
-  // Must happen BEFORE startInstance so that collectViewInfo can measure the
-  // canvas via getBoundingClientRect and report isVisible correctly.
-  if (elem.tagName === "EMBED") {
-    // For <embed>, insert the container and hide the original (some pages
-    // reference the embed by id afterwards).
-    elem.style.display = "none";
-    elem.parentNode.insertBefore(container, elem);
-  } else {
-    // For <object>, remove children and append container inside.
-    while (elem.firstChild) elem.removeChild(elem.firstChild);
-    elem.style.display = "inline-block";
-    elem.appendChild(container);
+  /**
+   * Find the instance ID for the FlashInstance that owns a particular port.
+   * @param {Port} port - The chrome.runtime port to search for.
+   * @returns {number|null}
+   */
+  static getIdByPort(port) {
+    for (const [id, inst] of FlashInstance._instances) {
+      if (inst.port === port) return id;
+    }
+    return null;
   }
-  elem.setAttribute("data-flash-player", instanceId);
 
-  // ---- Connect and start ----
-  startInstance(instanceId, meta);
+  // ---- Static lifecycle ----
 
-  // Now that the container is in the DOM, measure the actual rendered size.
-  // This corrects the initial dimensions when the element uses percentage or
-  // other relative CSS units (e.g. width="100%" should map to the real pixel
-  // width of the laid-out element, not parseInt("100%") == 100).
-  if (meta.usesRelativeSize) {
-    const measured = measureRenderedSize(canvas, meta.origWidth, meta.origHeight);
-    if (measured.w !== meta.origWidth || measured.h !== meta.origHeight) {
-      canvas.width = measured.w;
-      canvas.height = measured.h;
-      meta.origWidth = measured.w;
-      meta.origHeight = measured.h;
-      if (meta.port) {
-        meta.port.postMessage({ type: "resize", width: measured.w, height: measured.h, ...collectViewInfo(canvas) });
+  /**
+   * Create a FlashInstance by replacing a Flash <object> or <embed> element.
+   * Returns the instance, or null if the element is not Flash content.
+   */
+  static fromElement(elem) {
+    if (elem.parentNode == null) return null;
+    const params = getFlashParams(elem);
+    if (!params || !params.src) return null;
+    const swfUrl = resolveSwfUrl(params.src);
+    if (!swfUrl) return null;
+    return new FlashInstance(elem, params, swfUrl);
+  }
+
+  /**
+   * Destroy all instances whose element belongs to the given document.
+   * Also closes any associated audio/video streams.
+   */
+  static destroyForDocument(doc) {
+    for (const [, inst] of FlashInstance._instances) {
+      if (inst.ownerDocument === doc) {
+        inst.destroy();
       }
     }
   }
 
-  // Watch for layout changes (window resize, parent container resize) so
-  // that percentage-based Flash elements stay in sync.
-  observeResize(meta);
-
-  // Watch for attribute/style changes on the original <embed>/<object> so
-  // that dimension changes made by page scripts propagate to the canvas.
-  observeElementMutations(meta);
-
-  // Now that the container is in the DOM, create the debug panel if needed.
-  // For <object>, the container lives *inside* the element, so anchor the
-  // panel to the <object> itself so it appears outside/after it.
-  if (FLASH_DEBUG && meta._pendingDebugPanel) {
-    const anchor = elem.tagName === "OBJECT" ? elem : container;
-    createDebugStatsPanel(instanceId, container, anchor);
-    meta._pendingDebugPanel = false;
-  }
-
-  return true;
-}
-
-/**
- * Collect current view metadata from browser APIs.
- * Included in resize and viewUpdate messages so the native host can
- * populate PPB_View resources with accurate values.
- */
-function collectViewInfo(canvas) {
-  // Determine visibility by checking both page visibility and whether the
-  // canvas has a non-zero bounding rect inside the viewport.
-  const isPageVisible = document.visibilityState === "visible";
-  const isFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
-  let isVisible = isPageVisible;
-  if (isVisible && canvas) {
-    const rect = canvas.getBoundingClientRect();
-    isVisible = rect.width > 0 && rect.height > 0 &&
-      rect.bottom > 0 && rect.right > 0 &&
-      rect.top < window.innerHeight && rect.left < window.innerWidth;
-  }
-  return {
-    deviceScale: window.devicePixelRatio || 1.0,
-    cssScale: 1.0, // TO-DO: is it just window.devicePixelRatio?
-    scrollX: Math.round(window.scrollX || 0),
-    scrollY: Math.round(window.scrollY || 0),
-    isFullscreen,
-    isVisible,
-    isPageVisible,
-  };
-}
-
-/**
- * Measure the actual rendered pixel size of a canvas element.
- * Falls back to the provided defaults if the element has zero dimensions.
- */
-function measureRenderedSize(canvas, defaultW, defaultH) {
-  const rect = canvas.getBoundingClientRect();
-  const w = Math.round(rect.width) || defaultW;
-  const h = Math.round(rect.height) || defaultH;
-  return { w, h };
-}
-
-/**
- * Set up a ResizeObserver on the canvas so that when the element's CSS
- * layout size changes (e.g. percentage dimensions + window resize), the
- * internal canvas buffer and the native host are updated.
- */
-function observeResize(meta) {
-  if (typeof ResizeObserver === "undefined") return;
-  const ro = new ResizeObserver((entries) => {
-    for (const entry of entries) {
-      const cr = entry.contentRect;
-      const w = Math.round(cr.width);
-      const h = Math.round(cr.height);
-      if (w <= 0 || h <= 0) continue;
-      if (w === meta.canvas.width && h === meta.canvas.height) continue;
-      meta.canvas.width = w;
-      meta.canvas.height = h;
-      meta.origWidth = w;
-      meta.origHeight = h;
-      if (meta.port) {
-        console.log("Resize detected for instance updating with", { width: w, height: h, ...collectViewInfo(meta.canvas) });
-        meta.port.postMessage({ type: "resize", width: w, height: h, ...collectViewInfo(meta.canvas) });
+  /**
+   * Restart all instances whose element belongs to the given document.
+   * Used when the page is restored from bfcache.
+   */
+  static restartForDocument(doc) {
+    for (const [, inst] of FlashInstance._instances) {
+      if (inst.ownerDocument === doc) {
+        inst.ctx.clearRect(0, 0, inst.canvas.width, inst.canvas.height);
+        inst.start();
       }
     }
-  });
-  ro.observe(meta.canvas);
-  meta._resizeObserver = ro;
-}
+  }
 
-/**
- * Observe attribute changes (width, height, style) on the original
- * <embed> or <object> element so that dimension changes made by page
- * scripts propagate down to the internal container and canvas — matching
- * the old browser plugin behaviour where the <embed> *was* the canvas.
- */
-function observeElementMutations(meta) {
-  const elem = meta.elem;
-  if (!elem) return;
+  // ---- Static broadcast ----
 
-  const mo = new MutationObserver((mutations) => {
-    let needsUpdate = false;
-    for (const m of mutations) {
-      if (m.type === "attributes") {
-        const attr = m.attributeName.toLowerCase();
-        if (attr === "width" || attr === "height" || attr === "style") {
-          needsUpdate = true;
-          break;
+  /**
+   * Send a viewUpdate message to all active Flash instances when the
+   * browser view state changes (tab visibility, scroll, fullscreen).
+   */
+  static broadcastViewUpdate() {
+    for (const inst of FlashInstance._instances.values()) {
+      inst.sendViewUpdate();
+    }
+  }
+
+  /**
+   * Debounce broadcastViewUpdate to avoid flooding the native host
+   * during rapid scroll or resize events.
+   * @param {number} [delayMs=100] - Minimum delay in milliseconds.
+   */
+  static scheduleBroadcastViewUpdate(delayMs = 100) {
+    if (FlashInstance._viewUpdateTimer) return;
+    FlashInstance._viewUpdateTimer = setTimeout(() => {
+      FlashInstance._viewUpdateTimer = null;
+      FlashInstance.broadcastViewUpdate();
+    }, delayMs);
+  }
+
+  // ---- Static event handlers ----
+
+  /**
+   * Handle fullscreen enter/exit for all Flash instances.
+   * Saves pre-fullscreen CSS dimensions on enter and restores them on exit.
+   * On enter, the canvas and container expand to fill the screen.
+   */
+  static handleFullscreenChange() {
+    const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+    for (const inst of FlashInstance._instances.values()) {
+      const { canvas, container } = inst;
+      if (fsEl && (fsEl === container || fsEl.contains(canvas))) {
+        // Save pre-fullscreen CSS sizes so we can restore them on exit.
+        inst._preFsContainerW = container.style.width;
+        inst._preFsContainerH = container.style.height;
+        inst._preFsCanvasW = canvas.style.width;
+        inst._preFsCanvasH = canvas.style.height;
+        // Entering fullscreen - expand container and canvas to screen size.
+        container.style.width = "100vw";
+        container.style.height = "100vh";
+        container.style.backgroundColor = "#000";
+        canvas.style.width = "100%";
+        canvas.style.height = "100%";
+        const w = screen.width;
+        const h = screen.height;
+        canvas.width = w;
+        canvas.height = h;
+        canvas.focus();
+        if (inst.port) {
+          inst.port.postMessage({ type: "resize", width: w, height: h, ...inst.collectViewInfo() });
+        }
+      } else if (!fsEl && inst._preFsContainerW != null) {
+        // Exiting fullscreen - restore original dimensions.
+        container.style.width = inst._preFsContainerW;
+        container.style.height = inst._preFsContainerH;
+        container.style.backgroundColor = "";
+        canvas.style.width = inst._preFsCanvasW;
+        canvas.style.height = inst._preFsCanvasH;
+        canvas.width = inst.origWidth;
+        canvas.height = inst.origHeight;
+        inst._preFsContainerW = null;
+        if (inst.port) {
+          inst.port.postMessage({ type: "resize", width: inst.origWidth, height: inst.origHeight, ...inst.collectViewInfo() });
         }
       }
     }
-    if (!needsUpdate) return;
-    syncDimensionsFromElement(meta);
-  });
+    FlashInstance.broadcastViewUpdate();
+  }
 
-  mo.observe(elem, { attributes: true, attributeFilter: ["width", "height", "style"] });
-  meta._mutationObserver = mo;
-}
-
-/**
- * Read the current dimensions from the original <embed>/<object> element
- * and propagate them to the container <div> and canvas CSS display size.
- *
- * Only CSS display dimensions are updated here.  The existing
- * ResizeObserver on the canvas (see observeResize) will detect the
- * layout change and update the canvas buffer + notify the native host.
- * This avoids conflicts between attribute-specified dimensions and the
- * actual laid-out size (e.g. CSS max-width constraints).
- */
-function syncDimensionsFromElement(meta) {
-  const { elem, canvas, container } = meta;
-  if (!elem || !canvas || !container) return;
-
-  // Don't sync during fullscreen — fullscreen logic manages its own sizes.
-  if (document.fullscreenElement || document.webkitFullscreenElement) return;
-
-  const widthRaw = elem.getAttribute("width") || elem.style.width || "";
-  const heightRaw = elem.getAttribute("height") || elem.style.height || "";
-  if (!widthRaw && !heightRaw) return;
-
-  const isRelativeWidth = widthRaw && !/^\d+$/.test(widthRaw.trim()) && !/^\d+px$/i.test(widthRaw.trim());
-  const isRelativeHeight = heightRaw && !/^\d+$/.test(heightRaw.trim()) && !/^\d+px$/i.test(heightRaw.trim());
-
-  // Update CSS display dimensions on container and canvas.
-  // The canvas ResizeObserver will pick up the layout change and
-  // update the internal buffer size + send the resize event to the host.
-  const cssWidth = isRelativeWidth ? widthRaw.trim() : (parseInt(widthRaw, 10) || meta.origWidth) + "px";
-  const cssHeight = isRelativeHeight ? heightRaw.trim() : (parseInt(heightRaw, 10) || meta.origHeight) + "px";
-
-  container.style.width = cssWidth;
-  container.style.height = cssHeight;
-  canvas.style.width = cssWidth;
-  canvas.style.height = cssHeight;
-
-  // After the CSS change has been applied, measure the actual laid-out size
-  // on the next frame and update the canvas buffer.  We cannot rely solely
-  // on ResizeObserver because Firefox content scripts may not fire it
-  // reliably due to Xray wrapper compartment isolation.  The existing
-  // ResizeObserver (observeResize) has a same-size guard so there is no
-  // conflict if both paths run.
-  requestAnimationFrame(() => {
-    const measured = measureRenderedSize(canvas, meta.origWidth, meta.origHeight);
-    const w = measured.w;
-    const h = measured.h;
-    if (w <= 0 || h <= 0) return;
-    if (w === canvas.width && h === canvas.height) return;
-
-    canvas.width = w;
-    canvas.height = h;
-    meta.origWidth = w;
-    meta.origHeight = h;
-
-    if (meta.port) {
-      meta.port.postMessage({ type: "resize", width: w, height: h, ...collectViewInfo(canvas) });
+  /**
+   * Notify all active Flash instances when the pointer lock state changes
+   * (e.g. user pressed Escape to unlock the cursor).
+   */
+  static handlePointerLockChange() {
+    const locked = !!document.pointerLockElement;
+    for (const inst of FlashInstance._instances.values()) {
+      if (inst.port) {
+        inst.port.postMessage({ type: "cursorLockChanged", locked });
+      }
     }
-  });
+  }
+
+  // ---- Constructor ----
+
+  /**
+   * Create a new FlashInstance by replacing a Flash <object> or <embed>
+   * element with a <canvas> and connecting to the native messaging host.
+   *
+   * @param {Element} elem - The original <object> or <embed> DOM element.
+   * @param {Object} params - Key-value pairs extracted from the element's
+   *   attributes and <param> children.
+   * @param {string} swfUrl - Resolved absolute URL of the SWF file.
+   */
+  constructor(elem, params, swfUrl) {
+    this.instanceId = FlashInstance._nextId++;
+    this.elem = elem;
+    this.ownerDocument = elem.ownerDocument;
+    this.swfUrl = swfUrl;
+    this.didCreateArgs = buildDidCreateArgs(params, swfUrl);
+    this.port = null;
+    this._started = false;
+    this._resizeObserver = null;
+    this._mutationObserver = null;
+    this._debugStats = null;
+    this._preFsContainerW = null;
+    this._preFsContainerH = null;
+    this._preFsCanvasW = null;
+    this._preFsCanvasH = null;
+
+    // Track associated audio/video/input stream IDs so that destroy()
+    // can close them when the instance is torn down.
+    this._audioStreamIds = new Set();
+    this._audioInputStreamIds = new Set();
+    this._videoCaptureStreamIds = new Set();
+
+    // ---- Create the replacement <canvas> ----
+    const canvas = document.createElement("canvas");
+    canvas.setAttribute("data-flash-player", this.instanceId);
+    canvas.style.border = "0";
+
+    // Inherit dimensions from the original element.
+    // Detect percentage / non-pixel values - parseInt("100%") wrongly gives 100.
+    const widthRaw = elem.getAttribute("width") || elem.style.width || "";
+    const heightRaw = elem.getAttribute("height") || elem.style.height || "";
+    const isRelativeWidth = widthRaw && !/^\d+$/.test(widthRaw.trim()) && !/^\d+px$/i.test(widthRaw.trim());
+    const isRelativeHeight = heightRaw && !/^\d+$/.test(heightRaw.trim()) && !/^\d+px$/i.test(heightRaw.trim());
+
+    // For the CSS display size, preserve percentage / relative values.
+    const cssWidth = isRelativeWidth ? widthRaw.trim() : (parseInt(widthRaw, 10) || 550) + "px";
+    const cssHeight = isRelativeHeight ? heightRaw.trim() : (parseInt(heightRaw, 10) || 400) + "px";
+    canvas.style.width = elem.style.width || cssWidth;
+    canvas.style.height = elem.style.height || cssHeight;
+
+    // For the internal canvas buffer, use absolute pixels.  When the size is
+    // relative we pick a sensible default - we will correct it after DOM
+    // insertion once the actual rendered size can be measured.
+    const origWidth = isRelativeWidth ? 550 : (parseInt(widthRaw, 10) || 550);
+    const origHeight = isRelativeHeight ? 400 : (parseInt(heightRaw, 10) || 400);
+    canvas.width = origWidth;
+    canvas.height = origHeight;
+    canvas.style.display = "inline-block";
+    canvas.tabIndex = 0; // Make focusable for keyboard events.
+
+    const ctx = canvas.getContext("2d");
+
+    // ---- Wrap canvas in a container for crash overlay support ----
+    const container = document.createElement("div");
+    container.style.position = "relative";
+    container.style.display = "inline-block";
+    container.style.width = canvas.style.width;
+    container.style.height = canvas.style.height;
+    container.setAttribute("data-flash-container", this.instanceId);
+    container.appendChild(canvas);
+
+    this.canvas = canvas;
+    this.ctx = ctx;
+    this.origWidth = origWidth;
+    this.origHeight = origHeight;
+    this.container = container;
+    this.usesRelativeSize = isRelativeWidth || isRelativeHeight;
+
+    // Register in the global map.
+    FlashInstance._instances.set(this.instanceId, this);
+
+    // ---- Replace the original element in the DOM ----
+    // Must happen BEFORE start() so that collectViewInfo can measure the
+    // canvas via getBoundingClientRect and report isVisible correctly.
+    if (elem.tagName === "EMBED") {
+      // For <embed>, insert the container and hide the original (some pages
+      // reference the embed by id afterwards).
+      elem.style.display = "none";
+      elem.parentNode.insertBefore(container, elem);
+    } else {
+      // For <object>, remove children and append container inside.
+      while (elem.firstChild) elem.removeChild(elem.firstChild);
+      elem.style.display = "inline-block";
+      elem.appendChild(container);
+    }
+    elem.setAttribute("data-flash-player", this.instanceId);
+
+    // ---- Connect and start ----
+    this.start();
+
+    // Now that the container is in the DOM, measure the actual rendered size.
+    // This corrects the initial dimensions when the element uses percentage or
+    // other relative CSS units (e.g. width="100%" should map to the real pixel
+    // width of the laid-out element, not parseInt("100%") == 100).
+    if (this.usesRelativeSize) {
+      const measured = this._measureRenderedSize();
+      if (measured.w !== this.origWidth || measured.h !== this.origHeight) {
+        this.canvas.width = measured.w;
+        this.canvas.height = measured.h;
+        this.origWidth = measured.w;
+        this.origHeight = measured.h;
+        if (this.port) {
+          this.port.postMessage({ type: "resize", width: measured.w, height: measured.h, ...this.collectViewInfo() });
+        }
+      }
+    }
+
+    // Watch for layout changes (window resize, parent container resize) so
+    // that percentage-based Flash elements stay in sync.
+    this._observeResize();
+
+    // Watch for attribute/style changes on the original <embed>/<object> so
+    // that dimension changes made by page scripts propagate to the canvas.
+    this._observeElementMutations();
+
+    // Now that the container is in the DOM, create the debug panel if needed.
+    // For <object>, the container lives *inside* the element, so anchor the
+    // panel to the <object> itself so it appears outside/after it.
+    if (FLASH_DEBUG) {
+      const anchor = elem.tagName === "OBJECT" ? elem : container;
+      this._createDebugStatsPanel(anchor);
+    }
+  }
+
+  /**
+   * Collect current view metadata from browser APIs.
+   * Included in resize and viewUpdate messages so the native host can
+   * populate PPB_View resources with accurate values.
+   */
+  collectViewInfo() {
+    // Determine visibility by checking both page visibility and whether the
+    // canvas has a non-zero bounding rect inside the viewport.
+    const canvas = this.canvas;
+    const isPageVisible = document.visibilityState === "visible";
+    const isFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    let isVisible = isPageVisible;
+    if (isVisible && canvas) {
+      const rect = canvas.getBoundingClientRect();
+      isVisible = rect.width > 0 && rect.height > 0 &&
+        rect.bottom > 0 && rect.right > 0 &&
+        rect.top < window.innerHeight && rect.left < window.innerWidth;
+    }
+    return {
+      deviceScale: window.devicePixelRatio || 1.0,
+      cssScale: 1.0,  // TO-DO: is it just window.devicePixelRatio?
+      scrollX: Math.round(window.scrollX || 0),
+      scrollY: Math.round(window.scrollY || 0),
+      isFullscreen,
+      isVisible,
+      isPageVisible,
+    };
+  }
+
+  /**
+   * Send a viewUpdate message to the native host for this instance.
+   */
+  sendViewUpdate() {
+    if (this.port) {
+      console.log("Broadcasting view update for instance with", this.collectViewInfo());
+      this.port.postMessage({ type: "viewUpdate", ...this.collectViewInfo() });
+    }
+  }
+
+  /**
+   * Measure the actual rendered pixel size of this instance's canvas.
+   * Falls back to the provided defaults if the element has zero dimensions.
+   */
+  _measureRenderedSize() {
+    const rect = this.canvas.getBoundingClientRect();
+    const w = Math.round(rect.width) || this.origWidth;
+    const h = Math.round(rect.height) || this.origHeight;
+    return { w, h };
+  }
+
+  /**
+   * Set up a ResizeObserver on the canvas so that when the element's CSS
+   * layout size changes, the internal canvas buffer and native host are updated.
+   */
+  _observeResize() {
+    if (typeof ResizeObserver === "undefined") return;
+    const inst = this;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const cr = entry.contentRect;
+        const w = Math.round(cr.width);
+        const h = Math.round(cr.height);
+        if (w <= 0 || h <= 0) continue;
+        if (w === inst.canvas.width && h === inst.canvas.height) continue;
+        inst.canvas.width = w;
+        inst.canvas.height = h;
+        inst.origWidth = w;
+        inst.origHeight = h;
+        if (inst.port) {
+          console.log("Resize detected for instance updating with", { width: w, height: h, ...inst.collectViewInfo() });
+          inst.port.postMessage({ type: "resize", width: w, height: h, ...inst.collectViewInfo() });
+        }
+      }
+    });
+    ro.observe(this.canvas);
+    this._resizeObserver = ro;
+  }
+
+  /**
+   * Observe attribute changes (width, height, style) on the original
+   * <embed> or <object> element so that dimension changes made by page
+   * scripts propagate down to the internal container and canvas.
+   */
+  _observeElementMutations() {
+    const elem = this.elem;
+    if (!elem) return;
+    const inst = this;
+
+    const mo = new MutationObserver((mutations) => {
+      let needsUpdate = false;
+      for (const m of mutations) {
+        if (m.type === "attributes") {
+          const attr = m.attributeName.toLowerCase();
+          if (attr === "width" || attr === "height" || attr === "style") {
+            needsUpdate = true;
+            break;
+          }
+        }
+      }
+      if (!needsUpdate) return;
+      inst._syncDimensionsFromElement();
+    });
+
+    mo.observe(elem, { attributes: true, attributeFilter: ["width", "height", "style"] });
+    this._mutationObserver = mo;
+  }
+
+  /**
+   * Read the current dimensions from the original <embed>/<object> element
+   * and propagate them to the container <div> and canvas CSS display size.
+   */
+  _syncDimensionsFromElement() {
+    const { elem, canvas, container } = this;
+    if (!elem || !canvas || !container) return;
+
+    if (document.fullscreenElement || document.webkitFullscreenElement) return;
+
+    const widthRaw = elem.getAttribute("width") || elem.style.width || "";
+    const heightRaw = elem.getAttribute("height") || elem.style.height || "";
+    if (!widthRaw && !heightRaw) return;
+
+    const isRelativeWidth = widthRaw && !/^\d+$/.test(widthRaw.trim()) && !/^\d+px$/i.test(widthRaw.trim());
+    const isRelativeHeight = heightRaw && !/^\d+$/.test(heightRaw.trim()) && !/^\d+px$/i.test(heightRaw.trim());
+
+    // Update CSS display dimensions on container and canvas.
+    // The canvas ResizeObserver will pick up the layout change and
+    // update the internal buffer size + send the resize event to the host.
+    const cssWidth = isRelativeWidth ? widthRaw.trim() : (parseInt(widthRaw, 10) || this.origWidth) + "px";
+    const cssHeight = isRelativeHeight ? heightRaw.trim() : (parseInt(heightRaw, 10) || this.origHeight) + "px";
+
+    container.style.width = cssWidth;
+    container.style.height = cssHeight;
+    canvas.style.width = cssWidth;
+    canvas.style.height = cssHeight;
+
+    // After the CSS change has been applied, measure the actual laid-out size
+    // on the next frame and update the canvas buffer.  We cannot rely solely
+    // on ResizeObserver because Firefox content scripts may not fire it
+    // reliably due to Xray wrapper compartment isolation.  The existing
+    // ResizeObserver (observeResize) has a same-size guard so there is no
+    // conflict if both paths run.
+    const inst = this;
+    requestAnimationFrame(() => {
+      const measured = inst._measureRenderedSize();
+      const w = measured.w;
+      const h = measured.h;
+      if (w <= 0 || h <= 0) return;
+      if (w === canvas.width && h === canvas.height) return;
+
+      canvas.width = w;
+      canvas.height = h;
+      inst.origWidth = w;
+      inst.origHeight = h;
+
+      if (inst.port) {
+        inst.port.postMessage({ type: "resize", width: w, height: h, ...inst.collectViewInfo() });
+      }
+    });
+  }
+
+  /**
+   * Start (or restart) this Flash instance by opening a new port to the
+   * background service worker and wiring up message handlers.
+   */
+  async start() {
+    // Ensure the QOI WASM decoder is ready before we tell the native host to
+    // start sending frames.  Without this, early frames arrive before
+    // _qoiDecode is set and are silently dropped - leaving a black screen
+    // until something (resize, devtools) triggers a re-render.
+    await _qoiReady;
+
+    const port = chrome.runtime.connect({ name: "flash-instance" });
+    this.port = port;
+    FlashInstance._activePort = port;
+
+    const inst = this;
+
+    port.postMessage({
+      type: "start",
+      instanceId: this.instanceId,
+      url: this.swfUrl,
+      args: this.didCreateArgs,
+      width: this.origWidth,
+      height: this.origHeight,
+      language: navigator.language || "en-US",
+      ...this.collectViewInfo(),
+    });
+
+    // ---- Handle messages from the native host (via background) ----
+    port.onMessage.addListener((msg) => {
+      // Extension-originated error (e.g. host disconnect).
+      if (msg.error) {
+        console.error("[Flash Player]", msg.error);
+        if (!FlashInstance._navigatingAway) {
+          if (msg.notInstalled) {
+            inst.showNotInstalledOverlay();
+          } else {
+            inst.showCrashOverlay();
+          }
+        }
+        return;
+      }
+      if (msg.b64) {
+        handleBinaryMessage(inst, msg.b64);
+      }
+    });
+
+    port.onDisconnect.addListener(() => {
+      console.warn("[Flash Player] Native host disconnected for instance", inst.instanceId);
+      if (!FlashInstance._navigatingAway) inst.showCrashOverlay();
+    });
+
+    // On restart, clone the canvas to strip old event listeners.
+    if (this._started) {
+      const oldCanvas = this.canvas;
+      const freshCanvas = oldCanvas.cloneNode(false);
+      freshCanvas.getContext("2d");
+      this.canvas = freshCanvas;
+      this.ctx = freshCanvas.getContext("2d");
+      if (oldCanvas.parentNode) {
+        oldCanvas.parentNode.replaceChild(freshCanvas, oldCanvas);
+      }
+      // Re-observe the new canvas for resize.
+      if (this._resizeObserver) {
+        this._resizeObserver.disconnect();
+        this._resizeObserver.observe(freshCanvas);
+      }
+      this._bindInputEvents(freshCanvas, port);
+    } else {
+      this._started = true;
+      this._bindInputEvents(this.canvas, port);
+    }
+  }
+
+  /**
+   * Remove the crash overlay and restart the native host for this instance.
+   */
+  restart() {
+    const overlay = this.container.querySelector(".flash-crash-overlay");
+    if (overlay) overlay.remove();
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    this.start();
+  }
+
+  /**
+   * Tear down this instance's connection and observers.
+   * The instance remains in the registry for potential bfcache restart.
+   */
+  destroy() {
+    if (this.port) {
+      try { this.port.disconnect(); } catch { /* already gone */ }
+      if (FlashInstance._activePort === this.port) {
+        FlashInstance._activePort = null;
+      }
+      this.port = null;
+    }
+    // Remove crash overlay.
+    const overlay = this.container.querySelector(".flash-crash-overlay");
+    if (overlay) overlay.remove();
+    // Disconnect observers.
+    if (this._mutationObserver) { this._mutationObserver.disconnect(); this._mutationObserver = null; }
+    if (this._resizeObserver) { this._resizeObserver.disconnect(); this._resizeObserver = null; }
+    // Stop debug stats.
+    if (this._debugStats) { this._debugStats.stop(); this._debugStats = null; }
+    // Close associated audio/video streams.
+    for (const sid of this._audioStreamIds) audioClose(sid);
+    this._audioStreamIds.clear();
+    for (const sid of this._audioInputStreamIds) audioInputClose(sid);
+    this._audioInputStreamIds.clear();
+    for (const sid of this._videoCaptureStreamIds) videoCaptureClose(sid);
+    this._videoCaptureStreamIds.clear();
+  }
+
+  /**
+   * Create the debug stats DOM panel and attach it after the container.
+   */
+  _createDebugStatsPanel(anchorEl) {
+    const panel = document.createElement("div");
+    panel.className = "flash-debug-stats";
+    Object.assign(panel.style, {
+      fontFamily: "'Consolas', 'Menlo', 'Monaco', monospace",
+      fontSize: "11px",
+      lineHeight: "1.5",
+      color: "#c8d6e5",
+      background: "linear-gradient(135deg, #0b1a2e 0%, #142744 100%)",
+      border: "1px solid #1e3a5f",
+      borderTop: "none",
+      padding: "8px 12px",
+      maxWidth: this.container.style.width,
+      boxSizing: "border-box",
+      overflowX: "auto",
+      userSelect: "text",
+    });
+    panel.innerHTML = "<i>Collecting statistics…</i>";
+
+    const insertAfter = anchorEl || this.container;
+    if (insertAfter.nextSibling) {
+      insertAfter.parentNode.insertBefore(panel, insertAfter.nextSibling);
+    } else if (insertAfter.parentNode) {
+      insertAfter.parentNode.appendChild(panel);
+    }
+
+    const stats = new DebugStats();
+    stats.start(panel);
+    this._debugStats = stats;
+  }
+
+  /**
+   * Show a styled crash overlay on top of the canvas.
+   */
+  showCrashOverlay() {
+    const { container } = this;
+
+    if (container.querySelector(".flash-crash-overlay")) return;
+
+    const overlay = document.createElement("div");
+    overlay.className = "flash-crash-overlay";
+    Object.assign(overlay.style, {
+      position: "absolute",
+      inset: "0",
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      background: "linear-gradient(135deg, #0b1a3e 0%, #162d6b 40%, #1e3f8f 70%, #2557b8 100%)",
+      color: "#fff",
+      fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
+      textAlign: "center",
+      zIndex: "999999",
+      borderRadius: "0",
+      overflow: "hidden",
+      userSelect: "none",
+    });
+
+    // Subtle grid-line pattern for depth.
+    const patternOverlay = document.createElement("div");
+    Object.assign(patternOverlay.style, {
+      position: "absolute",
+      inset: "0",
+      backgroundImage:
+        "linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px), " +
+        "linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px)",
+      backgroundSize: "40px 40px",
+      pointerEvents: "none",
+    });
+    overlay.appendChild(patternOverlay);
+
+    // Icon
+    const icon = document.createElement("div");
+    icon.textContent = "\u26A0";
+    Object.assign(icon.style, {
+      fontSize: "48px",
+      marginBottom: "12px",
+      filter: "drop-shadow(0 2px 8px rgba(0,0,0,0.4))",
+      animation: "flash-crash-pulse 2s ease-in-out infinite",
+      position: "relative",
+      zIndex: "1",
+    });
+    overlay.appendChild(icon);
+
+    // Title
+    const title = document.createElement("div");
+    title.textContent = "Oops! Flash Player has crashed!";
+    Object.assign(title.style, {
+      fontSize: "22px",
+      fontWeight: "700",
+      letterSpacing: "0.3px",
+      marginBottom: "8px",
+      textShadow: "0 2px 12px rgba(0,0,0,0.5)",
+      position: "relative",
+      zIndex: "1",
+    });
+    overlay.appendChild(title);
+
+    // Subtitle
+    const subtitle = document.createElement("div");
+    subtitle.textContent = "The native host process ended unexpectedly.";
+    Object.assign(subtitle.style, {
+      fontSize: "13px",
+      opacity: "0.7",
+      marginBottom: "24px",
+      position: "relative",
+      zIndex: "1",
+    });
+    overlay.appendChild(subtitle);
+
+    const inst = this;
+    const btn = document.createElement("button");
+    btn.textContent = "\u21BB  Restart";
+    Object.assign(btn.style, {
+      padding: "10px 32px",
+      fontSize: "14px",
+      fontWeight: "600",
+      color: "#0b1a3e",
+      background: "linear-gradient(135deg, #7ec8f2, #b4dff7)",
+      border: "none",
+      borderRadius: "8px",
+      cursor: "pointer",
+      boxShadow: "0 4px 20px rgba(30, 63, 143, 0.45), inset 0 1px 0 rgba(255,255,255,0.4)",
+      transition: "0.5s ease",
+      position: "relative",
+      zIndex: "1",
+      letterSpacing: "0.5px",
+    });
+    btn.addEventListener("mouseenter", () => {
+      // Slightly brighten the button on hover, do not grow.
+      btn.style.background = "linear-gradient(135deg, #8ed0f4, #c0e5fb)";
+    });
+    btn.addEventListener("mouseleave", () => {
+      btn.style.background = "linear-gradient(135deg, #7ec8f2, #b4dff7)";
+    });
+    btn.addEventListener("click", () => {
+      inst.restart();
+    });
+    overlay.appendChild(btn);
+
+    // Inject keyframe animation (once)
+    if (!document.getElementById("flash-crash-styles")) {
+      const style = document.createElement("style");
+      style.id = "flash-crash-styles";
+      style.textContent = `
+        @keyframes flash-crash-pulse {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50% { opacity: 0.6; transform: scale(1.08); }
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    container.appendChild(overlay);
+  }
+
+  /**
+   * Show an overlay explaining that Flash Player (the native host) is missing.
+   */
+  showNotInstalledOverlay() {
+    const { container } = this;
+
+    if (container.querySelector(".flash-notinstalled-overlay")) return;
+    // Also remove any crash overlay that might have appeared first.
+    const existing = container.querySelector(".flash-crash-overlay");
+    if (existing) existing.remove();
+
+    const overlay = document.createElement("div");
+    overlay.className = "flash-notinstalled-overlay";
+    Object.assign(overlay.style, {
+      position: "absolute",
+      inset: "0",
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      background:
+        "linear-gradient(135deg, #0b1a3e 0%, #162d6b 40%, #1e3f8f 70%, #2557b8 100%)",
+      color: "#fff",
+      fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
+      textAlign: "center",
+      zIndex: "999999",
+      overflow: "hidden",
+      userSelect: "none",
+      padding: "24px",
+    });
+
+    // Subtle grid-line pattern.
+    const pattern = document.createElement("div");
+    Object.assign(pattern.style, {
+      position: "absolute",
+      inset: "0",
+      backgroundImage:
+        "linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px), " +
+        "linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px)",
+      backgroundSize: "40px 40px",
+      pointerEvents: "none",
+    });
+    overlay.appendChild(pattern);
+
+    // Warning icon.
+    const icon = document.createElement("div");
+    icon.textContent = "\u26A0"; // ⚠️
+    Object.assign(icon.style, {
+      fontSize: "48px",
+      marginBottom: "12px",
+      position: "relative",
+      zIndex: "1",
+    });
+    overlay.appendChild(icon);
+
+    // Title.
+    const title = document.createElement("div");
+    title.textContent = "Clean Flash Player not found";
+    Object.assign(title.style, {
+      fontSize: "20px",
+      fontWeight: "700",
+      letterSpacing: "0.3px",
+      marginBottom: "10px",
+      textShadow: "0 2px 12px rgba(0,0,0,0.5)",
+      position: "relative",
+      zIndex: "1",
+    });
+    overlay.appendChild(title);
+
+    // Explanation.
+    const desc = document.createElement("div");
+    desc.innerHTML =
+      "The Clean Flash Player browser extension is working,<br />" +
+      "but Flash Player is not yet installed on your system.";
+    Object.assign(desc.style, {
+      fontSize: "13px",
+      opacity: "0.8",
+      maxWidth: "420px",
+      lineHeight: "1.5",
+      marginBottom: "20px",
+      position: "relative",
+      zIndex: "1",
+    });
+    overlay.appendChild(desc);
+
+    // Download button.
+    const btn = document.createElement("a");
+    btn.href = "https://gitlab.com/cleanflash/installer/-/releases";
+    btn.target = "_blank";
+    btn.rel = "noopener noreferrer";
+    btn.textContent = "\u2B07  Download Installer";
+    Object.assign(btn.style, {
+      display: "inline-block",
+      padding: "10px 32px",
+      fontSize: "14px",
+      fontWeight: "600",
+      color: "#0b1a3e",
+      background: "linear-gradient(135deg, #7ec8f2, #b4dff7)",
+      border: "none",
+      borderRadius: "8px",
+      cursor: "pointer",
+      boxShadow:
+        "0 4px 20px rgba(30, 63, 143, 0.45), inset 0 1px 0 rgba(255,255,255,0.4)",
+      transition: "0.5s ease",
+      position: "relative",
+      zIndex: "1",
+      letterSpacing: "0.5px",
+      textDecoration: "none",
+    });
+    btn.addEventListener("mouseenter", () => {
+      btn.style.background = "linear-gradient(135deg, #8ed0f4, #c0e5fb)";
+    });
+    btn.addEventListener("mouseleave", () => {
+      btn.style.background = "linear-gradient(135deg, #7ec8f2, #b4dff7)";
+    });
+    overlay.appendChild(btn);
+
+    container.appendChild(overlay);
+  }
+
+  /**
+   * Bind mouse, keyboard, wheel, composition, and focus events on a canvas.
+   * The port parameter is captured by closure so that on restart, the
+   * fresh canvas's handlers use the new port.
+   */
+  _bindInputEvents(canvas, port) {
+    const inst = this;
+
+    canvas.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      canvas.focus();
+      const pos = canvasPos(canvas, e, inst);
+      port.postMessage({
+        type: "mousedown",
+        x: pos.x,
+        y: pos.y,
+        button: mapButton(e),
+        modifiers: getModifiers(e),
+      });
+    });
+
+    canvas.addEventListener("mouseup", (e) => {
+      e.preventDefault();
+      const pos = canvasPos(canvas, e, inst);
+      port.postMessage({
+        type: "mouseup",
+        x: pos.x,
+        y: pos.y,
+        button: mapButton(e),
+        modifiers: getModifiers(e),
+      });
+    });
+
+    // Throttle mousemove to one message per animation frame.
+    let _pendingMove = null;
+    let _moveTimer = 0;
+    function _flushMove() {
+      if (!_pendingMove) return;
+      const pos = canvasPos(canvas, _pendingMove, inst);
+      port.postMessage({
+        type: "mousemove",
+        x: pos.x,
+        y: pos.y,
+        modifiers: getModifiers(_pendingMove),
+      });
+      _pendingMove = null;
+      if (_moveTimer) { clearTimeout(_moveTimer); _moveTimer = 0; }
+    }
+    canvas._flushPendingMove = _flushMove;
+    canvas.addEventListener("mousemove", (e) => {
+      _pendingMove = e;
+      if (!_moveTimer) {
+        _moveTimer = setTimeout(() => { _moveTimer = 0; _flushMove(); }, 50);
+      }
+    });
+
+    canvas.addEventListener("mouseenter", () => {
+      port.postMessage({ type: "mouseenter" });
+    });
+
+    canvas.addEventListener("mouseleave", () => {
+      port.postMessage({ type: "mouseleave" });
+    });
+
+    canvas.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      port.postMessage({
+        type: "wheel",
+        deltaX: -e.deltaX,
+        deltaY: -e.deltaY,
+        modifiers: getModifiers(e),
+      });
+    }, { passive: false });
+
+    canvas.addEventListener("keydown", (e) => {
+      e.preventDefault();
+      port.postMessage({
+        type: "rawkeydown",
+        keyCode: e.keyCode,
+        code: e.code,
+        modifiers: getModifiers(e),
+      });
+
+      if (!e.ctrlKey && !e.metaKey) {
+        if (e.key.length === 1) {
+          port.postMessage({
+            type: "char",
+            keyCode: e.key.charCodeAt(0),
+            text: e.key,
+            code: e.code,
+            modifiers: getModifiers(e),
+          });
+        } else if (!e.altKey) {
+          let charCode = 0, charText = "";
+          switch (e.key) {
+            case "Enter": charCode = 13; charText = "\r"; break;
+            case "Tab": charCode = 9; charText = "\t"; break;
+            case "Backspace": charCode = 8; charText = ""; break;
+          }
+          if (charCode) {
+            port.postMessage({
+              type: "char",
+              keyCode: charCode,
+              text: charText,
+              code: e.code,
+              modifiers: getModifiers(e),
+            });
+          }
+        }
+      }
+    });
+
+    canvas.addEventListener("keyup", (e) => {
+      e.preventDefault();
+      port.postMessage({
+        type: "keyup",
+        keyCode: e.keyCode,
+        code: e.code,
+        modifiers: getModifiers(e),
+      });
+    });
+
+    canvas.addEventListener("compositionstart", (e) => {
+      port.postMessage({ type: "compositionstart" });
+    });
+
+    canvas.addEventListener("compositionupdate", (e) => {
+      port.postMessage({
+        type: "compositionupdate",
+        text: e.data || "",
+      });
+    });
+
+    canvas.addEventListener("compositionend", (e) => {
+      port.postMessage({
+        type: "compositionend",
+        text: e.data || "",
+      });
+    });
+
+    canvas.addEventListener("focus", () => {
+      port.postMessage({ type: "focus", hasFocus: true });
+    });
+
+    canvas.addEventListener("blur", () => {
+      port.postMessage({ type: "focus", hasFocus: false });
+    });
+
+    canvas.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      const pos = canvasPos(canvas, e, inst);
+      port.postMessage({
+        type: "contextmenu",
+        x: pos.x,
+        y: pos.y,
+        button: mapButton(e),
+        modifiers: getModifiers(e),
+      });
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Browser view-change listeners (visibility, scroll, fullscreen)
 // ---------------------------------------------------------------------------
 
-/**
- * Send a viewUpdate message to all active Flash instances when the
- * browser view state changes (tab visibility, scroll, fullscreen).
- */
-function broadcastViewUpdate() {
-  for (const [, meta] of instanceMeta) {
-    if (meta.port) {
-      console.log("Broadcasting view update for instance with", collectViewInfo(meta.canvas));
-      meta.port.postMessage({ type: "viewUpdate", ...collectViewInfo(meta.canvas) });
-    }
-  }
-}
-
-function scheduleBroadcastViewUpdate(delayMs = 100) {
-  if (broadcastViewUpdate._timer) return;
-  broadcastViewUpdate._timer = setTimeout(() => {
-    broadcastViewUpdate._timer = null;
-    broadcastViewUpdate();
-  }, delayMs);
-}
-
 // Page visibility changes (tab switch, minimize).
-document.addEventListener("visibilitychange", broadcastViewUpdate);
+document.addEventListener("visibilitychange", () => FlashInstance.broadcastViewUpdate());
 
-// Scroll position changes.
+// Scroll position changes - throttled to avoid flooding the native host.
 window.addEventListener("scroll", () => {
-  // Throttle scroll events to avoid flooding the native host.
-  scheduleBroadcastViewUpdate(100);
+  FlashInstance.scheduleBroadcastViewUpdate(100);
 }, { passive: true });
 
 // Viewport changes (window resize and browser/page zoom).
 window.addEventListener("resize", () => {
-  scheduleBroadcastViewUpdate(50);
+  FlashInstance.scheduleBroadcastViewUpdate(50);
 }, { passive: true });
 
 // Visual viewport changes are a strong signal for zoom on mobile and desktop.
+// Observed separately from window.resize because VisualViewport fires when
+// pinch-zoom or on-screen keyboard changes the visual area without changing
+// the layout viewport.
 if (window.visualViewport) {
   window.visualViewport.addEventListener("resize", () => {
-    scheduleBroadcastViewUpdate(50);
+    FlashInstance.scheduleBroadcastViewUpdate(50);
   }, { passive: true });
   window.visualViewport.addEventListener("scroll", () => {
-    scheduleBroadcastViewUpdate(50);
+    FlashInstance.scheduleBroadcastViewUpdate(50);
   }, { passive: true });
 }
 
 // Fallback watcher for zoom implementations that change devicePixelRatio
-// without reliably dispatching resize events.
+// without reliably dispatching resize events.  There is no native DPR-change
+// event, so we poll every 250 ms with an epsilon comparison.
 let lastDevicePixelRatio = window.devicePixelRatio || 1.0;
 setInterval(() => {
   const dpr = window.devicePixelRatio || 1.0;
   if (Math.abs(dpr - lastDevicePixelRatio) > 0.0001) {
     lastDevicePixelRatio = dpr;
-    scheduleBroadcastViewUpdate(0);
+    FlashInstance.scheduleBroadcastViewUpdate(0);
   }
 }, 250);
 
-// Fullscreen changes - resize the canvas to fill the screen on enter, and
-// restore its original size on exit.
-function handleFullscreenChange() {
-  const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
-  for (const [, meta] of instanceMeta) {
-    const { canvas, container } = meta;
-    if (fsEl && (fsEl === container || fsEl.contains(canvas))) {
-      // Save pre-fullscreen CSS sizes so we can restore them on exit.
-      meta._preFsContainerW = container.style.width;
-      meta._preFsContainerH = container.style.height;
-      meta._preFsCanvasW = canvas.style.width;
-      meta._preFsCanvasH = canvas.style.height;
-      // Entering fullscreen - expand container and canvas to screen size.
-      container.style.width = "100vw";
-      container.style.height = "100vh";
-      container.style.backgroundColor = "#000";
-      canvas.style.width = "100%";
-      canvas.style.height = "100%";
-      const w = screen.width;
-      const h = screen.height;
-      canvas.width = w;
-      canvas.height = h;
-      canvas.focus();
-      if (meta.port) {
-        meta.port.postMessage({ type: "resize", width: w, height: h, ...collectViewInfo(canvas) });
-      }
-    } else if (!fsEl && meta._preFsContainerW != null) {
-      // Exiting fullscreen - restore original dimensions.
-      container.style.width = meta._preFsContainerW;
-      container.style.height = meta._preFsContainerH;
-      container.style.backgroundColor = "";
-      canvas.style.width = meta._preFsCanvasW;
-      canvas.style.height = meta._preFsCanvasH;
-      canvas.width = meta.origWidth;
-      canvas.height = meta.origHeight;
-      meta._preFsContainerW = null;
-      if (meta.port) {
-        meta.port.postMessage({ type: "resize", width: meta.origWidth, height: meta.origHeight, ...collectViewInfo(canvas) });
-      }
-    }
-  }
-  broadcastViewUpdate();
-}
-document.addEventListener("fullscreenchange", handleFullscreenChange);
-document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
+// Fullscreen changes - resize canvas to fill screen on enter, restore on exit.
+document.addEventListener("fullscreenchange", () => FlashInstance.handleFullscreenChange());
+document.addEventListener("webkitfullscreenchange", () => FlashInstance.handleFullscreenChange());
 
 // Pointer lock changes - notify the native host so Flash knows if the
 // cursor was locked or unlocked (e.g. user pressed Escape).
-function handlePointerLockChange() {
-  const locked = !!document.pointerLockElement;
-  for (const [, meta] of instanceMeta) {
-    if (meta.port) {
-      meta.port.postMessage({ type: "cursorLockChanged", locked });
-    }
-  }
-}
-document.addEventListener("pointerlockchange", handlePointerLockChange);
-
-// ---------------------------------------------------------------------------
-// Instance lifecycle (start / restart)
-// ---------------------------------------------------------------------------
-
-/**
- * Start (or restart) a Flash instance by opening a new port to the
- * background service worker and wiring up message handlers.
- */
-async function startInstance(instanceId, meta) {
-  const { canvas, ctx, swfUrl, didCreateArgs, origWidth, origHeight } = meta;
-
-  // Ensure the QOI WASM decoder is ready before we tell the native host to
-  // start sending frames.  Without this, early frames arrive before
-  // _qoiDecode is set and are silently dropped - leaving a black screen
-  // until something (resize, devtools) triggers a re-render.
-  await _qoiReady;
-
-  const port = chrome.runtime.connect({ name: "flash-instance" });
-  meta.port = port;
-  activePort = port;
-
-  // Tell the background to start the native host and open the SWF.
-  port.postMessage({
-    type: "start",
-    instanceId,
-    url: swfUrl,
-    args: didCreateArgs,
-    width: origWidth,
-    height: origHeight,
-    language: navigator.language || "en-US",
-    ...collectViewInfo(canvas),
-  });
-
-  // ---- Handle messages from the native host (via background) ----
-  port.onMessage.addListener((msg) => {
-    // Extension-originated error (e.g. host disconnect).
-    if (msg.error) {
-      console.error("[Flash Player]", msg.error);
-      if (!navigatingAway) {
-        if (msg.notInstalled) {
-          showNotInstalledOverlay(instanceId);
-        } else {
-          showCrashOverlay(instanceId);
-        }
-      }
-      return;
-    }
-    // Binary message from the host, base64-encoded.
-    // Always read from meta so we use the current canvas/ctx after restarts.
-    if (msg.b64) {
-      handleBinaryMessage(meta.ctx, meta.canvas, msg.b64, port);
-    }
-  });
-
-  port.onDisconnect.addListener(() => {
-    console.warn("[Flash Player] Native host disconnected for instance", instanceId);
-    if (!navigatingAway) showCrashOverlay(instanceId);
-  });
-
-  // ---- Wire up input events on the canvas ----
-  // On restart, clone the canvas to strip old event listeners.
-  if (meta._started) {
-    const freshCanvas = canvas.cloneNode(false);
-    freshCanvas.getContext("2d"); // ensure context
-    meta.canvas = freshCanvas;
-    meta.ctx = freshCanvas.getContext("2d");
-    if (canvas.parentNode) {
-      canvas.parentNode.replaceChild(freshCanvas, canvas);
-    }
-    bindInputEvents(freshCanvas, port, meta);
-  } else {
-    meta._started = true;
-    bindInputEvents(canvas, port, meta);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Crash overlay
-// ---------------------------------------------------------------------------
-
-/**
- * Show a styled crash overlay on top of the canvas for the given instance.
- */
-function showCrashOverlay(instanceId) {
-  const meta = instanceMeta.get(instanceId);
-  if (!meta) return;
-
-  const { container } = meta;
-
-  // Don't add a second overlay.
-  if (container.querySelector(".flash-crash-overlay")) return;
-
-  const overlay = document.createElement("div");
-  overlay.className = "flash-crash-overlay";
-  Object.assign(overlay.style, {
-    position: "absolute",
-    inset: "0",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    background: "linear-gradient(135deg, #0b1a3e 0%, #162d6b 40%, #1e3f8f 70%, #2557b8 100%)",
-    color: "#fff",
-    fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-    textAlign: "center",
-    zIndex: "999999",
-    borderRadius: "0",
-    overflow: "hidden",
-    userSelect: "none",
-  });
-
-  // Subtle grid-line pattern for depth.
-  const patternOverlay = document.createElement("div");
-  Object.assign(patternOverlay.style, {
-    position: "absolute",
-    inset: "0",
-    backgroundImage:
-      "linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px), " +
-      "linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px)",
-    backgroundSize: "40px 40px",
-    pointerEvents: "none",
-  });
-  overlay.appendChild(patternOverlay);
-
-  // Icon
-  const icon = document.createElement("div");
-  icon.textContent = "\u26A0"; // ⚠
-  Object.assign(icon.style, {
-    fontSize: "48px",
-    marginBottom: "12px",
-    filter: "drop-shadow(0 2px 8px rgba(0,0,0,0.4))",
-    animation: "flash-crash-pulse 2s ease-in-out infinite",
-    position: "relative",
-    zIndex: "1",
-  });
-  overlay.appendChild(icon);
-
-  // Title
-  const title = document.createElement("div");
-  title.textContent = "Oops! Flash Player has crashed!";
-  Object.assign(title.style, {
-    fontSize: "22px",
-    fontWeight: "700",
-    letterSpacing: "0.3px",
-    marginBottom: "8px",
-    textShadow: "0 2px 12px rgba(0,0,0,0.5)",
-    position: "relative",
-    zIndex: "1",
-  });
-  overlay.appendChild(title);
-
-  // Subtitle
-  const subtitle = document.createElement("div");
-  subtitle.textContent = "The native host process ended unexpectedly.";
-  Object.assign(subtitle.style, {
-    fontSize: "13px",
-    opacity: "0.7",
-    marginBottom: "24px",
-    position: "relative",
-    zIndex: "1",
-  });
-  overlay.appendChild(subtitle);
-
-  // Restart button
-  const btn = document.createElement("button");
-  btn.textContent = "\u21BB  Restart";
-  Object.assign(btn.style, {
-    padding: "10px 32px",
-    fontSize: "14px",
-    fontWeight: "600",
-    color: "#0b1a3e",
-    background: "linear-gradient(135deg, #7ec8f2, #b4dff7)",
-    border: "none",
-    borderRadius: "8px",
-    cursor: "pointer",
-    boxShadow: "0 4px 20px rgba(30, 63, 143, 0.45), inset 0 1px 0 rgba(255,255,255,0.4)",
-    transition: "0.5s ease",
-    position: "relative",
-    zIndex: "1",
-    letterSpacing: "0.5px",
-  });
-  btn.addEventListener("mouseenter", () => {
-    // Slightly brighten the button on hover, do not grow.
-    btn.style.background = "linear-gradient(135deg, #8ed0f4, #c0e5fb)";
-  });
-  btn.addEventListener("mouseleave", () => {
-    btn.style.background = "linear-gradient(135deg, #7ec8f2, #b4dff7)";
-  });
-  btn.addEventListener("click", () => {
-    restartInstance(instanceId);
-  });
-  overlay.appendChild(btn);
-
-  // Inject keyframe animation (once)
-  if (!document.getElementById("flash-crash-styles")) {
-    const style = document.createElement("style");
-    style.id = "flash-crash-styles";
-    style.textContent = `
-      @keyframes flash-crash-pulse {
-        0%, 100% { opacity: 1; transform: scale(1); }
-        50% { opacity: 0.6; transform: scale(1.08); }
-      }
-    `;
-    document.head.appendChild(style);
-  }
-
-  container.appendChild(overlay);
-}
-
-/**
- * Show an overlay explaining that the extension is installed but Flash
- * Player (the native host) is missing.
- */
-function showNotInstalledOverlay(instanceId) {
-  const meta = instanceMeta.get(instanceId);
-  if (!meta) return;
-
-  const { container } = meta;
-
-  // Don't stack overlays.
-  if (container.querySelector(".flash-notinstalled-overlay")) return;
-  // Also remove any crash overlay that might have appeared first.
-  const existing = container.querySelector(".flash-crash-overlay");
-  if (existing) existing.remove();
-
-  const overlay = document.createElement("div");
-  overlay.className = "flash-notinstalled-overlay";
-  Object.assign(overlay.style, {
-    position: "absolute",
-    inset: "0",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    background:
-      "linear-gradient(135deg, #0b1a3e 0%, #162d6b 40%, #1e3f8f 70%, #2557b8 100%)",
-    color: "#fff",
-    fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-    textAlign: "center",
-    zIndex: "999999",
-    overflow: "hidden",
-    userSelect: "none",
-    padding: "24px",
-  });
-
-  // Subtle grid-line pattern.
-  const pattern = document.createElement("div");
-  Object.assign(pattern.style, {
-    position: "absolute",
-    inset: "0",
-    backgroundImage:
-      "linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px), " +
-      "linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px)",
-    backgroundSize: "40px 40px",
-    pointerEvents: "none",
-  });
-  overlay.appendChild(pattern);
-
-  // Warning icon.
-  const icon = document.createElement("div");
-  icon.textContent = "\u26A0"; // ⚠️
-  Object.assign(icon.style, {
-    fontSize: "48px",
-    marginBottom: "12px",
-    position: "relative",
-    zIndex: "1",
-  });
-  overlay.appendChild(icon);
-
-  // Title.
-  const title = document.createElement("div");
-  title.textContent = "Clean Flash Player not found";
-  Object.assign(title.style, {
-    fontSize: "20px",
-    fontWeight: "700",
-    letterSpacing: "0.3px",
-    marginBottom: "10px",
-    textShadow: "0 2px 12px rgba(0,0,0,0.5)",
-    position: "relative",
-    zIndex: "1",
-  });
-  overlay.appendChild(title);
-
-  // Explanation.
-  const desc = document.createElement("div");
-  desc.innerHTML =
-    "The Clean Flash Player browser extension is working,<br />" +
-    "but Flash Player is not yet installed on your system.";
-  Object.assign(desc.style, {
-    fontSize: "13px",
-    opacity: "0.8",
-    maxWidth: "420px",
-    lineHeight: "1.5",
-    marginBottom: "20px",
-    position: "relative",
-    zIndex: "1",
-  });
-  overlay.appendChild(desc);
-
-  // Download button.
-  const btn = document.createElement("a");
-  btn.href = "https://gitlab.com/cleanflash/installer/-/releases";
-  btn.target = "_blank";
-  btn.rel = "noopener noreferrer";
-  btn.textContent = "\u2B07  Download Installer";
-  Object.assign(btn.style, {
-    display: "inline-block",
-    padding: "10px 32px",
-    fontSize: "14px",
-    fontWeight: "600",
-    color: "#0b1a3e",
-    background: "linear-gradient(135deg, #7ec8f2, #b4dff7)",
-    border: "none",
-    borderRadius: "8px",
-    cursor: "pointer",
-    boxShadow:
-      "0 4px 20px rgba(30, 63, 143, 0.45), inset 0 1px 0 rgba(255,255,255,0.4)",
-    transition: "0.5s ease",
-    position: "relative",
-    zIndex: "1",
-    letterSpacing: "0.5px",
-    textDecoration: "none",
-  });
-  btn.addEventListener("mouseenter", () => {
-    btn.style.background = "linear-gradient(135deg, #8ed0f4, #c0e5fb)";
-  });
-  btn.addEventListener("mouseleave", () => {
-    btn.style.background = "linear-gradient(135deg, #7ec8f2, #b4dff7)";
-  });
-  overlay.appendChild(btn);
-
-  container.appendChild(overlay);
-}
-
-/**
- * Remove the crash overlay and restart the native host for an instance.
- */
-function restartInstance(instanceId) {
-  const meta = instanceMeta.get(instanceId);
-  if (!meta) return;
-
-  const { container } = meta;
-
-  // Remove the crash overlay.
-  const overlay = container.querySelector(".flash-crash-overlay");
-  if (overlay) overlay.remove();
-
-  // Clear the canvas.
-  meta.ctx.clearRect(0, 0, meta.canvas.width, meta.canvas.height);
-
-  // Re-connect.
-  startInstance(instanceId, meta);
-}
+document.addEventListener("pointerlockchange", () => FlashInstance.handlePointerLockChange());
 
 // ---------------------------------------------------------------------------
 // Binary message decoding
@@ -1287,6 +1542,9 @@ function tagHex(tag) {
   return `0x${tag.toString(16).padStart(2, "0")}`;
 }
 
+/**
+ * Log a host-originated event to the console (only when LOG_HOST_EVENTS is on).
+ */
 function logHostEvent(tag, payloadBytes) {
   if (!LOG_HOST_EVENTS) return;
   const name = TAG_NAMES[tag] || `UNKNOWN(${tagHex(tag)})`;
@@ -1307,7 +1565,7 @@ function readI32(dv, off) {
   return dv.getInt32(off, true);
 }
 
-// Pre-computed base64 decode lookup table (avoids atob + charCodeAt overhead).
+/** Pre-computed base-64 character → 6-bit value lookup table. */
 const _B64 = new Uint8Array(128);
 for (let _i = 0; _i < 64; _i++) _B64["ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".charCodeAt(_i)] = _i;
 
@@ -1321,9 +1579,7 @@ const _hasToBase64 = typeof Uint8Array.prototype.toBase64 === "function";
  * Decode a base64 string into a Uint8Array.
  *
  * Fast path: native Uint8Array.fromBase64 (Chrome 128+, all-native, ~5× faster).
- * Fallback : pure-JS lookup-table decoder - skips the intermediate binary string
- *            that atob() creates and processes 4 input chars → 3 output bytes per
- *            iteration instead of 1 byte per iteration.
+ * Fallback : pure-JS lookup-table decoder.
  */
 function b64ToUint8(b64) {
   if (_hasFromBase64) return Uint8Array.fromBase64(b64);
@@ -1424,7 +1680,13 @@ function audioInit(streamId, sampleRate, frameCount) {
 
 /**
  * Schedule a buffer of PCM samples for playback on a stream.
- * `pcmBytes` is a Uint8Array of interleaved stereo i16 LE samples.
+ *
+ * Uses an adaptive jitter buffer: tracks the variance of inter-arrival
+ * times and keeps enough scheduling headroom to absorb spikes without
+ * audible gaps, while keeping latency as low as possible.
+ *
+ * @param {number} streamId - The stream to write to.
+ * @param {Uint8Array} pcmBytes - Interleaved stereo i16 LE samples.
  */
 function audioWriteSamples(streamId, pcmBytes) {
   const stream = audioStreams.get(streamId);
@@ -1599,15 +1861,14 @@ function audioInputOpen(streamId, sampleRate, frameCount, port) {
       processor.onaudioprocess = (e) => {
         if (!streamState.capturing) return;
 
-        const input = e.inputBuffer.getChannelData(0);
         // Convert float32 [-1, 1] to i16 LE bytes.
+        const input = e.inputBuffer.getChannelData(0);
         const i16 = new Int16Array(input.length);
         for (let i = 0; i < input.length; i++) {
           const s = Math.max(-1, Math.min(1, input[i]));
           i16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
         }
 
-        // Encode as base64 and send to the host.
         const bytes = new Uint8Array(i16.buffer);
         const b64 = uint8ToB64(bytes);
 
@@ -1845,6 +2106,8 @@ function videoCaptureOpen(streamId, width, height, fps, port) {
 
 /**
  * Start the periodic frame capture loop for a video stream.
+ * Grabs frames from the video element at the requested FPS, converts
+ * to I420, and sends them as base64 to the native host.
  */
 function startVideoCaptureLoop(streamId, streamState) {
   if (streamState.intervalId !== null) return;
@@ -1904,7 +2167,6 @@ function videoCaptureStart(streamId) {
     return;
   }
 
-  // May already be capturing if auto-started in videoCaptureOpen.
   if (stream.capturing) {
     console.log("[Flash Player] Video capture already running:", streamId);
     return;
@@ -1996,6 +2258,7 @@ function showFlashContextMenu(items, x, y, canvas, port) {
     removeFlashContextMenu();
   }
 
+  /** Recursively build nested DOM menu items from the host's data structure. */
   function buildMenuItems(parentEl, itemList) {
     for (const item of itemList) {
       if (item.type === "separator") {
@@ -2099,14 +2362,14 @@ function showFlashContextMenu(items, x, y, canvas, port) {
   buildMenuItems(menu, items);
 
   // Position relative to the canvas.
-  const rect = canvas.getBoundingClientRect();
   // Map Flash view coordinates (DIPs) to CSS pixels for positioning.
   // Use the logical Flash dimensions, not the canvas buffer size which
   // may be at a higher device resolution.
+  const rect = canvas.getBoundingClientRect();
   const instId = canvas.getAttribute("data-flash-player");
-  const meta = instId != null ? instanceMeta.get(Number(instId)) : null;
-  const logicalW = (meta && meta.origWidth) || canvas.width;
-  const logicalH = (meta && meta.origHeight) || canvas.height;
+  const inst = instId != null ? FlashInstance.getById(Number(instId)) : null;
+  const logicalW = (inst && inst.origWidth) || canvas.width;
+  const logicalH = (inst && inst.origHeight) || canvas.height;
   const scaleX = rect.width / (logicalW || 1);
   const scaleY = rect.height / (logicalH || 1);
   let menuX = rect.left + x * scaleX;
@@ -2165,11 +2428,22 @@ function removeFlashContextMenu() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Binary message handler
+// ---------------------------------------------------------------------------
+
 /**
  * Handle a fully reassembled binary message (as a base64 string).
  * The binary payload is LZ4-compressed (with prepended uncompressed size).
+ *
+ * @param {FlashInstance} instance - The instance this message belongs to.
+ * @param {string} b64 - Base64-encoded binary payload.
  */
-function handleBinaryMessage(ctx, canvas, b64, port) {
+function handleBinaryMessage(instance, b64) {
+  const ctx = instance.ctx;
+  const canvas = instance.canvas;
+  const port = instance.port;
+
   const b64Len = b64.length;
   const t0 = FLASH_DEBUG ? performance.now() : 0;
   const compressed = b64ToUint8(b64);
@@ -2185,11 +2459,9 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
   logHostEvent(tag, bytes.length);
 
   // ---- Debug stats recording ----
-  // Find the stats object for this canvas (there may be multiple instances).
   let _ds = null;
   if (FLASH_DEBUG) {
-    const instId = canvas.getAttribute("data-flash-player");
-    if (instId != null) _ds = debugStatsMap.get(Number(instId));
+    _ds = instance._debugStats;
     if (_ds) {
       _ds.recordMessage(b64Len, bytes.length, tag, decodeMs);
       _ds.markProcessingStart();
@@ -2253,9 +2525,7 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
         ctx.putImageData(imageData, x, y);
       }
       if (FLASH_DEBUG && _ds) _ds.recordFrameRender(performance.now() - rt0);
-      
-      // Flush any pending mousemove so the host gets the latest position
-      // in sync with frame rendering.
+
       if (canvas._flushPendingMove) canvas._flushPendingMove();
 
       break;
@@ -2263,30 +2533,33 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
 
     case TAG_STATE: {
       // 1 byte tag + 1 byte code + u32 width + u32 height
+      // State codes: 0=idle, 1=loading, 2=running, 3=error.
+      // When the player reaches "running" (code 2) we immediately send
+      // a viewUpdate so it has accurate viewport data.
       const code = bytes[1];
       const width = readU32(dv, 2);
       const height = readU32(dv, 6);
       const stateNames = ["idle", "loading", "running", "error"];
       const stateName = stateNames[code] || "unknown";
-      if (code === 2) { // running - player has booted, send view state immediately
+      if (code === 2) {
         console.log(`[Flash Player] State: ${stateName}, view: ${width}x${height}`);
-        console.log(`[Flash Player] View info:`, collectViewInfo(canvas));
-        port.postMessage({ type: "viewUpdate", ...collectViewInfo(canvas) });
-      } else if (code === 3) { // error
+        console.log(`[Flash Player] View info:`, instance.collectViewInfo());
+        port.postMessage({ type: "viewUpdate", ...instance.collectViewInfo() });
+      } else if (code === 3) {
         console.error("[Flash Player] State: error");
       }
       break;
     }
 
     case TAG_CURSOR: {
-      // 1 byte tag + i32 cursor type
+      // 1 byte tag + i32 cursor type (PP_CursorType_Dev enum).
       const cursor = readI32(dv, 1);
       canvas.style.cursor = ppCursorToCss(cursor);
       break;
     }
 
     case TAG_ERROR: {
-      // 1 byte tag + u32 msg_len + UTF-8 bytes
+      // 1 byte tag + u32 msg_len + UTF-8 error message.
       const msgLen = readU32(dv, 1);
       const msgBytes = bytes.subarray(5, 5 + msgLen);
       const message = _textDecoder.decode(msgBytes);
@@ -2295,7 +2568,7 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
     }
 
     case TAG_SCRIPT: {
-      // 1 byte tag + u32 json_len + UTF-8 JSON bytes
+      // 1 byte tag + u32 json_len + UTF-8 JSON request from Flash scripting.
       const jsonLen = readU32(dv, 1);
       const jsonBytes = bytes.subarray(5, 5 + jsonLen);
       const jsonStr = _textDecoder.decode(jsonBytes);
@@ -2310,6 +2583,8 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
 
     case TAG_NAVIGATE: {
       // 1 byte tag + u32 url_len + UTF-8 url + u32 target_len + UTF-8 target
+      // Flash navigation targets follow standard HTML window naming:
+      // _blank, _self, _top, _parent, or a named window.
       const urlLen = readU32(dv, 1);
       const url = _textDecoder.decode(bytes.subarray(5, 5 + urlLen));
       const targetLen = readU32(dv, 5 + urlLen);
@@ -2335,16 +2610,15 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
     // ---- Audio messages ----
 
     case TAG_AUDIO_INIT: {
-      // 1 byte tag + u32 stream_id + u32 sample_rate + u32 frame_count
       const streamId = readU32(dv, 1);
       const sampleRate = readU32(dv, 5);
       const frameCount = readU32(dv, 9);
       audioInit(streamId, sampleRate, frameCount);
+      instance._audioStreamIds.add(streamId);
       break;
     }
 
     case TAG_AUDIO_SAMPLES: {
-      // 1 byte tag + u32 stream_id + PCM bytes
       const streamId = readU32(dv, 1);
       const pcmBytes = bytes.subarray(5);
       audioWriteSamples(streamId, pcmBytes);
@@ -2366,17 +2640,18 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
     case TAG_AUDIO_CLOSE: {
       const streamId = readU32(dv, 1);
       audioClose(streamId);
+      instance._audioStreamIds.delete(streamId);
       break;
     }
 
     // ---- Audio input messages ----
 
     case TAG_AUDIO_INPUT_OPEN: {
-      // 1 byte tag + u32 stream_id + u32 sample_rate + u32 frame_count
       const streamId = readU32(dv, 1);
       const sampleRate = readU32(dv, 5);
       const frameCount = readU32(dv, 9);
       audioInputOpen(streamId, sampleRate, frameCount, port);
+      instance._audioInputStreamIds.add(streamId);
       break;
     }
 
@@ -2395,18 +2670,19 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
     case TAG_AUDIO_INPUT_CLOSE: {
       const streamId = readU32(dv, 1);
       audioInputClose(streamId);
+      instance._audioInputStreamIds.delete(streamId);
       break;
     }
 
     // ---- Video capture messages ----
 
     case TAG_VIDEO_CAPTURE_OPEN: {
-      // 1 byte tag + u32 stream_id + u32 width + u32 height + u32 fps
       const streamId = readU32(dv, 1);
       const width = readU32(dv, 5);
       const height = readU32(dv, 9);
       const fps = readU32(dv, 13);
       videoCaptureOpen(streamId, width, height, fps, port);
+      instance._videoCaptureStreamIds.add(streamId);
       break;
     }
 
@@ -2425,11 +2701,12 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
     case TAG_VIDEO_CAPTURE_CLOSE: {
       const streamId = readU32(dv, 1);
       videoCaptureClose(streamId);
+      instance._videoCaptureStreamIds.delete(streamId);
       break;
     }
 
     case TAG_CONTEXT_MENU: {
-      // 1 byte tag + u32 json_len + UTF-8 JSON
+      // 1 byte tag + u32 json_len + UTF-8 JSON with menu item tree.
       const jsonLen = readU32(dv, 1);
       const jsonBytes = bytes.subarray(5, 5 + jsonLen);
       const jsonStr = _textDecoder.decode(jsonBytes);
@@ -2438,7 +2715,6 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
         showFlashContextMenu(menuData.items, menuData.x, menuData.y, canvas, port);
       } catch (e) {
         console.error("[Flash Player] Bad context menu data:", e, jsonStr);
-        // Send cancel response so the host doesn't hang.
         port.postMessage({ type: "menuResponse", selectedId: null });
       }
       break;
@@ -2471,7 +2747,6 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
         );
         doc.close();
 
-        // Wait for the image to load before printing.
         const img = doc.querySelector("img");
         const doPrint = () => {
           try {
@@ -2480,7 +2755,6 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
           } catch (e) {
             console.error("[Flash Player] Print failed:", e);
           }
-          // Clean up after a delay to let the print dialog finish.
           setTimeout(() => { iframe.remove(); }, 5000);
         };
 
@@ -2503,7 +2777,6 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
       console.warn("[Flash Player] Unknown binary message tag:", tag);
   }
 
-  // ---- Debug: mark processing done ----
   if (FLASH_DEBUG && _ds) _ds.markProcessingEnd();
 }
 
@@ -2515,6 +2788,7 @@ function handleBinaryMessage(ctx, canvas, b64, port) {
 // shared hidden DOM element using synchronous dispatchEvent.
 // ---------------------------------------------------------------------------
 
+/** Element ID used for the hidden DOM element that bridges ISOLATED ↔ MAIN worlds. */
 const COMM_ID = "__flash_player_comm__";
 
 /**
@@ -2543,7 +2817,7 @@ function getCommElement() {
 function sendToPageScript(req) {
   const comm = getCommElement();
   comm.setAttribute("data-req", JSON.stringify(req));
-  comm.setAttribute("data-resp", ""); // clear previous
+  comm.setAttribute("data-resp", "");
   comm.dispatchEvent(new CustomEvent("__flash_req"));
   const respStr = comm.getAttribute("data-resp");
   if (!respStr) return null;
@@ -2555,32 +2829,13 @@ function sendToPageScript(req) {
 }
 
 /**
- * Find instance metadata for the given native messaging port.
- */
-function getMetaForPort(port) {
-  for (const meta of instanceMeta.values()) {
-    if (meta.port === port) {
-      return meta;
-    }
-  }
-  return null;
-}
-
-/**
- * Find the instanceId for the given native messaging port.
- */
-function getInstanceIdForPort(port) {
-  for (const [id, meta] of instanceMeta) {
-    if (meta.port === port) {
-      return id;
-    }
-  }
-  return null;
-}
-
-/**
  * Handle a scripting request from the native host.
- * Forwards to the MAIN-world page script and sends the response back.
+ * Routes the request to the appropriate handler (clipboard, cookies,
+ * document queries, etc.) or forwards it to the MAIN-world page script
+ * for JavaScript evaluation, and sends the response back.
+ *
+ * @param {Object} req - The parsed JSON request from the host.
+ * @param {Port} port - Native messaging port for sending the response.
  */
 async function handleScriptRequest(req, port) {
   const id = req.id;
@@ -2597,9 +2852,9 @@ async function handleScriptRequest(req, port) {
   }
 
   if (op === "getPluginUrl") {
-    const meta = getMetaForPort(port);
-    if (meta && typeof meta.swfUrl === "string" && meta.swfUrl.length > 0) {
-      sendScriptResponse(port, id, { type: "string", v: meta.swfUrl });
+    const inst = FlashInstance.getByPort(port);
+    if (inst && typeof inst.swfUrl === "string" && inst.swfUrl.length > 0) {
+      sendScriptResponse(port, id, { type: "string", v: inst.swfUrl });
     } else {
       sendScriptResponse(port, id, { type: "undefined" });
     }
@@ -2607,14 +2862,11 @@ async function handleScriptRequest(req, port) {
   }
 
   // ---------------------------------------------------------------
-  // Clipboard: use the async Clipboard API (navigator.clipboard)
-  // when available so we always read the real system clipboard and
-  // never steal focus.  Fall back to the page-script.js handler.
+  // Clipboard
   // ---------------------------------------------------------------
 
   if (op === "clipboardRead") {
-    const fmt = req.format; // "plaintext" | "html"
-    // Try the modern async Clipboard API first.
+    const fmt = req.format;
     if (fmt === "plaintext" && navigator.clipboard && navigator.clipboard.readText) {
       try {
         const text = await navigator.clipboard.readText();
@@ -2639,7 +2891,6 @@ async function handleScriptRequest(req, port) {
         }
       } catch (_) { /* fall through */ }
     }
-    // Fall back to page-script.js (internal buffer + execCommand).
     const resp = sendToPageScript(req);
     if (resp && resp.value) {
       sendScriptResponse(port, id, resp.value);
@@ -2650,10 +2901,7 @@ async function handleScriptRequest(req, port) {
   }
 
   if (op === "clipboardWrite") {
-    // Forward to page‑script.js to update its internal buffer and
-    // attempt a legacy write.
     const resp = sendToPageScript(req);
-    // Also write via the async Clipboard API (doesn't steal focus).
     const text = req.plaintext || req.html || "";
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).catch(() => { });
@@ -2672,7 +2920,6 @@ async function handleScriptRequest(req, port) {
       sendScriptResponse(port, id, { type: "bool", v: false });
       return;
     }
-    // Try the async Clipboard API first.
     if (fmt === "plaintext" && navigator.clipboard && navigator.clipboard.readText) {
       try {
         const text = await navigator.clipboard.readText();
@@ -2682,7 +2929,6 @@ async function handleScriptRequest(req, port) {
         }
       } catch (_) { /* fall through */ }
     }
-    // Fall back to page-script.js.
     const resp = sendToPageScript(req);
     if (resp && resp.value) {
       sendScriptResponse(port, id, resp.value);
@@ -2741,7 +2987,7 @@ async function handleScriptRequest(req, port) {
   // Inject instanceId so that page-script.js can target the correct
   // Flash element when there are multiple SWFs on the page.
   if (req.instanceId == null) {
-    const iid = getInstanceIdForPort(port);
+    const iid = FlashInstance.getIdByPort(port);
     if (iid != null) req.instanceId = iid;
   }
 
@@ -2754,7 +3000,6 @@ async function handleScriptRequest(req, port) {
   if (resp.error) {
     sendScriptError(port, id, resp.error);
   } else if (resp.names) {
-    // getAllPropertyNames returns {names: [...]}
     try {
       port.postMessage({ type: "jsResponse", id, names: resp.names });
     } catch { /* port disconnected */ }
@@ -2763,6 +3008,7 @@ async function handleScriptRequest(req, port) {
   }
 }
 
+/** Send a successful scripting response back to the native host. */
 function sendScriptResponse(port, id, value) {
   try {
     port.postMessage({ type: "jsResponse", id, value });
@@ -2771,6 +3017,7 @@ function sendScriptResponse(port, id, value) {
   }
 }
 
+/** Send an error scripting response back to the native host. */
 function sendScriptError(port, id, error) {
   try {
     port.postMessage({ type: "jsResponse", id, error });
@@ -2791,14 +3038,19 @@ function sendScriptError(port, id, error) {
 /**
  * Set up the listener that forwards CallFunction invocations from the
  * MAIN-world page script to the native messaging host.
+ *
+ * page-script.js dispatches "__flash_callfn" CustomEvents on the shared
+ * comm element when JavaScript calls a registered ExternalInterface
+ * callback (e.g. game.startup(…)).  We forward the invoke XML to the
+ * native host which routes it to PepperFlash's scriptable object.
  */
 function initCallFunctionBridge() {
   const comm = getCommElement();
   comm.addEventListener("__flash_callfn", () => {
     const xml = comm.getAttribute("data-callfn");
-    if (xml && activePort) {
+    if (xml && FlashInstance._activePort) {
       try {
-        activePort.postMessage({ type: "callFunction", xml });
+        FlashInstance._activePort.postMessage({ type: "callFunction", xml });
       } catch {
         // Port may have disconnected.
       }
@@ -2807,11 +3059,7 @@ function initCallFunctionBridge() {
 }
 
 // ---------------------------------------------------------------------------
-// Drawing helpers (kept for reference; frame drawing is now in handleBinaryMessage)
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Input event binding
+// Input event helpers
 // ---------------------------------------------------------------------------
 
 /**
@@ -2833,21 +3081,20 @@ function getModifiers(e) {
  * Map a DOM MouseEvent.button to our protocol button index.
  */
 function mapButton(e) {
-  // DOM: 0=left, 1=middle, 2=right - matches our protocol.
   return e.button;
 }
 
 /**
  * Compute mouse position relative to the canvas in Flash view coordinates
- * (DIPs). Uses the logical Flash dimensions (meta.origWidth/origHeight)
+ * (DIPs). Uses the logical Flash dimensions (instance.origWidth/origHeight)
  * rather than canvas.width/canvas.height because Flash may render at a
  * higher device resolution, making the canvas buffer larger than the
  * view rect reported via DidChangeView.
  */
-function canvasPos(canvas, e, meta) {
+function canvasPos(canvas, e, instance) {
   const rect = canvas.getBoundingClientRect();
-  const logicalW = (meta && meta.origWidth) || canvas.width;
-  const logicalH = (meta && meta.origHeight) || canvas.height;
+  const logicalW = (instance && instance.origWidth) || canvas.width;
+  const logicalH = (instance && instance.origHeight) || canvas.height;
   const scaleX = logicalW / rect.width;
   const scaleY = logicalH / rect.height;
   return {
@@ -2856,177 +3103,11 @@ function canvasPos(canvas, e, meta) {
   };
 }
 
-function bindInputEvents(canvas, port, meta) {
-  canvas.addEventListener("mousedown", (e) => {
-    e.preventDefault();
-    canvas.focus();
-    const pos = canvasPos(canvas, e, meta);
-    port.postMessage({
-      type: "mousedown",
-      x: pos.x,
-      y: pos.y,
-      button: mapButton(e),
-      modifiers: getModifiers(e),
-    });
-  });
-
-  canvas.addEventListener("mouseup", (e) => {
-    e.preventDefault();
-    const pos = canvasPos(canvas, e, meta);
-    port.postMessage({
-      type: "mouseup",
-      x: pos.x,
-      y: pos.y,
-      button: mapButton(e),
-      modifiers: getModifiers(e),
-    });
-  });
-
-  // Throttle mousemove to one message per animation frame to avoid
-  // flooding the native messaging channel with hundreds of events/sec.
-  let _pendingMove = null;
-  let _moveTimer = 0;
-  function _flushMove() {
-    if (!_pendingMove) return;
-    const pos = canvasPos(canvas, _pendingMove, meta);
-    port.postMessage({
-      type: "mousemove",
-      x: pos.x,
-      y: pos.y,
-      modifiers: getModifiers(_pendingMove),
-    });
-    _pendingMove = null;
-    if (_moveTimer) { clearTimeout(_moveTimer); _moveTimer = 0; }
-  }
-  canvas._flushPendingMove = _flushMove;
-  canvas.addEventListener("mousemove", (e) => {
-    _pendingMove = e;
-    if (!_moveTimer) {
-      _moveTimer = setTimeout(() => { _moveTimer = 0; _flushMove(); }, 50);
-    }
-  });
-
-  canvas.addEventListener("mouseenter", () => {
-    port.postMessage({ type: "mouseenter" });
-  });
-
-  canvas.addEventListener("mouseleave", () => {
-    port.postMessage({ type: "mouseleave" });
-  });
-
-  canvas.addEventListener("wheel", (e) => {
-    e.preventDefault();
-    port.postMessage({
-      type: "wheel",
-      deltaX: -e.deltaX,
-      deltaY: -e.deltaY,
-      modifiers: getModifiers(e),
-    });
-  }, { passive: false });
-
-  canvas.addEventListener("keydown", (e) => {
-    e.preventDefault();
-    // Send RAWKEYDOWN - matches Chrome's PPAPI behaviour.
-    // PepperFlash expects RAWKEYDOWN (type 6), not KEYDOWN (type 7).
-    port.postMessage({
-      type: "rawkeydown",
-      keyCode: e.keyCode,
-      code: e.code,
-      modifiers: getModifiers(e),
-    });
-
-    // Synthesize a CHAR event for character-producing keys.
-    // This replaces the deprecated 'keypress' event and is more reliable
-    // across browsers.  Ctrl/Meta combos are shortcuts, not characters.
-    if (!e.ctrlKey && !e.metaKey) {
-      if (e.key.length === 1) {
-        // Printable character (letters, digits, symbols, space).
-        port.postMessage({
-          type: "char",
-          keyCode: e.key.charCodeAt(0),
-          text: e.key,
-          code: e.code,
-          modifiers: getModifiers(e),
-        });
-      } else if (!e.altKey) {
-        // Special keys that produce character events in PPAPI.
-        let charCode = 0, charText = "";
-        switch (e.key) {
-          case "Enter": charCode = 13; charText = "\r"; break;
-          case "Tab": charCode = 9; charText = "\t"; break;
-          case "Backspace": charCode = 8; charText = ""; break;
-        }
-        if (charCode) {
-          port.postMessage({
-            type: "char",
-            keyCode: charCode,
-            text: charText,
-            code: e.code,
-            modifiers: getModifiers(e),
-          });
-        }
-      }
-    }
-  });
-
-  canvas.addEventListener("keyup", (e) => {
-    e.preventDefault();
-    port.postMessage({
-      type: "keyup",
-      keyCode: e.keyCode,
-      code: e.code,
-      modifiers: getModifiers(e),
-    });
-  });
-
-  // --- IME composition events ---
-  // These fire on any focused element when an Input Method Editor is active
-  // (e.g. CJK input, dead-key sequences on European keyboards).
-
-  canvas.addEventListener("compositionstart", (e) => {
-    port.postMessage({ type: "compositionstart" });
-  });
-
-  canvas.addEventListener("compositionupdate", (e) => {
-    port.postMessage({
-      type: "compositionupdate",
-      text: e.data || "",
-    });
-  });
-
-  canvas.addEventListener("compositionend", (e) => {
-    port.postMessage({
-      type: "compositionend",
-      text: e.data || "",
-    });
-  });
-
-  canvas.addEventListener("focus", () => {
-    port.postMessage({ type: "focus", hasFocus: true });
-  });
-
-  canvas.addEventListener("blur", () => {
-    port.postMessage({ type: "focus", hasFocus: false });
-  });
-
-  // Prevent native context menu and notify the host so Flash can show its own.
-  canvas.addEventListener("contextmenu", (e) => {
-    e.preventDefault();
-    const pos = canvasPos(canvas, e, meta);
-    port.postMessage({
-      type: "contextmenu",
-      x: pos.x,
-      y: pos.y,
-      button: mapButton(e),
-      modifiers: getModifiers(e),
-    });
-  });
-}
-
 // ---------------------------------------------------------------------------
 // Cursor mapping  (PP_CursorType_Dev → CSS cursor)
 // ---------------------------------------------------------------------------
 
+/** Lookup table mapping PP_CursorType_Dev enum values → CSS cursor values. */
 const PP_CURSOR_MAP = [
   "default",      // 0 = POINTER
   "crosshair",    // 1 = CROSS
@@ -3073,6 +3154,11 @@ const PP_CURSOR_MAP = [
   "grabbing",     // 42 = GRABBING
 ];
 
+/**
+ * Map a PepperFlash cursor type enum to its CSS cursor value.
+ * @param {number} cursorType - PP_CursorType_Dev value.
+ * @returns {string} CSS cursor keyword.
+ */
 function ppCursorToCss(cursorType) {
   return PP_CURSOR_MAP[cursorType] || "default";
 }
@@ -3082,8 +3168,8 @@ function ppCursorToCss(cursorType) {
 // ---------------------------------------------------------------------------
 
 /**
- * MutationObserver callback (inspired by ppMutationObserver in pp.js).
- * Walks added nodes looking for <object> or <embed> Flash elements.
+ * MutationObserver callback.  Walks added nodes looking for <object> or
+ * <embed> Flash elements and replaces them with FlashInstance canvases.
  */
 function flashMutationObserver(mutations) {
   for (let i = 0; i < mutations.length; i++) {
@@ -3096,10 +3182,9 @@ function flashMutationObserver(mutations) {
 
       const tag = node.nodeName.toUpperCase();
       if (tag === "OBJECT" || tag === "EMBED") {
-        if (replaceFlashElement(node)) continue;
+        if (FlashInstance.fromElement(node)) continue;
       }
 
-      // Recurse into children.
       if (node.children && node.children.length) {
         for (let j = 0; j < node.children.length; j++) {
           stack.push(node.children[j]);
@@ -3114,61 +3199,22 @@ function flashMutationObserver(mutations) {
 // ---------------------------------------------------------------------------
 
 /**
- * Tear down all active Flash instances - disconnects ports so the
- * background service worker shuts down the native hosts.
- * Also closes any active Web Audio streams.
+ * Initialise the Flash Player content script.
+ * Sets up the ExternalInterface bridge, scans existing DOM elements for
+ * Flash content, and installs a MutationObserver for future elements.
  */
-function destroyAllInstances() {
-  for (const [id, meta] of instanceMeta) {
-    if (meta.port) {
-      try { meta.port.disconnect(); } catch { /* already gone */ }
-      meta.port = null;
-    }
-    // Remove any crash overlay that may be showing.
-    const overlay = meta.container.querySelector(".flash-crash-overlay");
-    if (overlay) overlay.remove();
-    // Disconnect mutation / resize observers on the original element.
-    if (meta._mutationObserver) { meta._mutationObserver.disconnect(); meta._mutationObserver = null; }
-    if (meta._resizeObserver) { meta._resizeObserver.disconnect(); meta._resizeObserver = null; }
-    // Stop debug stats.
-    const ds = debugStatsMap.get(id);
-    if (ds) { ds.stop(); debugStatsMap.delete(id); }
-  }
-  // Close all audio streams.
-  for (const [streamId] of audioStreams) {
-    audioClose(streamId);
-  }
-  activePort = null;
-}
-
-/**
- * Restart every known Flash instance from its saved metadata.
- * Used when the page is restored from bfcache.
- */
-function restartAllInstances() {
-  for (const [id, meta] of instanceMeta) {
-    // Clear the canvas and reconnect.
-    meta.ctx.clearRect(0, 0, meta.canvas.width, meta.canvas.height);
-    startInstance(id, meta);
-  }
-}
-
 function init() {
-  // Set up the ExternalInterface CallFunction bridge (JS → AS).
   initCallFunctionBridge();
 
-  // Scan existing elements.
   const tags = ["object", "embed"];
   for (const tagName of tags) {
     const elems = document.getElementsByTagName(tagName);
-    // Snapshot the live collection before mutating the DOM.
     const snapshot = Array.from(elems);
     for (const elem of snapshot) {
-      replaceFlashElement(elem);
+      FlashInstance.fromElement(elem);
     }
   }
 
-  // Observe future DOM mutations.
   const observer = new MutationObserver(flashMutationObserver);
   observer.observe(document.documentElement, {
     subtree: true,
@@ -3176,7 +3222,6 @@ function init() {
   });
 }
 
-// Run init when the DOM is ready.
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", init);
 } else {
@@ -3185,21 +3230,29 @@ if (document.readyState === "loading") {
 
 // ---------------------------------------------------------------------------
 // Page lifecycle: tear down on navigate-away, restart on bfcache restore
+//
+// Only affects instances belonging to the current document, so that
+// iframes with their own Flash content are not disturbed.
 // ---------------------------------------------------------------------------
 
+// Tear down instances belonging to THIS document on navigate-away.
 window.addEventListener("pagehide", () => {
-  navigatingAway = true;
-  destroyAllInstances();
+  FlashInstance._navigatingAway = true;
+  FlashInstance.destroyForDocument(document);
 });
 
+// Guard: skip the very first pagereveal (initial page load).
 let firstReveal = true;
 
-window.addEventListener("pagereveal", (e) => {
+// Restart instances belonging to THIS document when the page is restored
+// from bfcache.  Other documents (e.g. iframes) keep their own state.
+window.addEventListener("pagereveal", () => {
   if (firstReveal) {
     firstReveal = false;
     return;
   }
-  // Page was restored from bfcache - ports are dead, restart everything.
-  navigatingAway = false;
-  restartAllInstances();
+  // Page was restored from bfcache - ports are dead, restart everything
+  // that belongs to this document.
+  FlashInstance._navigatingAway = false;
+  FlashInstance.restartForDocument(document);
 });

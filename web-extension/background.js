@@ -22,17 +22,24 @@
 const NATIVE_HOST_NAME = "org.cleanflash.flash_player";
 
 /**
- * Map of instanceId -> content script port.
+ * Background-global unique connection ID counter.
+ * Content-script instance IDs can collide across tabs (each tab's counter
+ * starts at 0), so the background uses its own IDs as map keys.
+ */
+let _nextBgId = 0;
+
+/**
+ * Map of bgId -> content script port.
  * Each Flash instance on a page gets its own port.
  */
 const instances = new Map();
 
-/** Map of instanceId -> native messaging port. */
+/** Map of bgId -> native messaging port. */
 const nativePorts = new Map();
 
 /**
- * In-progress chunked messages being reassembled, per instance.
- * Map of instanceId -> Map of sequence_id -> { total, received, chunks: string[] }
+ * In-progress chunked messages being reassembled, per connection.
+ * Map of bgId -> Map of sequence_id -> { total, received, chunks: string[] }
  */
 const pendingChunks = new Map();
 
@@ -91,15 +98,18 @@ function broadcastMessage(b64) {
 
 /**
  * Create a native messaging port for a SWF instance.
- * Returns the port, or null if creation failed.
+ *
+ * @param {number} bgId - Background-unique connection ID (used as map key).
+ * @param {Port} port - The content script's chrome.runtime port.
+ * @returns {Port} The newly created native messaging port.
  */
-function createNativePort(instanceId, port) {
+function createNativePort(bgId, port) {
   const nativePort = chrome.runtime.connectNative(NATIVE_HOST_NAME);
-  nativePorts.set(instanceId, nativePort);
+  nativePorts.set(bgId, nativePort);
 
   nativePort.onMessage.addListener((msg) => {
     // All host messages are chunked: {s, c, t, d}.
-    const b64 = handleChunk(instanceId, msg);
+    const b64 = handleChunk(bgId, msg);
     if (b64 !== null) {
       // Only send to the matching content script instance.
       try {
@@ -113,10 +123,10 @@ function createNativePort(instanceId, port) {
   nativePort.onDisconnect.addListener(() => {
     const error = chrome.runtime.lastError;
     if (error) {
-      console.error(`[Flash Player] Native host disconnected for instance ${instanceId}:`, error.message);
+      console.error(`[Flash Player] Native host disconnected (bgId=${bgId}):`, error.message);
     }
-    nativePorts.delete(instanceId);
-    pendingChunks.delete(instanceId);
+    nativePorts.delete(bgId);
+    pendingChunks.delete(bgId);
 
     // Detect "host not found / not installed" vs normal crash.
     const errMsg = error ? error.message || "" : "";
@@ -132,7 +142,7 @@ function createNativePort(instanceId, port) {
     } catch {
       // ignore
     }
-    instances.delete(instanceId);
+    instances.delete(bgId);
   });
 
   return nativePort;
@@ -144,19 +154,21 @@ function createNativePort(instanceId, port) {
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "flash-instance") return;
 
-  let instanceId = null;
+  // Allocate a background-unique ID for this connection so that
+  // duplicate tabs (which reuse content-script instance IDs starting
+  // at 0) don't collide in the background's maps.
+  const bgId = _nextBgId++;
   let nativePort = null;
 
   port.onMessage.addListener((msg) => {
     if (msg.type === "start") {
-      instanceId = msg.instanceId;
-      instances.set(instanceId, port);
+      instances.set(bgId, port);
 
       // Detect incognito mode from the sender tab.
       const incognito = !!(port.sender && port.sender.tab && port.sender.tab.incognito);
 
       // Create a native host for this instance and send the open command.
-      nativePort = createNativePort(instanceId, port);
+      nativePort = createNativePort(bgId, port);
       if (!nativePort) return;
       nativePort.postMessage({
         type: "open",
@@ -199,16 +211,14 @@ chrome.runtime.onConnect.addListener((port) => {
   });
 
   port.onDisconnect.addListener(() => {
-    if (instanceId != null) {
-      instances.delete(instanceId);
-      // Close the native host for this instance.
-      const np = nativePorts.get(instanceId);
-      if (np) {
-        np.postMessage({ type: "close" });
-        np.disconnect();
-        nativePorts.delete(instanceId);
-        pendingChunks.delete(instanceId);
-      }
+    instances.delete(bgId);
+    // Close the native host for this connection.
+    if (nativePort) {
+      try { nativePort.postMessage({ type: "close" }); } catch { /* already gone */ }
+      nativePort.disconnect();
+      nativePorts.delete(bgId);
+      pendingChunks.delete(bgId);
+      nativePort = null;
     }
   });
 });
