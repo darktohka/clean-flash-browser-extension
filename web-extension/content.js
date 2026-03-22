@@ -2856,6 +2856,7 @@ function handleBinaryMessage(instance, b64) {
 
 /** Element ID used for the hidden DOM element that bridges ISOLATED ↔ MAIN worlds. */
 const COMM_ID = "__flash_player_comm__";
+let _pageAsyncRequestId = 1;
 
 /**
  * Ensure the hidden communication element exists in the DOM.
@@ -2892,6 +2893,52 @@ function sendToPageScript(req) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Send an async scripting request to the MAIN-world page script and
+ * resolve with the JSON response.
+ */
+function sendToPageScriptAsync(req, timeoutMs = 30000) {
+  const comm = getCommElement();
+  const requestId = String(_pageAsyncRequestId++);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer = null;
+
+    const finish = (resp) => {
+      if (settled) return;
+      settled = true;
+      comm.removeEventListener("__flash_resp_async", onResp);
+      if (timer) clearTimeout(timer);
+      resolve(resp);
+    };
+
+    const onResp = () => {
+      const respStr = comm.getAttribute("data-resp-async");
+      if (!respStr) return;
+      try {
+        const payload = JSON.parse(respStr);
+        if (!payload || payload.id !== requestId) return;
+        finish(payload.resp || null);
+      } catch {
+        // Ignore malformed response payloads.
+      }
+    };
+
+    comm.addEventListener("__flash_resp_async", onResp);
+    timer = setTimeout(() => {
+      finish({ error: "page script async timeout" });
+    }, timeoutMs);
+
+    comm.setAttribute("data-resp-async", "");
+    comm.setAttribute(
+      "data-req-async",
+      JSON.stringify({ id: requestId, req })
+    );
+    comm.dispatchEvent(new CustomEvent("__flash_req_async"));
+  });
 }
 
 /**
@@ -3045,74 +3092,18 @@ async function handleScriptRequest(req, port) {
   }
 
   // ---------------------------------------------------------------
-  // HTTP Fetch: perform HTTP requests via the browser's fetch() API,
-  // bypassing CORS restrictions that would block the native host.
+  // HTTP Fetch: perform HTTP requests in MAIN world so page-level
+  // window.fetch overrides are honored.
   // ---------------------------------------------------------------
 
   if (op === "httpFetch") {
-    const fetchUrl = req.url;
-    const fetchMethod = req.method || "GET";
-    const fetchHeaders = req.headers || {};
-    const bodyB64 = req.body || null;
-    const followRedirects = req.followRedirects !== false;
-
-    try {
-      const fetchOpts = {
-        method: fetchMethod,
-        headers: fetchHeaders,
-        redirect: followRedirects ? "follow" : "manual",
-        credentials: "omit",
-      };
-
-      if (bodyB64 && fetchMethod !== "GET" && fetchMethod !== "HEAD") {
-        // Decode base64 body to ArrayBuffer.
-        const binStr = atob(bodyB64);
-        const bytes = new Uint8Array(binStr.length);
-        for (let i = 0; i < binStr.length; i++) {
-          bytes[i] = binStr.charCodeAt(i);
-        }
-        fetchOpts.body = bytes;
-      }
-
-      const response = await fetch(fetchUrl, fetchOpts);
-
-      // Read the response body as ArrayBuffer and base64-encode it.
-      const arrayBuf = await response.arrayBuffer();
-      const u8 = new Uint8Array(arrayBuf);
-      let bodyStr = "";
-      // Encode in chunks to avoid call-stack overflow on large bodies.
-      const CHUNK = 32768;
-      for (let i = 0; i < u8.length; i += CHUNK) {
-        bodyStr += String.fromCharCode.apply(null, u8.subarray(i, i + CHUNK));
-      }
-      const respBodyB64 = btoa(bodyStr);
-
-      // Collect response headers.
-      const respHeaders = {};
-      response.headers.forEach((value, name) => {
-        respHeaders[name] = value;
-      });
-
-      sendScriptResponse(port, id, {
-        statusCode: response.status,
-        statusText: response.statusText,
-        headers: respHeaders,
-        body: respBodyB64,
-        finalUrl: response.url || fetchUrl,
-      });
-    } catch (e) {
-      const errMsg = e ? e.message || String(e) : "fetch failed";
-      // Detect CORS errors: fetch() throws a TypeError with an opaque
-      // message when a cross-origin request is blocked.
-      const isCors = (e instanceof TypeError) &&
-        (errMsg.toLowerCase().includes("cors") ||
-         errMsg.toLowerCase().includes("failed to fetch") ||
-         errMsg.toLowerCase().includes("cross-origin") ||
-         errMsg.toLowerCase().includes("mixed") ||
-         errMsg.toLowerCase().includes("network") ||
-         errMsg.toLowerCase().includes("load failed"));
-      sendScriptError(port, id,
-        isCors ? "cors: " + errMsg : errMsg);
+    const resp = await sendToPageScriptAsync(req);
+    if (!resp) {
+      sendScriptError(port, id, "no response from page script");
+    } else if (resp.error) {
+      sendScriptError(port, id, resp.error);
+    } else {
+      sendScriptResponse(port, id, resp.value);
     }
     return;
   }

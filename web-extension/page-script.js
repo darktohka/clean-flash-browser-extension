@@ -1668,6 +1668,76 @@
     }
   }
 
+  async function handleAsyncRequest(req) {
+    const op = req && req.op;
+
+    if (op === "httpFetch") {
+      const fetchUrl = req.url;
+      const fetchMethod = req.method || "GET";
+      const fetchHeaders = req.headers || {};
+      const bodyB64 = req.body || null;
+      const followRedirects = req.followRedirects !== false;
+
+      try {
+        const fetchOpts = {
+          method: fetchMethod,
+          headers: fetchHeaders,
+          redirect: followRedirects ? "follow" : "manual",
+          credentials: "omit",
+        };
+
+        if (bodyB64 && fetchMethod !== "GET" && fetchMethod !== "HEAD") {
+          const binStr = atob(bodyB64);
+          const bytes = new Uint8Array(binStr.length);
+          for (let i = 0; i < binStr.length; i++) {
+            bytes[i] = binStr.charCodeAt(i);
+          }
+          fetchOpts.body = bytes;
+        }
+
+        // Runs in MAIN world, so this uses any page-defined fetch wrapper.
+        const response = await window.fetch(fetchUrl, fetchOpts);
+        const arrayBuf = await response.arrayBuffer();
+        const u8 = new Uint8Array(arrayBuf);
+        let bodyStr = "";
+        const CHUNK = 65536;
+        for (let i = 0; i < u8.length; i += CHUNK) {
+          bodyStr += String.fromCharCode.apply(null, u8.subarray(i, i + CHUNK));
+        }
+        const respBodyB64 = btoa(bodyStr);
+
+        const respHeaders = {};
+        response.headers.forEach((value, name) => {
+          respHeaders[name] = value;
+        });
+
+        return {
+          value: {
+            statusCode: response.status,
+            statusText: response.statusText,
+            headers: respHeaders,
+            body: respBodyB64,
+            finalUrl: response.url || fetchUrl,
+          },
+        };
+      } catch (e) {
+        const errMsg = e ? e.message || String(e) : "fetch failed";
+        const lower = errMsg.toLowerCase();
+        const isCors =
+          e instanceof TypeError &&
+          (lower.includes("cors") ||
+            lower.includes("failed to fetch") ||
+            lower.includes("cross-origin") ||
+            lower.includes("mixed") ||
+            lower.includes("network") ||
+            lower.includes("load failed"));
+        return { error: isCors ? "cors: " + errMsg : errMsg };
+      }
+    }
+
+    return { error: "unknown async script op: " + String(op) };
+  }
+
   // -----------------------------------------------------------------
   // Listen for requests from the content script
   // -----------------------------------------------------------------
@@ -1685,6 +1755,43 @@
     }
     // Write response back (null means fire-and-forget, e.g. "release").
     comm.setAttribute("data-resp", resp ? JSON.stringify(resp) : "");
+  });
+
+  comm.addEventListener("__flash_req_async", () => {
+    const reqJson = comm.getAttribute("data-req-async");
+    if (!reqJson) return;
+
+    let payload;
+    try {
+      payload = JSON.parse(reqJson);
+    } catch (e) {
+      const malformed = {
+        id: "",
+        resp: { error: "bad async request payload: " + String(e) },
+      };
+      comm.setAttribute("data-resp-async", JSON.stringify(malformed));
+      comm.dispatchEvent(new CustomEvent("__flash_resp_async"));
+      return;
+    }
+
+    const requestId = payload && payload.id != null ? String(payload.id) : "";
+    const request = payload ? payload.req : null;
+
+    Promise.resolve(handleAsyncRequest(request))
+      .then((resp) => {
+        comm.setAttribute(
+          "data-resp-async",
+          JSON.stringify({ id: requestId, resp: resp || { error: "empty async response" } })
+        );
+        comm.dispatchEvent(new CustomEvent("__flash_resp_async"));
+      })
+      .catch((e) => {
+        comm.setAttribute(
+          "data-resp-async",
+          JSON.stringify({ id: requestId, resp: { error: String(e) } })
+        );
+        comm.dispatchEvent(new CustomEvent("__flash_resp_async"));
+      });
   });
   // Proactively proxy all Flash elements that already exist in the DOM
   // so that page JS can call methods (e.g. game.startup) even before
