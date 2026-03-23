@@ -15,6 +15,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      - name: Install dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libasound2-dev
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
