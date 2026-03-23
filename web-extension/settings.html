@@ -77,19 +77,6 @@
       </div>
     </section>
 
-    <!-- Graphics -->
-    <section class="settings-group">
-      <h2>Graphics</h2>
-
-      <div class="setting-row">
-        <label class="setting-check" data-tooltip="Uses OpenGL ES 2.0 hardware acceleration. Unstable and not supported on every computer. Your mileage may vary.">
-          <input type="checkbox" id="hardwareAcceleration">
-          <span>Enable hardware acceleration</span>
-          <span class="help-icon">?</span>
-        </label>
-      </div>
-    </section>
-
     <!-- Privacy -->
     <section class="settings-group">
       <h2>Privacy</h2>
@@ -118,8 +105,37 @@
         </label>
       </div>
     </section>
+
+    <!-- Graphics -->
+    <section class="settings-group">
+      <h2>Graphics</h2>
+
+      <div class="setting-row">
+        <label class="setting-check" data-tooltip="Uses OpenGL ES 2.0 hardware acceleration. Unstable and not supported on every computer. Your mileage may vary.">
+          <input type="checkbox" id="hardwareAcceleration">
+          <span>Enable hardware acceleration</span>
+          <span class="help-icon">?</span>
+        </label>
+      </div>
+    </section>
+
+    <!-- Audio -->
+    <section class="settings-group">
+      <h2>Audio</h2>
+
+      <div class="setting-row audio-row">
+        <label class="setting-label" data-tooltip="Controls how audio is played. Browser uses the Web Audio API and provides tab-level audio control, while Native plays audio directly on the system.">
+          Audio Backend
+          <span class="help-icon">?</span>
+        </label>
+        <select id="audioBackend">
+          <option value="0">Browser (Web Audio)</option>
+          <option value="1">Native (cpal)</option>
+        </select>
+      </div>
+    </section>
   </div>
 
-  <script src="settings.js"></script>
+    <script src="settings.js"></script>
 </body>
 </html>

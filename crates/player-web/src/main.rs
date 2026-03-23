@@ -166,9 +166,22 @@ fn main() {
         ));
         host.set_url_provider(Box::new(WebUrlProvider::new(script_bridge.clone())));
 
-        // Set up the audio provider so that Flash audio is forwarded to
-        // the browser's Web Audio API instead of playing via cpal.
-        host.set_audio_provider(Box::new(WebAudioProvider::new()));
+        // Set up the audio provider. The dispatcher uses settings:
+        // - audioBackend=0 (Browser): forwards to Web Audio API.
+        // - audioBackend=1 (Native): returns no provider stream so
+        //   ppapi-host falls back to cpal native playback.
+        let use_native_audio = crate::WEB_SETTINGS
+            .get()
+            .map(|ws| *ws.audio_backend_native.lock())
+            .unwrap_or(false);
+
+        if !use_native_audio {
+            tracing::info!("Using Web Audio API for Flash audio output");
+            host.set_audio_provider(Box::new(WebAudioProvider::new()));
+        } else {
+            tracing::info!("Using native audio output for Flash");
+            // By returning no provider stream, ppapi-host falls back to cpal native playback.
+        }
 
         // Set up the audio input provider so that Flash can capture from
         // the browser's microphone via MediaStream / getUserMedia.
@@ -1586,6 +1599,8 @@ fn parse_settings(val: &serde_json::Value) -> PlayerSettings {
 /// webcam) that don't belong in the shared `PlayerSettings` struct.
 pub(crate) struct WebSettingsProvider {
     inner: Mutex<PlayerSettings>,
+    /// Whether native (cpal) audio should be used instead of browser audio.
+    pub audio_backend_native: Mutex<bool>,
     /// Whether to always prefer the browser's fetch() for HTTP requests.
     /// When false, use direct reqwest HTTP instead of fetch.
     pub network_browser_only: Mutex<bool>,
@@ -1601,6 +1616,7 @@ impl WebSettingsProvider {
     fn new() -> Self {
         Self {
             inner: Mutex::new(PlayerSettings::default()),
+            audio_backend_native: Mutex::new(false),
             network_browser_only: Mutex::new(true),
             network_fallback_native: Mutex::new(false),
             disable_microphone: Mutex::new(false),
@@ -1612,6 +1628,9 @@ impl WebSettingsProvider {
     pub(crate) fn update_from_json(&self, val: &serde_json::Value) {
         *self.inner.lock() = parse_settings(val);
 
+        if let Some(v) = val.get("audioBackend").and_then(|v| v.as_u64()) {
+            *self.audio_backend_native.lock() = v == 1;
+        }
         if let Some(v) = val.get("networkBrowserOnly").and_then(|v| v.as_bool()) {
             *self.network_browser_only.lock() = v;
         }

@@ -26,6 +26,7 @@ const SETTINGS_DEFAULTS = {
   disableCrossdomainHttp: true,
   disableCrossdomainSockets: true,
   hardwareAcceleration: false,
+  audioBackend: 0,              // 0=Browser, 1=Native
   disableGeolocation: true,
   disableMicrophone: false,
   disableWebcam: false,
@@ -64,6 +65,7 @@ let _flashSettings = Object.assign({}, SETTINGS_DEFAULTS);
 // (triggered when the user changes settings in the popup).
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "settingsUpdate" && msg.settings) {
+    console.log("[Flash Player] Received settings update:", msg.settings);
     _flashSettings = msg.settings;
     // Update the DOM attribute for future page-script.js reads.
     const json = JSON.stringify(msg.settings);

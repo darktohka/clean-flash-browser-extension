@@ -121,6 +121,53 @@ h1 {
   cursor: help;
 }
 
+/* ---- Select dropdowns ---- */
+
+.setting-row select {
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: #1a2332;
+  color: #e0e8f0;
+  border: 2px solid #4da6e8;
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+}
+
+.setting-row select:focus {
+  border-color: #5bb8ff;
+  box-shadow: 0 0 0 1px #5bb8ff44;
+}
+
+.setting-row select option {
+  background: #1a2332;
+  color: #e0e8f0;
+}
+
+.audio-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.audio-row .setting-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 500;
+  margin-bottom: 0;
+  flex: 1;
+}
+
+.audio-row select {
+  width: 170px;
+  margin-top: 0;
+  flex: 0 0 170px;
+}
+
 /* ---- Help icon (?) ---- */
 
 .help-icon {

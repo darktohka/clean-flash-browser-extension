@@ -14,6 +14,7 @@ const DEFAULTS = {
   disableCrossdomainHttp: true,
   disableCrossdomainSockets: true,
   hardwareAcceleration: false,
+  audioBackend: 0,              // 0=Browser, 1=Native
   disableGeolocation: true,
   disableMicrophone: false,
   disableWebcam: false,
@@ -29,6 +30,7 @@ const networkFallbackNative = document.getElementById("networkFallbackNative");
 const disableCrossdomainHttp = document.getElementById("disableCrossdomainHttp");
 const disableCrossdomainSockets = document.getElementById("disableCrossdomainSockets");
 const hardwareAcceleration = document.getElementById("hardwareAcceleration");
+const audioBackend = document.getElementById("audioBackend");
 const disableGeolocation = document.getElementById("disableGeolocation");
 const disableMicrophone = document.getElementById("disableMicrophone");
 const disableWebcam = document.getElementById("disableWebcam");
@@ -42,6 +44,7 @@ storage.get(DEFAULTS, (items) => {
   disableCrossdomainHttp.checked = items.disableCrossdomainHttp;
   disableCrossdomainSockets.checked = items.disableCrossdomainSockets;
   hardwareAcceleration.checked = items.hardwareAcceleration;
+  audioBackend.value = items.audioBackend;
   disableGeolocation.checked = items.disableGeolocation;
   disableMicrophone.checked = items.disableMicrophone;
   disableWebcam.checked = items.disableWebcam;
@@ -102,6 +105,11 @@ hardwareAcceleration.addEventListener("change", () => {
   save("hardwareAcceleration", hardwareAcceleration.checked);
 });
 
+audioBackend.addEventListener("change", () => {
+  const v = Number(audioBackend.value);
+  save("audioBackend", v);
+});
+
 disableGeolocation.addEventListener("change", () => {
   save("disableGeolocation", disableGeolocation.checked);
 });
@@ -119,7 +127,10 @@ disableWebcam.addEventListener("change", () => {
 function updateSliderLabels() {
   const v = Number(ruffleCompat.value);
   document.querySelectorAll(".slider-label").forEach((el) => {
-    el.classList.toggle("active", Number(el.dataset.value) === v);
+    // Only update labels inside the ruffleCompat slider.
+    if (el.closest(".slider-container") === ruffleCompat.closest(".slider-container")) {
+      el.classList.toggle("active", Number(el.dataset.value) === v);
+    }
   });
 }
 
