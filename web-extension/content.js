@@ -15,6 +15,57 @@ const FLASH_DEBUG = false;
 const LOG_HOST_EVENTS = false;
 const IS_FIREFOX = typeof navigator !== "undefined" && /\bFirefox\//.test(navigator.userAgent);
 
+// ---------------------------------------------------------------------------
+// Settings — read from chrome.storage.sync and exposed to page-script.js
+// via a data attribute on <html>.
+// ---------------------------------------------------------------------------
+const SETTINGS_DEFAULTS = {
+  ruffleCompat: 1,              // 0=PreferRuffle, 1=PreferCleanFlash, 2=ForceCleanFlash
+  networkBrowserOnly: true,
+  networkFallbackNative: false,
+  disableCrossdomainHttp: true,
+  disableCrossdomainSockets: true,
+  hardwareAcceleration: false,
+  disableGeolocation: true,
+  disableMicrophone: false,
+  disableWebcam: false,
+};
+let _flashSettings = Object.assign({}, SETTINGS_DEFAULTS);
+
+// Read settings and inject into the DOM for the MAIN-world page script.
+(function loadSettings() {
+  const storage = chrome.storage && (chrome.storage.sync || chrome.storage.local);
+  if (!storage) return;
+  storage.get(SETTINGS_DEFAULTS, (items) => {
+    if (chrome.runtime.lastError) return;
+    _flashSettings = items;
+    // Write to <html> so page-script.js (MAIN world) can read them.
+    try {
+      document.documentElement.setAttribute(
+        "data-flash-settings",
+        JSON.stringify(items)
+      );
+    } catch (_) {}
+  });
+})();
+
+// Listen for live settings updates from the background service worker
+// (triggered when the user changes settings in the popup).
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === "settingsUpdate" && msg.settings) {
+    _flashSettings = msg.settings;
+    // Update the DOM attribute for future page-script.js reads.
+    try {
+      document.documentElement.setAttribute(
+        "data-flash-settings",
+        JSON.stringify(msg.settings)
+      );
+    } catch (_) {}
+    // Forward to all active Flash instance native host connections.
+    FlashInstance.broadcastSettingsUpdate(msg.settings);
+  }
+});
+
 // Firefox content-script rendering pipeline.
 // putImageData, createImageBitmap(ImageData), and cloneInto(ImageData) all
 // fail in Firefox content scripts due to Xray wrapper security checks on
@@ -538,6 +589,21 @@ class FlashInstance {
   }
 
   /**
+   * Send a settingsUpdate message to all active Flash instances so the
+   * native host applies changed settings on-the-fly.
+   * @param {Object} settings - The full settings object.
+   */
+  static broadcastSettingsUpdate(settings) {
+    for (const inst of FlashInstance._instances.values()) {
+      if (inst.port) {
+        try {
+          inst.port.postMessage({ type: "settingsUpdate", settings });
+        } catch (_) {}
+      }
+    }
+  }
+
+  /**
    * Debounce broadcastViewUpdate to avoid flooding the native host
    * during rapid scroll or resize events.
    * @param {number} [delayMs=100] - Minimum delay in milliseconds.
@@ -945,6 +1011,7 @@ class FlashInstance {
       width: this.origWidth,
       height: this.origHeight,
       language: navigator.language || "en-US",
+      settings: _flashSettings,
       ...this.collectViewInfo(),
     });
 
@@ -2422,6 +2489,53 @@ function showFlashContextMenu(items, x, y, canvas, port) {
   }
 
   buildMenuItems(menu, items);
+
+  // ---- Inject "Clean Flash Settings" as the pen-ultimate entry ----
+  {
+    const sep = document.createElement("div");
+    Object.assign(sep.style, {
+      height: "1px",
+      background: "#c0c0c0",
+      margin: "3px 0",
+    });
+
+    const settingsRow = document.createElement("div");
+    Object.assign(settingsRow.style, {
+      padding: "4px 24px 4px 24px",
+      position: "relative",
+      whiteSpace: "nowrap",
+      color: "#1a1a1a",
+      cursor: "default",
+    });
+    const settingsLabel = document.createElement("span");
+    settingsLabel.textContent = "Clean Flash Settings\u2026";
+    settingsRow.appendChild(settingsLabel);
+
+    settingsRow.addEventListener("mouseenter", () => {
+      settingsRow.style.background = "#0078d4";
+      settingsRow.style.color = "#fff";
+    });
+    settingsRow.addEventListener("mouseleave", () => {
+      settingsRow.style.background = "";
+      settingsRow.style.color = "#1a1a1a";
+    });
+    settingsRow.addEventListener("click", (e) => {
+      e.stopPropagation();
+      // Open the extension settings popup.
+      chrome.runtime.sendMessage({ type: "openSettings" });
+      sendResponse(null);
+    });
+
+    // Insert before the last child (pen-ultimate position).
+    const lastChild = menu.lastElementChild;
+    if (lastChild) {
+      menu.insertBefore(sep, lastChild);
+      menu.insertBefore(settingsRow, lastChild);
+    } else {
+      menu.appendChild(sep);
+      menu.appendChild(settingsRow);
+    }
+  }
 
   // Position relative to the canvas.
   // Map Flash view coordinates (DIPs) to CSS pixels for positioning.

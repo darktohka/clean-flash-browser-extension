@@ -403,8 +403,28 @@
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Settings - read from document element dataset (set by content.js)
+  // ---------------------------------------------------------------------------
+
+  // ruffleCompat: 0=PreferRuffle, 1=PreferCleanFlash, 2=ForceCleanFlash
+  var _flashSettings = { ruffleCompat: 1 }; // default: PreferCleanFlash
+  try {
+    var settingsJson = document.documentElement.getAttribute("data-flash-settings");
+    if (settingsJson) {
+      var parsed = JSON.parse(settingsJson);
+      if (parsed && typeof parsed.ruffleCompat === "number") {
+        _flashSettings.ruffleCompat = parsed.ruffleCompat;
+      }
+    }
+  } catch (_) {}
+
   installInlineModernSwfobject();
-  ppSpoofFlash();
+
+  // ppSpoofFlash: active for PreferCleanFlash (1) and ForceCleanFlash (2)
+  if (_flashSettings.ruffleCompat >= 1) {
+    ppSpoofFlash();
+  }
 
   // ---------------------------------------------------------------------------
   // Ruffle override
@@ -985,7 +1005,10 @@
     }
   }
 
-  installFakeRuffle();
+  // installFakeRuffle: only active for ForceCleanFlash (2)
+  if (_flashSettings.ruffleCompat >= 2) {
+    installFakeRuffle();
+  }
 
   // Unique element id - must match the one in content.js.
   const COMM_ID = "__flash_player_comm__";

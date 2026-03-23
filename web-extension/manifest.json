@@ -8,8 +8,16 @@
     "nativeMessaging",
     "cookies",
     "clipboardRead",
-    "clipboardWrite"
+    "clipboardWrite",
+    "storage"
   ],
+  "action": {
+    "default_popup": "settings.html",
+    "default_icon": {
+      "48": "icons/flash-48.png",
+      "128": "icons/flash-128.png"
+    }
+  },
   "host_permissions": [
     "<all_urls>"
   ],
@@ -37,7 +45,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": [],
+      "resources": ["settings.html", "settings.css", "settings.js"],
       "matches": ["<all_urls>"]
     }
   ],

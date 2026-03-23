@@ -49,18 +49,45 @@ const PERMISSIVE_POLICY: &[u8] =
 /// The exact bytes Flash sends when requesting a socket policy file.
 const POLICY_FILE_REQUEST: &[u8] = b"<policy-file-request/>\0";
 
-/// Hosts that must never be contacted through PPB_TCPSocket_Private.
-const BLOCKED_TCP_CONNECT_HOSTS: [&str; 3] = [
+/// Hosts that are always blocked through PPB_TCPSocket_Private.
+const ALWAYS_BLOCKED_TCP_HOSTS: [&str; 1] = [
+    "fpdownload.macromedia.com",
+];
+
+/// Geolocation hosts blocked when the `disable_geolocation` setting is true.
+const GEO_BLOCKED_TCP_HOSTS: [&str; 2] = [
     "geo2.adobe.com",
     "geo.adobe.com",
-    "fpdownload.macromedia.com",
 ];
 
 fn is_blocked_tcp_host(host: &str) -> bool {
     let normalized = host.trim().trim_end_matches('.');
-    BLOCKED_TCP_CONNECT_HOSTS
+
+    // Always blocked.
+    if ALWAYS_BLOCKED_TCP_HOSTS
         .iter()
         .any(|blocked| normalized.eq_ignore_ascii_case(blocked))
+    {
+        return true;
+    }
+
+    // Geolocation hosts are blocked only when the setting says so.
+    let disable_geo = crate::HOST
+        .get()
+        .and_then(|h| h.get_settings_provider())
+        .map(|sp| sp.get_settings().disable_geolocation)
+        .unwrap_or(true);
+
+    if disable_geo {
+        if GEO_BLOCKED_TCP_HOSTS
+            .iter()
+            .any(|blocked| normalized.eq_ignore_ascii_case(blocked))
+        {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Limit payload previews so trace logs stay useful and bounded.
@@ -266,22 +293,37 @@ unsafe extern "C" fn connect(
     // Instead of connecting to the remote host (which usually has no
     // policy server), immediately pretend we connected and pre-load a
     // permissive policy response so the subsequent Read returns it.
+    // Only intercept when disable_crossdomain_sockets is enabled.
     // -----------------------------------------------------------------
     if port == 843 {
-        tracing::info!(
-            "PPB_TCPSocket_Private::Connect: intercepting port 843 policy \
-             request for resource={} - will auto-respond with permissive policy",
-            tcp_socket
-        );
-        host.resources
-            .with_downcast_mut::<TcpSocketResource, _>(tcp_socket, |s| {
-                s.pending_policy_response = Some(PERMISSIVE_POLICY.to_vec());
-            });
-        // Fire the connect callback on the main loop with PP_OK.
-        if let Some(poster) = &*host.main_loop_poster.lock() {
-            poster.post_work(callback, 0, PP_OK);
+        let should_intercept = HOST
+            .get()
+            .and_then(|h| h.get_settings_provider())
+            .map(|sp| sp.get_settings().disable_crossdomain_sockets)
+            .unwrap_or(true);
+
+        if should_intercept {
+            tracing::info!(
+                "PPB_TCPSocket_Private::Connect: intercepting port 843 policy \
+                 request for resource={} - will auto-respond with permissive policy",
+                tcp_socket
+            );
+            host.resources
+                .with_downcast_mut::<TcpSocketResource, _>(tcp_socket, |s| {
+                    s.pending_policy_response = Some(PERMISSIVE_POLICY.to_vec());
+                });
+            // Fire the connect callback on the main loop with PP_OK.
+            if let Some(poster) = &*host.main_loop_poster.lock() {
+                poster.post_work(callback, 0, PP_OK);
+            }
+            return PP_OK_COMPLETIONPENDING;
+        } else {
+            tracing::info!(
+                "PPB_TCPSocket_Private::Connect: port 843 interception disabled \
+                 by settings for resource={} - connecting normally",
+                tcp_socket
+            );
         }
-        return PP_OK_COMPLETIONPENDING;
     }
 
     // Get no_delay preference and cancel token before spawning.
@@ -884,22 +926,37 @@ unsafe extern "C" fn write(
     // 23-byte `<policy-file-request/>\0` payload to ANY socket, we
     // treat it as a policy check: don't forward the data to the server
     // and instead queue a permissive response for the next Read.
+    // Only intercept when disable_crossdomain_sockets is enabled.
     // -----------------------------------------------------------------
     if data == POLICY_FILE_REQUEST {
-        tracing::info!(
-            "PPB_TCPSocket_Private::Write(resource={}): intercepted policy-file-request \
-             - queuing permissive policy response",
-            tcp_socket
-        );
-        host.resources
-            .with_downcast_mut::<TcpSocketResource, _>(tcp_socket, |s| {
-                s.pending_policy_response = Some(PERMISSIVE_POLICY.to_vec());
-            });
-        // Report success immediately (all bytes "written").
-        if let Some(poster) = &*host.main_loop_poster.lock() {
-            poster.post_work(callback, 0, max_write as i32);
+        let should_intercept = HOST
+            .get()
+            .and_then(|h| h.get_settings_provider())
+            .map(|sp| sp.get_settings().disable_crossdomain_sockets)
+            .unwrap_or(true);
+
+        if should_intercept {
+            tracing::info!(
+                "PPB_TCPSocket_Private::Write(resource={}): intercepted policy-file-request \
+                 - queuing permissive policy response",
+                tcp_socket
+            );
+            host.resources
+                .with_downcast_mut::<TcpSocketResource, _>(tcp_socket, |s| {
+                    s.pending_policy_response = Some(PERMISSIVE_POLICY.to_vec());
+                });
+            // Report success immediately (all bytes "written").
+            if let Some(poster) = &*host.main_loop_poster.lock() {
+                poster.post_work(callback, 0, max_write as i32);
+            }
+            return PP_OK_COMPLETIONPENDING;
+        } else {
+            tracing::info!(
+                "PPB_TCPSocket_Private::Write(resource={}): policy-file-request \
+                 interception disabled by settings - forwarding to server",
+                tcp_socket
+            );
         }
-        return PP_OK_COMPLETIONPENDING;
     }
 
     // -----------------------------------------------------------------

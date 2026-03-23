@@ -41,7 +41,9 @@ mod script_bridge;
 
 use parking_lot::Mutex;
 use player_core::FlashPlayer;
-use player_ui_traits::{EmbedArg, ViewInfo};
+use player_ui_traits::{
+    EmbedArg, PlayerSettings, ViewInfo,
+};
 use ppapi_sys::*;
 use serde_json::json;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -239,6 +241,16 @@ fn main() {
             http_fetch::FetchHttpRequestProvider::new(fetch_bridge)
                 .with_fallback(reqwest_fallback),
         ));
+
+        // Set up the settings provider so that subsystems can query
+        // user-configurable player settings (Ruffle compat, network
+        // mode, hardware acceleration, etc.).
+        let settings = Arc::new(WebSettingsProvider::new());
+        WEB_SETTINGS
+            .set(settings.clone())
+            .ok()
+            .expect("WEB_SETTINGS already initialised");
+        host.set_settings_provider(Box::new(WebSettingsProviderWrapper(settings)));
     }
 
     // Load the Flash plugin now that all providers are set up.
@@ -356,6 +368,9 @@ static SCRIPT_BRIDGE: OnceLock<Arc<script_bridge::ScriptBridge>> = OnceLock::new
 
 /// Global context menu provider for routing `menuResponse` messages.
 static WEB_CONTEXT_MENU: OnceLock<Arc<WebContextMenuProvider>> = OnceLock::new();
+
+/// Global settings provider for live settings updates.
+pub(crate) static WEB_SETTINGS: OnceLock<Arc<WebSettingsProvider>> = OnceLock::new();
 
 /// Lazily-initialized channel that receives messages from a background reader.
 fn try_read_command() -> Option<serde_json::Value> {
@@ -513,6 +528,14 @@ fn handle_command(
                         host.set_flash_language(lang);
                         tracing::info!("Browser language: {}", lang);
                     }
+                }
+            }
+
+            // Apply extension settings from the open command.
+            if let Some(settings_obj) = cmd.get("settings") {
+                tracing::info!("Applying initial settings from open command");
+                if let Some(ws) = WEB_SETTINGS.get() {
+                    ws.update_from_json(settings_obj);
                 }
             }
 
@@ -732,6 +755,16 @@ fn handle_command(
             if let Some(host) = ppapi_host::HOST.get() {
                 if let Some(instance_id) = player.instance_id() {
                     host.set_cursor_lock_state(instance_id, locked);
+                }
+            }
+        }
+
+        "settingsUpdate" => {
+            // Live settings update from the browser extension settings popup.
+            if let Some(settings_obj) = cmd.get("settings") {
+                tracing::info!("Settings updated live");
+                if let Some(ws) = WEB_SETTINGS.get() {
+                    ws.update_from_json(settings_obj);
                 }
             }
         }
@@ -1095,10 +1128,13 @@ impl WebAudioInputProvider {
 
 impl player_ui_traits::AudioInputProvider for WebAudioInputProvider {
     fn enumerate_devices(&self) -> Vec<(String, String)> {
-        // On the browser side, we always report one "default" device.
-        // Actual device enumeration would require a synchronous round-trip
-        // to the browser which isn't worth the complexity - Flash typically
-        // just asks for the default microphone.
+        // Check if microphone is disabled by browser-only settings.
+        if let Some(ws) = WEB_SETTINGS.get() {
+            if *ws.disable_microphone.lock() {
+                tracing::info!("WebAudioInputProvider: microphone disabled by settings, returning empty devices");
+                return vec![];
+            }
+        }
         vec![("browser:default".into(), "Microphone".into())]
     }
 
@@ -1108,6 +1144,13 @@ impl player_ui_traits::AudioInputProvider for WebAudioInputProvider {
         sample_rate: u32,
         sample_frame_count: u32,
     ) -> u32 {
+        // Check if microphone is disabled by browser-only settings.
+        if let Some(ws) = WEB_SETTINGS.get() {
+            if *ws.disable_microphone.lock() {
+                tracing::info!("WebAudioInputProvider: microphone disabled by settings, refusing open_stream");
+                return 0;
+            }
+        }
         let id = self.next_stream_id.fetch_add(1, Ordering::Relaxed);
         tracing::info!(
             "WebAudioInputProvider: open_stream id={}, rate={}, frames={}",
@@ -1265,6 +1308,13 @@ impl WebVideoCaptureProvider {
 
 impl player_ui_traits::VideoCaptureProvider for WebVideoCaptureProvider {
     fn enumerate_devices(&self) -> Vec<(String, String)> {
+        // Check if webcam is disabled by browser-only settings.
+        if let Some(ws) = WEB_SETTINGS.get() {
+            if *ws.disable_webcam.lock() {
+                tracing::info!("WebVideoCaptureProvider: webcam disabled by settings, returning empty devices");
+                return vec![];
+            }
+        }
         vec![("browser:default".into(), "Camera".into())]
     }
 
@@ -1275,6 +1325,13 @@ impl player_ui_traits::VideoCaptureProvider for WebVideoCaptureProvider {
         height: u32,
         frames_per_second: u32,
     ) -> u32 {
+        // Check if webcam is disabled by browser-only settings.
+        if let Some(ws) = WEB_SETTINGS.get() {
+            if *ws.disable_webcam.lock() {
+                tracing::info!("WebVideoCaptureProvider: webcam disabled by settings, refusing open_stream");
+                return 0;
+            }
+        }
         let id = self.next_stream_id.fetch_add(1, Ordering::Relaxed);
         tracing::info!(
             "WebVideoCaptureProvider: open_stream id={}, {}x{} @ {} fps",
@@ -1489,6 +1546,92 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
+}
+
+// ===========================================================================
+// Settings provider - stores user-configurable settings with live updates
+// ===========================================================================
+
+/// Parse a JSON settings object (from content.js / settingsUpdate) into
+/// a [`PlayerSettings`] value.  Missing keys fall back to defaults.
+/// Parse a JSON settings object into a [`PlayerSettings`] value (only the
+/// fields that matter to the native PPAPI host).  Browser-only fields
+/// (ruffleCompat, networkMode, disableMicrophone, disableWebcam) are
+/// handled separately in [`WebSettingsProvider::update_from_json`].
+fn parse_settings(val: &serde_json::Value) -> PlayerSettings {
+    let mut s = PlayerSettings::default();
+
+    if let Some(v) = val.get("disableCrossdomainHttp").and_then(|v| v.as_bool()) {
+        s.disable_crossdomain_http = v;
+    }
+    if let Some(v) = val.get("disableCrossdomainSockets").and_then(|v| v.as_bool()) {
+        s.disable_crossdomain_sockets = v;
+    }
+    if let Some(v) = val.get("hardwareAcceleration").and_then(|v| v.as_bool()) {
+        s.hardware_acceleration = v;
+    }
+    if let Some(v) = val.get("disableGeolocation").and_then(|v| v.as_bool()) {
+        s.disable_geolocation = v;
+    }
+
+    s
+}
+
+/// Settings provider backed by an `Arc<Mutex<PlayerSettings>>` that can
+/// be updated live from the browser extension settings popup.
+///
+/// Also stores browser-only settings (network fallback, microphone,
+/// webcam) that don't belong in the shared `PlayerSettings` struct.
+pub(crate) struct WebSettingsProvider {
+    inner: Mutex<PlayerSettings>,
+    /// Whether to allow native HTTP fallback when fetch() hits CORS.
+    pub network_fallback_native: Mutex<bool>,
+    /// Whether Flash microphone access is blocked.
+    pub disable_microphone: Mutex<bool>,
+    /// Whether Flash webcam access is blocked.
+    pub disable_webcam: Mutex<bool>,
+}
+
+impl WebSettingsProvider {
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new(PlayerSettings::default()),
+            network_fallback_native: Mutex::new(false),
+            disable_microphone: Mutex::new(false),
+            disable_webcam: Mutex::new(false),
+        }
+    }
+
+    /// Update all settings from a JSON object (from content.js / settingsUpdate).
+    pub(crate) fn update_from_json(&self, val: &serde_json::Value) {
+        *self.inner.lock() = parse_settings(val);
+
+        if let Some(v) = val.get("networkFallbackNative").and_then(|v| v.as_bool()) {
+            *self.network_fallback_native.lock() = v;
+        }
+        if let Some(v) = val.get("disableMicrophone").and_then(|v| v.as_bool()) {
+            *self.disable_microphone.lock() = v;
+        }
+        if let Some(v) = val.get("disableWebcam").and_then(|v| v.as_bool()) {
+            *self.disable_webcam.lock() = v;
+        }
+    }
+}
+
+impl player_ui_traits::SettingsProvider for WebSettingsProvider {
+    fn get_settings(&self) -> PlayerSettings {
+        self.inner.lock().clone()
+    }
+}
+
+/// Thin wrapper so we can pass `Arc<WebSettingsProvider>` as a
+/// `Box<dyn SettingsProvider>` to the host.
+struct WebSettingsProviderWrapper(Arc<WebSettingsProvider>);
+
+impl player_ui_traits::SettingsProvider for WebSettingsProviderWrapper {
+    fn get_settings(&self) -> PlayerSettings {
+        self.0.get_settings()
+    }
 }
 
 // ===========================================================================

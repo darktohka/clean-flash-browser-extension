@@ -177,6 +177,10 @@ pub struct HostState {
     /// When set, the URL loader uses this for `http://` and `https://` requests
     /// instead of the built-in reqwest or stub implementations.
     pub http_request_provider: Mutex<Option<Arc<dyn player_ui_traits::HttpRequestProvider>>>,
+    /// Settings provider for user-configurable player settings.
+    /// When set, subsystems can query current settings (Ruffle compat,
+    /// network mode, hardware acceleration, etc.).
+    pub settings_provider: Mutex<Option<Arc<dyn player_ui_traits::SettingsProvider>>>,
     /// Number of pending interactive operations (context menus, file dialogs)
     /// that are waiting for user input.  While > 0, the Flash nested message
     /// loop skips its safety-net timeout so the user has time to interact.
@@ -244,6 +248,7 @@ impl HostState {
                 video_capture_provider: Mutex::new(None),
                 cookie_provider: Mutex::new(None),
                 http_request_provider: Mutex::new(None),
+                settings_provider: Mutex::new(None),
                 pending_interactive_ops: AtomicI32::new(0),
                 flash_command_line_args: Mutex::new(String::new()),
                 instance_object: Mutex::new(None),
@@ -396,6 +401,16 @@ impl HostState {
     /// Get a cloned `Arc` handle to the HTTP request provider, if set.
     pub fn get_http_request_provider(&self) -> Option<Arc<dyn player_ui_traits::HttpRequestProvider>> {
         self.http_request_provider.lock().clone()
+    }
+
+    /// Set the settings provider for user-configurable player settings.
+    pub fn set_settings_provider(&self, provider: Box<dyn player_ui_traits::SettingsProvider>) {
+        *self.settings_provider.lock() = Some(Arc::from(provider));
+    }
+
+    /// Get a cloned `Arc` handle to the settings provider, if set.
+    pub fn get_settings_provider(&self) -> Option<Arc<dyn player_ui_traits::SettingsProvider>> {
+        self.settings_provider.lock().clone()
     }
 
     /// Set the command-line string returned by

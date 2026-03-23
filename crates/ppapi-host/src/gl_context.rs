@@ -56,6 +56,12 @@ static WAYLAND_CONNECTION: OnceLock<Option<Connection>> = OnceLock::new();
 
 impl GlState {
     fn init() -> Result<Self, String> {
+        // Check settings — if hardware acceleration is disabled, bail out.
+        if let Some(sp) = crate::HOST.get().and_then(|h| h.get_settings_provider()) {
+            if !sp.get_settings().hardware_acceleration {
+                return Err("Hardware acceleration disabled by settings".into());
+            }
+        }
         let display = Self::create_display()?;
 
         // Create a temporary context to load GL function pointers.

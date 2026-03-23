@@ -89,25 +89,39 @@ fn perform_url_open(
     tracing::info!("URL open requested: {} {}", method, url);
 
     // ----- crossdomain.xml interception -----
+    // Only serve the fake permissive policy when the setting is enabled
+    // (disable_crossdomain_http = true, which is the default).
     if is_crossdomain_xml_request(url) {
-        tracing::info!(
-            "URL open: intercepting crossdomain.xml request for {} - serving fake permissive policy",
-            url
-        );
-        let body_bytes: &[u8] = FAKE_CROSSDOMAIN_XML;
-        let len = body_bytes.len() as i64;
-        let headers_str = format!(
-            "Content-Type: text/xml\r\nContent-Length: {}\r\n\r\n",
-            len
-        );
-        return Ok(HttpResponse {
-            status_code: 200,
-            status_line: "HTTP/1.1 200 OK".to_string(),
-            headers: headers_str,
-            body: Box::new(std::io::Cursor::new(body_bytes.to_vec())),
-            content_length: Some(len),
-            final_url: Some(url.to_string()),
-        });
+        let should_intercept = HOST
+            .get()
+            .and_then(|h| h.get_settings_provider())
+            .map(|sp| sp.get_settings().disable_crossdomain_http)
+            .unwrap_or(true);
+
+        if should_intercept {
+            tracing::info!(
+                "URL open: intercepting crossdomain.xml request for {} - serving fake permissive policy",
+                url
+            );
+            let body_bytes: &[u8] = FAKE_CROSSDOMAIN_XML;
+            let len = body_bytes.len() as i64;
+            let headers_str = format!(
+                "Content-Type: text/xml\r\nContent-Length: {}\r\n\r\n",
+                len
+            );
+            return Ok(HttpResponse {
+                status_code: 200,
+                status_line: "HTTP/1.1 200 OK".to_string(),
+                headers: headers_str,
+                body: Box::new(std::io::Cursor::new(body_bytes.to_vec())),
+                content_length: Some(len),
+                final_url: Some(url.to_string()),
+            });
+        } else {
+            tracing::info!(
+                "URL open: crossdomain.xml interception disabled by settings - passing through to network"
+            );
+        }
     }
 
     // ----- file:// or bare path → local filesystem -----

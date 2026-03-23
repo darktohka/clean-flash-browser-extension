@@ -805,3 +805,48 @@ pub trait HttpRequestProvider: Send + Sync {
         cookie_provider: Option<&dyn CookieProvider>,
     ) -> Result<HttpResponse, i32>;
 }
+
+// ===========================================================================
+// Player settings — shared across all frontends (browser, desktop, etc.)
+// ===========================================================================
+
+/// All user-configurable settings for the Flash player that affect the
+/// native PPAPI host.  Browser-only settings (Ruffle compatibility,
+/// network mode, microphone/webcam toggles) are handled in the browser
+/// extension JS and are not represented here.
+#[derive(Debug, Clone)]
+pub struct PlayerSettings {
+    // -- Networking --
+    /// Skip `crossdomain.xml` policy checks for HTTP requests.
+    pub disable_crossdomain_http: bool,
+    /// Skip `crossdomain.xml` (port 843) policy checks for TCP/UDP sockets.
+    pub disable_crossdomain_sockets: bool,
+
+    // -- Graphics --
+    /// Use OpenGL ES 2.0 hardware acceleration (unstable).
+    pub hardware_acceleration: bool,
+
+    // -- Privacy --
+    /// Block TCP connections to Adobe geolocation servers
+    /// (`geo2.adobe.com`, `geo.adobe.com`).
+    pub disable_geolocation: bool,
+}
+
+impl Default for PlayerSettings {
+    fn default() -> Self {
+        Self {
+            disable_crossdomain_http: true,
+            disable_crossdomain_sockets: true,
+            hardware_acceleration: false,
+            disable_geolocation: true,
+        }
+    }
+}
+
+/// Provides access to the current player settings.
+///
+/// Implementations may read from browser storage, config files, etc.
+pub trait SettingsProvider: Send + Sync {
+    /// Return the current settings snapshot.
+    fn get_settings(&self) -> PlayerSettings;
+}

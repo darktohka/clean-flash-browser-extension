@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=400">
+  <title>Clean Flash Settings</title>
+  <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+  <div class="settings-container">
+    <h1>Clean Flash Player</h1>
+    <p class="reload-notice">Changes will take effect on next page reload.</p>
+
+    <!-- Compatibility -->
+    <section class="settings-group">
+      <h2>Compatibility</h2>
+
+      <div class="setting-row slider-row">
+        <label class="setting-label" data-tooltip="Controls how Clean Flash Player coexists with the Ruffle ActionScript emulator.">
+          Ruffle Compatibility
+          <span class="help-icon">?</span>
+        </label>
+        <div class="slider-container">
+          <input type="range" id="ruffleCompat" min="0" max="2" step="1" value="1">
+          <div class="slider-labels">
+            <span class="slider-label" data-value="0" data-tooltip="Ruffle will override Clean Flash Player content. Flash plugin spoofing and RufflePlayer shim are both disabled.">
+              Prefer Ruffle
+              <span class="help-icon">?</span>
+            </span>
+            <span class="slider-label" data-value="1" data-tooltip="Clean Flash Player will override the Ruffle extension. Flash plugin is spoofed so Ruffle backs off, but page-bundled Ruffle can still activate.">
+              Prefer Clean Flash
+              <span class="help-icon">?</span>
+            </span>
+            <span class="slider-label" data-value="2" data-tooltip="Clean Flash Player will aggressively override Ruffle, even on websites that manually embed Ruffle. Both plugin spoofing and the RufflePlayer shim are active.">
+              Force Clean Flash
+              <span class="help-icon">?</span>
+            </span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Networking -->
+    <section class="settings-group">
+      <h2>Networking</h2>
+
+      <div class="setting-row">
+        <label class="setting-check" data-tooltip="The browser will make HTTP requests on behalf of Clean Flash Player. This is the most secure option and allows for caching.">
+          <input type="checkbox" id="networkBrowserOnly">
+          <span>Always prefer browser network requests</span>
+          <span class="help-icon">?</span>
+        </label>
+      </div>
+
+      <div class="setting-row">
+        <label class="setting-check" data-tooltip="When CORS blocks a request, the Clean Flash Player native host will make the request instead. Disabled when 'Always prefer browser network requests' is checked.">
+          <input type="checkbox" id="networkFallbackNative">
+          <span>Fall back to native requests for CORS</span>
+          <span class="help-icon">?</span>
+        </label>
+      </div>
+
+      <div class="setting-row">
+        <label class="setting-check" data-tooltip="Flash checks for a crossdomain.xml file before making cross-origin HTTP requests. If it does not exist, HTTP requests are blocked. Disabling this check skips that behavior.">
+          <input type="checkbox" id="disableCrossdomainHttp" checked>
+          <span>Disable crossdomain checks for HTTP requests</span>
+          <span class="help-icon">?</span>
+        </label>
+      </div>
+
+      <div class="setting-row">
+        <label class="setting-check" data-tooltip="Flash checks for a crossdomain policy on port 843 before opening TCP/UDP socket connections. Disabling this check skips that behavior.">
+          <input type="checkbox" id="disableCrossdomainSockets" checked>
+          <span>Disable crossdomain checks for TCP sockets</span>
+          <span class="help-icon">?</span>
+        </label>
+      </div>
+    </section>
+
+    <!-- Graphics -->
+    <section class="settings-group">
+      <h2>Graphics</h2>
+
+      <div class="setting-row">
+        <label class="setting-check" data-tooltip="Uses OpenGL ES 2.0 hardware acceleration. Unstable and not supported on every computer. Your mileage may vary.">
+          <input type="checkbox" id="hardwareAcceleration">
+          <span>Enable hardware acceleration</span>
+          <span class="help-icon">?</span>
+        </label>
+      </div>
+    </section>
+
+    <!-- Privacy -->
+    <section class="settings-group">
+      <h2>Privacy</h2>
+
+      <div class="setting-row">
+        <label class="setting-check" data-tooltip="Blocks connections to geolocation servers. Prevents Flash from determining your location.">
+          <input type="checkbox" id="disableGeolocation" checked>
+          <span>Disable geolocation services</span>
+          <span class="help-icon">?</span>
+        </label>
+      </div>
+
+      <div class="setting-row">
+        <label class="setting-check" data-tooltip="Prevents Flash from accessing the microphone. Flash content will see no audio input devices available.">
+          <input type="checkbox" id="disableMicrophone">
+          <span>Disable microphone input</span>
+          <span class="help-icon">?</span>
+        </label>
+      </div>
+
+      <div class="setting-row">
+        <label class="setting-check" data-tooltip="Prevents Flash from accessing the webcam. Flash content will see no video capture devices available.">
+          <input type="checkbox" id="disableWebcam">
+          <span>Disable web camera input</span>
+          <span class="help-icon">?</span>
+        </label>
+      </div>
+    </section>
+  </div>
+
+  <script src="settings.js"></script>
+</body>
+</html>

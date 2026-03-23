@@ -103,22 +103,35 @@ impl HttpRequestProvider for FetchHttpRequestProvider {
         if let Some(err) = resp.get("error").and_then(|v| v.as_str()) {
             tracing::warn!("fetch: browser returned error for {}: {}", url, err);
 
-            // Detect CORS errors and fall back to the reqwest provider.
+            // Detect CORS errors and fall back to the reqwest provider,
+            // but only if the network settings allow native fallback.
             let err_lower = err.to_ascii_lowercase();
             if err_lower.starts_with("cors:") || err_lower.contains("cors") {
                 if let Some(ref fallback) = self.fallback {
-                    tracing::info!(
-                        "fetch: CORS error for {}, falling back to direct HTTP",
-                        url
-                    );
-                    return fallback.http_request(
-                        url,
-                        method,
-                        headers,
-                        body,
-                        follow_redirects,
-                        cookie_provider,
-                    );
+                    let allow_fallback = crate::WEB_SETTINGS
+                        .get()
+                        .map(|ws| *ws.network_fallback_native.lock())
+                        .unwrap_or(false);
+
+                    if allow_fallback {
+                        tracing::info!(
+                            "fetch: CORS error for {}, falling back to direct HTTP",
+                            url
+                        );
+                        return fallback.http_request(
+                            url,
+                            method,
+                            headers,
+                            body,
+                            follow_redirects,
+                            cookie_provider,
+                        );
+                    } else {
+                        tracing::info!(
+                            "fetch: CORS error for {}, native fallback disabled by settings",
+                            url
+                        );
+                    }
                 }
             }
 

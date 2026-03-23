@@ -185,6 +185,7 @@ chrome.runtime.onConnect.addListener((port) => {
         isPageVisible: msg.isPageVisible,
         width: msg.width,
         height: msg.height,
+        settings: msg.settings || {},
       });
 
       // Send initial resize with view info.
@@ -233,6 +234,38 @@ chrome.runtime.onConnect.addListener((port) => {
 // ---------------------------------------------------------------------------
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg.type === "openSettings") {
+    // Open the extension popup/settings page.
+    chrome.action.openPopup().catch(() => {
+      // Fallback: open settings.html in a new tab if popup can't be opened.
+      chrome.tabs.create({ url: chrome.runtime.getURL("settings.html") });
+    });
+    return false;
+  }
+
+  if (msg.type === "settingsUpdate") {
+    // Forward settings update to all connected native host instances.
+    const settings = msg.settings || {};
+    for (const [, nativePort] of nativePorts) {
+      try {
+        nativePort.postMessage({ type: "settingsUpdate", settings });
+      } catch {
+        // Port may have disconnected.
+      }
+    }
+    // Also forward to all content script tabs so they update page-script.js
+    // data attribute for future page loads.
+    chrome.tabs.query({}, (tabs) => {
+      for (const tab of tabs) {
+        chrome.tabs.sendMessage(tab.id, {
+          type: "settingsUpdate",
+          settings,
+        }).catch(() => {});
+      }
+    });
+    return false;
+  }
+
   if (msg.type === "getCookies") {
     const url = msg.url;
     if (!url || !chrome.cookies) {
