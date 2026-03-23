@@ -229,17 +229,19 @@ fn main() {
         let cookie_bridge = SCRIPT_BRIDGE.get().expect("SCRIPT_BRIDGE not initialised").clone();
         host.set_cookie_provider(Box::new(WebCookieProvider::new(cookie_bridge)));
 
-        // Set up the HTTP request provider.  In browser-extension mode
-        // (RufflePlayer), use the fetch provider which delegates requests
-        // to the browser's fetch() API via the script bridge.  If fetch
-        // encounters a CORS error, fall back to reqwest (direct HTTP).
+        // Set up the HTTP request provider.  Uses a dispatching provider
+        // that checks the networkBrowserOnly setting at request time:
+        // - When true (default): routes through the browser's fetch() API
+        //   via the script bridge, with optional reqwest fallback on CORS.
+        // - When false: uses reqwest (direct HTTP) exclusively.
         let fetch_bridge = SCRIPT_BRIDGE.get().expect("SCRIPT_BRIDGE not initialised").clone();
-        let reqwest_fallback = std::sync::Arc::new(
+        let reqwest_provider = std::sync::Arc::new(
             ppapi_host::http_reqwest::ReqwestHttpRequestProvider::new(),
         );
+        let fetch_provider = http_fetch::FetchHttpRequestProvider::new(fetch_bridge)
+            .with_fallback(reqwest_provider.clone());
         host.set_http_request_provider(Box::new(
-            http_fetch::FetchHttpRequestProvider::new(fetch_bridge)
-                .with_fallback(reqwest_fallback),
+            http_fetch::DispatchingHttpRequestProvider::new(fetch_provider, reqwest_provider),
         ));
 
         // Set up the settings provider so that subsystems can query
@@ -1584,6 +1586,9 @@ fn parse_settings(val: &serde_json::Value) -> PlayerSettings {
 /// webcam) that don't belong in the shared `PlayerSettings` struct.
 pub(crate) struct WebSettingsProvider {
     inner: Mutex<PlayerSettings>,
+    /// Whether to always prefer the browser's fetch() for HTTP requests.
+    /// When false, use direct reqwest HTTP instead of fetch.
+    pub network_browser_only: Mutex<bool>,
     /// Whether to allow native HTTP fallback when fetch() hits CORS.
     pub network_fallback_native: Mutex<bool>,
     /// Whether Flash microphone access is blocked.
@@ -1596,6 +1601,7 @@ impl WebSettingsProvider {
     fn new() -> Self {
         Self {
             inner: Mutex::new(PlayerSettings::default()),
+            network_browser_only: Mutex::new(true),
             network_fallback_native: Mutex::new(false),
             disable_microphone: Mutex::new(false),
             disable_webcam: Mutex::new(false),
@@ -1606,6 +1612,9 @@ impl WebSettingsProvider {
     pub(crate) fn update_from_json(&self, val: &serde_json::Value) {
         *self.inner.lock() = parse_settings(val);
 
+        if let Some(v) = val.get("networkBrowserOnly").and_then(|v| v.as_bool()) {
+            *self.network_browser_only.lock() = v;
+        }
         if let Some(v) = val.get("networkFallbackNative").and_then(|v| v.as_bool()) {
             *self.network_fallback_native.lock() = v;
         }

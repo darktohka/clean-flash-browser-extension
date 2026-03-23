@@ -223,3 +223,56 @@ impl HttpRequestProvider for FetchHttpRequestProvider {
         })
     }
 }
+
+// ===========================================================================
+// Dispatching HTTP provider — routes to fetch or reqwest based on settings
+// ===========================================================================
+
+/// HTTP request provider that dispatches to either the browser's `fetch()`
+/// or direct `reqwest` based on the `networkBrowserOnly` setting.
+///
+/// When `networkBrowserOnly` is `true` (default), uses `FetchHttpRequestProvider`.
+/// When `false`, uses `ReqwestHttpRequestProvider` directly.
+pub struct DispatchingHttpRequestProvider {
+    fetch_provider: FetchHttpRequestProvider,
+    reqwest_provider: Arc<dyn HttpRequestProvider>,
+}
+
+impl DispatchingHttpRequestProvider {
+    pub fn new(
+        fetch_provider: FetchHttpRequestProvider,
+        reqwest_provider: Arc<dyn HttpRequestProvider>,
+    ) -> Self {
+        Self {
+            fetch_provider,
+            reqwest_provider,
+        }
+    }
+}
+
+impl HttpRequestProvider for DispatchingHttpRequestProvider {
+    fn http_request(
+        &self,
+        url: &str,
+        method: &str,
+        headers: &str,
+        body: Option<&[u8]>,
+        follow_redirects: bool,
+        cookie_provider: Option<&dyn CookieProvider>,
+    ) -> Result<HttpResponse, i32> {
+        let use_browser = crate::WEB_SETTINGS
+            .get()
+            .map(|ws| *ws.network_browser_only.lock())
+            .unwrap_or(true);
+
+        if use_browser {
+            self.fetch_provider.http_request(
+                url, method, headers, body, follow_redirects, cookie_provider,
+            )
+        } else {
+            self.reqwest_provider.http_request(
+                url, method, headers, body, follow_redirects, cookie_provider,
+            )
+        }
+    }
+}

@@ -22,7 +22,7 @@ const IS_FIREFOX = typeof navigator !== "undefined" && /\bFirefox\//.test(naviga
 const SETTINGS_DEFAULTS = {
   ruffleCompat: 1,              // 0=PreferRuffle, 1=PreferCleanFlash, 2=ForceCleanFlash
   networkBrowserOnly: true,
-  networkFallbackNative: false,
+  networkFallbackNative: true,
   disableCrossdomainHttp: true,
   disableCrossdomainSockets: true,
   hardwareAcceleration: false,
@@ -34,17 +34,28 @@ let _flashSettings = Object.assign({}, SETTINGS_DEFAULTS);
 
 // Read settings and inject into the DOM for the MAIN-world page script.
 (function loadSettings() {
+  // Synchronously set cached settings so page-script.js (MAIN world) can
+  // read them before the async chrome.storage call completes.
+  try {
+    const cached = localStorage.getItem("_flashSettings");
+    if (cached) {
+      document.documentElement.setAttribute("data-flash-settings", cached);
+      // Also apply cached settings to the content-script's own copy.
+      const parsed = JSON.parse(cached);
+      if (parsed) Object.assign(_flashSettings, parsed);
+    }
+  } catch (_) {}
+
   const storage = chrome.storage && (chrome.storage.sync || chrome.storage.local);
   if (!storage) return;
   storage.get(SETTINGS_DEFAULTS, (items) => {
     if (chrome.runtime.lastError) return;
     _flashSettings = items;
     // Write to <html> so page-script.js (MAIN world) can read them.
+    const json = JSON.stringify(items);
     try {
-      document.documentElement.setAttribute(
-        "data-flash-settings",
-        JSON.stringify(items)
-      );
+      document.documentElement.setAttribute("data-flash-settings", json);
+      localStorage.setItem("_flashSettings", json);
     } catch (_) {}
   });
 })();
@@ -55,11 +66,10 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "settingsUpdate" && msg.settings) {
     _flashSettings = msg.settings;
     // Update the DOM attribute for future page-script.js reads.
+    const json = JSON.stringify(msg.settings);
     try {
-      document.documentElement.setAttribute(
-        "data-flash-settings",
-        JSON.stringify(msg.settings)
-      );
+      document.documentElement.setAttribute("data-flash-settings", json);
+      localStorage.setItem("_flashSettings", json);
     } catch (_) {}
     // Forward to all active Flash instance native host connections.
     FlashInstance.broadcastSettingsUpdate(msg.settings);

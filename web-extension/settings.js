@@ -10,7 +10,7 @@
 const DEFAULTS = {
   ruffleCompat: 1,              // 0=PreferRuffle, 1=PreferCleanFlash, 2=ForceCleanFlash
   networkBrowserOnly: true,
-  networkFallbackNative: false,
+  networkFallbackNative: true,
   disableCrossdomainHttp: true,
   disableCrossdomainSockets: true,
   hardwareAcceleration: false,
