@@ -1162,13 +1162,6 @@ impl WebAudioInputProvider {
 
 impl player_ui_traits::AudioInputProvider for WebAudioInputProvider {
     fn enumerate_devices(&self) -> Vec<(String, String)> {
-        // Check if microphone is disabled by browser-only settings.
-        if let Some(ws) = WEB_SETTINGS.get() {
-            if *ws.disable_microphone.lock() {
-                tracing::info!("WebAudioInputProvider: microphone disabled by settings, returning empty devices");
-                return vec![];
-            }
-        }
         vec![("browser:default".into(), "Microphone".into())]
     }
 
@@ -1178,13 +1171,6 @@ impl player_ui_traits::AudioInputProvider for WebAudioInputProvider {
         sample_rate: u32,
         sample_frame_count: u32,
     ) -> u32 {
-        // Check if microphone is disabled by browser-only settings.
-        if let Some(ws) = WEB_SETTINGS.get() {
-            if *ws.disable_microphone.lock() {
-                tracing::info!("WebAudioInputProvider: microphone disabled by settings, refusing open_stream");
-                return 0;
-            }
-        }
         let id = self.next_stream_id.fetch_add(1, Ordering::Relaxed);
         tracing::info!(
             "WebAudioInputProvider: open_stream id={}, rate={}, frames={}",
@@ -1342,13 +1328,6 @@ impl WebVideoCaptureProvider {
 
 impl player_ui_traits::VideoCaptureProvider for WebVideoCaptureProvider {
     fn enumerate_devices(&self) -> Vec<(String, String)> {
-        // Check if webcam is disabled by browser-only settings.
-        if let Some(ws) = WEB_SETTINGS.get() {
-            if *ws.disable_webcam.lock() {
-                tracing::info!("WebVideoCaptureProvider: webcam disabled by settings, returning empty devices");
-                return vec![];
-            }
-        }
         vec![("browser:default".into(), "Camera".into())]
     }
 
@@ -1359,13 +1338,6 @@ impl player_ui_traits::VideoCaptureProvider for WebVideoCaptureProvider {
         height: u32,
         frames_per_second: u32,
     ) -> u32 {
-        // Check if webcam is disabled by browser-only settings.
-        if let Some(ws) = WEB_SETTINGS.get() {
-            if *ws.disable_webcam.lock() {
-                tracing::info!("WebVideoCaptureProvider: webcam disabled by settings, refusing open_stream");
-                return 0;
-            }
-        }
         let id = self.next_stream_id.fetch_add(1, Ordering::Relaxed);
         tracing::info!(
             "WebVideoCaptureProvider: open_stream id={}, {}x{} @ {} fps",
@@ -1589,9 +1561,8 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 /// Parse a JSON settings object (from content.js / settingsUpdate) into
 /// a [`PlayerSettings`] value.  Missing keys fall back to defaults.
 /// Parse a JSON settings object into a [`PlayerSettings`] value (only the
-/// fields that matter to the native PPAPI host).  Browser-only fields
-/// (ruffleCompat, networkMode, disableMicrophone, disableWebcam) are
-/// handled separately in [`WebSettingsProvider::update_from_json`].
+/// fields that matter to the native PPAPI host). Browser-only fields
+/// (ruffleCompat, networkMode) are handled separately from this struct.
 fn parse_settings(val: &serde_json::Value) -> PlayerSettings {
     let mut s = PlayerSettings::default();
 
@@ -1609,6 +1580,12 @@ fn parse_settings(val: &serde_json::Value) -> PlayerSettings {
     }
     if let Some(v) = val.get("spoofHardwareId").and_then(|v| v.as_bool()) {
         s.spoof_hardware_id = v;
+    }
+    if let Some(v) = val.get("disableMicrophone").and_then(|v| v.as_bool()) {
+        s.disable_microphone = v;
+    }
+    if let Some(v) = val.get("disableWebcam").and_then(|v| v.as_bool()) {
+        s.disable_webcam = v;
     }
 
     // Sandboxing: HTTP(s)
@@ -1650,8 +1627,8 @@ fn parse_settings(val: &serde_json::Value) -> PlayerSettings {
 /// Settings provider backed by an `Arc<Mutex<PlayerSettings>>` that can
 /// be updated live from the browser extension settings popup.
 ///
-/// Also stores browser-only settings (network fallback, microphone,
-/// webcam) that don't belong in the shared `PlayerSettings` struct.
+/// Also stores browser-only settings (network fallback) that don't belong
+/// in the shared `PlayerSettings` struct.
 pub(crate) struct WebSettingsProvider {
     inner: Mutex<PlayerSettings>,
     /// Script bridge used to push settings edits back to the browser.
@@ -1663,10 +1640,6 @@ pub(crate) struct WebSettingsProvider {
     pub prefer_network_browser: Mutex<bool>,
     /// Whether to allow native HTTP fallback when fetch() hits CORS.
     pub network_fallback_native: Mutex<bool>,
-    /// Whether Flash microphone access is blocked.
-    pub disable_microphone: Mutex<bool>,
-    /// Whether Flash webcam access is blocked.
-    pub disable_webcam: Mutex<bool>,
 }
 
 impl WebSettingsProvider {
@@ -1677,8 +1650,6 @@ impl WebSettingsProvider {
             audio_backend_native: Mutex::new(false),
             prefer_network_browser: Mutex::new(true),
             network_fallback_native: Mutex::new(false),
-            disable_microphone: Mutex::new(false),
-            disable_webcam: Mutex::new(false),
         }
     }
 
@@ -1694,12 +1665,6 @@ impl WebSettingsProvider {
         }
         if let Some(v) = val.get("networkFallbackNative").and_then(|v| v.as_bool()) {
             *self.network_fallback_native.lock() = v;
-        }
-        if let Some(v) = val.get("disableMicrophone").and_then(|v| v.as_bool()) {
-            *self.disable_microphone.lock() = v;
-        }
-        if let Some(v) = val.get("disableWebcam").and_then(|v| v.as_bool()) {
-            *self.disable_webcam.lock() = v;
         }
     }
 }

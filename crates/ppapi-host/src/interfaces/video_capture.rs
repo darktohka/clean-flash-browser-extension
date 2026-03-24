@@ -342,6 +342,14 @@ fn capture_pump_loop(ctx: CapturePumpContext) {
     );
 }
 
+fn is_webcam_disabled() -> bool {
+    HOST
+        .get()
+        .and_then(|h| h.get_settings_provider())
+        .map(|sp| sp.get_settings().disable_webcam)
+        .unwrap_or(false)
+}
+
 // ---------------------------------------------------------------------------
 // Interface functions
 // ---------------------------------------------------------------------------
@@ -412,38 +420,47 @@ unsafe extern "C" fn enumerate_devices(
         .with_downcast::<VideoCaptureResource, _>(video_capture, |vc| vc.instance)
         .unwrap_or(0);
 
-    let devices = host
-        .get_video_capture_provider()
-        .map(|p| p.enumerate_devices())
-        .unwrap_or_default();
+    let devices = if is_webcam_disabled() {
+        tracing::trace!(
+            "ppb_video_capture_enumerate_devices: webcam disabled; skipping device enumeration"
+        );
+        Vec::new()
+    } else {
+        host
+            .get_video_capture_provider()
+            .map(|p| p.enumerate_devices())
+            .unwrap_or_default()
+    };
 
     tracing::debug!(
         "ppb_video_capture_enumerate_devices: found {} device(s)",
         devices.len()
     );
 
-    if let Some(get_buffer) = output.GetDataBuffer {
-        let count = devices.len() as u32;
-        let buf_ptr = unsafe {
-            get_buffer(
-                output.user_data,
-                count,
-                std::mem::size_of::<PP_Resource>() as u32,
-            )
-        };
-        if !buf_ptr.is_null() && count > 0 {
-            let out_slice = unsafe {
-                std::slice::from_raw_parts_mut(buf_ptr as *mut PP_Resource, count as usize)
+    let count = devices.len() as u32;
+    if count > 0 {
+        if let Some(get_buffer) = output.GetDataBuffer {
+            let buf_ptr = unsafe {
+                get_buffer(
+                    output.user_data,
+                    count,
+                    std::mem::size_of::<PP_Resource>() as u32,
+                )
             };
-            for (i, (_dev_id, dev_name)) in devices.iter().enumerate() {
-                let dev_res = DeviceRefResource {
-                    instance,
-                    name: dev_name.clone(),
-                    device_index: i as u32,
-                    device_type: ppapi_sys::PP_DEVICETYPE_DEV_VIDEOCAPTURE,
+            if !buf_ptr.is_null() {
+                let out_slice = unsafe {
+                    std::slice::from_raw_parts_mut(buf_ptr as *mut PP_Resource, count as usize)
                 };
-                let rid = host.resources.insert(instance, Box::new(dev_res));
-                out_slice[i] = rid;
+                for (i, (_dev_id, dev_name)) in devices.iter().enumerate() {
+                    let dev_res = DeviceRefResource {
+                        instance,
+                        name: dev_name.clone(),
+                        device_index: i as u32,
+                        device_type: ppapi_sys::PP_DEVICETYPE_DEV_VIDEOCAPTURE,
+                    };
+                    let rid = host.resources.insert(instance, Box::new(dev_res));
+                    out_slice[i] = rid;
+                }
             }
         }
     }
@@ -500,6 +517,18 @@ unsafe extern "C" fn open(
     if !host.resources.is_type(video_capture, "PPB_VideoCapture(Dev)") {
         tracing::error!("ppb_video_capture_open: bad resource {}", video_capture);
         return PP_ERROR_BADRESOURCE;
+    }
+
+    if is_webcam_disabled() {
+        tracing::info!("ppb_video_capture_open: webcam disabled");
+        if let Some(poster) = get_main_poster() {
+            poster.post_work(callback, 0, PP_ERROR_NOACCESS);
+        } else if let Some(func) = callback.func {
+            unsafe {
+                func(callback.user_data, PP_ERROR_NOACCESS);
+            }
+        }
+        return PP_OK_COMPLETIONPENDING;
     }
 
     let (width, height, fps) = if requested_info.is_null() {
@@ -572,6 +601,12 @@ unsafe extern "C" fn open(
 
 unsafe extern "C" fn start_capture(video_capture: PP_Resource) -> i32 {
     tracing::trace!("ppb_video_capture_start_capture called for resource {}", video_capture);
+
+    if is_webcam_disabled() {
+        tracing::trace!("ppb_video_capture_start_capture: webcam disabled");
+        return PP_ERROR_FAILED;
+    }
+
     let host = HOST.get().unwrap();
 
     let ppp = match get_ppp_video_capture() {

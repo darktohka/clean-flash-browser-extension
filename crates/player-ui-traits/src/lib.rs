@@ -893,9 +893,9 @@ pub fn url_pattern_matches(url: &str, pattern: &str) -> bool {
 }
 
 /// All user-configurable settings for the Flash player that affect the
-/// native PPAPI host.  Browser-only settings (Ruffle compatibility,
-/// network mode, microphone/webcam toggles) are handled in the browser
-/// extension JS and are not represented here.
+/// native PPAPI host. Browser-only settings (for example Ruffle
+/// compatibility and network mode) are handled in the browser extension JS
+/// and are not represented here.
 #[derive(Debug, Clone)]
 pub struct PlayerSettings {
     // -- Networking --
@@ -914,6 +914,10 @@ pub struct PlayerSettings {
     pub disable_geolocation: bool,
     /// Return a random hardware/device ID instead of the real one.
     pub spoof_hardware_id: bool,
+    /// Block Flash microphone access.
+    pub disable_microphone: bool,
+    /// Block Flash webcam access.
+    pub disable_webcam: bool,
 
     // -- Sandboxing: HTTP(s) --
     /// Blacklist or whitelist mode for HTTP(s) requests.
@@ -949,7 +953,9 @@ impl Default for PlayerSettings {
             disable_crossdomain_sockets: true,
             hardware_acceleration: false,
             disable_geolocation: true,
-            spoof_hardware_id: false,
+            spoof_hardware_id: true,
+            disable_microphone: false,
+            disable_webcam: false,
             http_sandbox_mode: SandboxMode::Blacklist,
             http_blacklist: Vec::new(),
             http_whitelist: Vec::new(),

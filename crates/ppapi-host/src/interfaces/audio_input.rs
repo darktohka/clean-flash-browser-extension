@@ -196,6 +196,14 @@ fn capture_pump_loop(ctx: CapturePumpContext) {
     );
 }
 
+fn is_microphone_disabled() -> bool {
+    HOST
+        .get()
+        .and_then(|h| h.get_settings_provider())
+        .map(|sp| sp.get_settings().disable_microphone)
+        .unwrap_or(false)
+}
+
 // ---------------------------------------------------------------------------
 // Interface functions
 // ---------------------------------------------------------------------------
@@ -260,10 +268,16 @@ unsafe extern "C" fn enumerate_devices(
         .unwrap_or(0);
 
     // Query the provider for available input devices.
-    let devices = host
-        .get_audio_input_provider()
-        .map(|p| p.enumerate_devices())
-        .unwrap_or_default();
+    let devices = if is_microphone_disabled() {
+        tracing::trace!(
+            "ppb_audio_input_enumerate_devices: microphone disabled; skipping device enumeration"
+        );
+        Vec::new()
+    } else {
+        host.get_audio_input_provider()
+            .map(|p| p.enumerate_devices())
+            .unwrap_or_default()
+    };
 
     tracing::debug!(
         "ppb_audio_input_enumerate_devices: found {} device(s)",
@@ -271,31 +285,33 @@ unsafe extern "C" fn enumerate_devices(
     );
 
     // Create DeviceRef resources for each device and fill the output array.
-    if let Some(get_buffer) = output.GetDataBuffer {
-        let count = devices.len() as u32;
-        let buf_ptr = unsafe {
-            get_buffer(
-                output.user_data,
-                count,
-                std::mem::size_of::<PP_Resource>() as u32,
-            )
-        };
-        if !buf_ptr.is_null() && count > 0 {
-            let out_slice = unsafe {
-                std::slice::from_raw_parts_mut(buf_ptr as *mut PP_Resource, count as usize)
+    let count = devices.len() as u32;
+    if count > 0 {
+        if let Some(get_buffer) = output.GetDataBuffer {
+            let buf_ptr = unsafe {
+                get_buffer(
+                    output.user_data,
+                    count,
+                    std::mem::size_of::<PP_Resource>() as u32,
+                )
             };
-            for (i, (_dev_id, dev_name)) in devices.iter().enumerate() {
-                // Create a lightweight device-ref resource.
-                // Flash only needs the resource ID to pass back to Open().
-                // We store the name for identification.
-                let dev_res = DeviceRefResource {
-                    instance,
-                    name: dev_name.clone(),
-                    device_index: i as u32,
-                    device_type: ppapi_sys::PP_DEVICETYPE_DEV_AUDIOCAPTURE,
+            if !buf_ptr.is_null() {
+                let out_slice = unsafe {
+                    std::slice::from_raw_parts_mut(buf_ptr as *mut PP_Resource, count as usize)
                 };
-                let rid = host.resources.insert(instance, Box::new(dev_res));
-                out_slice[i] = rid;
+                for (i, (_dev_id, dev_name)) in devices.iter().enumerate() {
+                    // Create a lightweight device-ref resource.
+                    // Flash only needs the resource ID to pass back to Open().
+                    // We store the name for identification.
+                    let dev_res = DeviceRefResource {
+                        instance,
+                        name: dev_name.clone(),
+                        device_index: i as u32,
+                        device_type: ppapi_sys::PP_DEVICETYPE_DEV_AUDIOCAPTURE,
+                    };
+                    let rid = host.resources.insert(instance, Box::new(dev_res));
+                    out_slice[i] = rid;
+                }
             }
         }
     }
@@ -349,6 +365,13 @@ fn do_open(
     user_data: *mut c_void,
     callback: PP_CompletionCallback,
 ) -> i32 {
+    if is_microphone_disabled() {
+        tracing::info!(
+            "ppb_audio_input_open: microphone disabled; opening without provider stream"
+        );
+        return PP_ERROR_BADRESOURCE;
+    }
+
     let host = HOST.get().unwrap();
 
     // Read config.
@@ -368,9 +391,9 @@ fn do_open(
 
     // Try to open a provider stream.
     let provider_stream_id = host
-        .get_audio_input_provider()
-        .map(|p| p.open_stream(None, sample_rate, sample_frame_count))
-        .unwrap_or(0);
+            .get_audio_input_provider()
+            .map(|p| p.open_stream(None, sample_rate, sample_frame_count))
+            .unwrap_or(0);
 
     if provider_stream_id == 0 {
         tracing::warn!(
@@ -441,6 +464,14 @@ unsafe extern "C" fn get_current_config(audio_input: PP_Resource) -> PP_Resource
 }
 
 unsafe extern "C" fn start_capture(audio_input: PP_Resource) -> PP_Bool {
+    if is_microphone_disabled() {
+        tracing::trace!(
+            "ppb_audio_input_start_capture: resource={} (microphone disabled; failing capture)",
+            audio_input
+        );
+        return PP_FALSE;
+    }
+
     let host = HOST.get().unwrap();
 
     let result = host
