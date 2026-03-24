@@ -1605,6 +1605,9 @@ fn parse_settings(val: &serde_json::Value) -> PlayerSettings {
     if let Some(v) = val.get("disableGeolocation").and_then(|v| v.as_bool()) {
         s.disable_geolocation = v;
     }
+    if let Some(v) = val.get("spoofHardwareId").and_then(|v| v.as_bool()) {
+        s.spoof_hardware_id = v;
+    }
 
     s
 }

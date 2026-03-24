@@ -208,6 +208,9 @@ pub struct HostState {
     /// The browser UI language (e.g. "en-US").
     /// Used by `PPB_Flash::GetSetting(PP_FLASHSETTING_LANGUAGE)`.
     pub flash_language: Mutex<String>,
+    /// The device ID returned by `PPB_Flash_DRM::GetDeviceID`.
+    /// Generated once in `pre_sandbox_init` based on settings (real or spoofed).
+    pub device_id: Mutex<String>,
 }
 
 impl HostState {
@@ -261,6 +264,7 @@ impl HostState {
                 plugin_get_interface: Mutex::new(None),
                 flash_incognito: AtomicBool::new(false),
                 flash_language: Mutex::new(String::new()),
+                device_id: Mutex::new(String::new()),
             }
         })
     }
@@ -287,6 +291,22 @@ impl HostState {
             // even after sandbox::activate() is called on the main thread.
             audio_thread::ensure_started();
         }
+
+        // Generate the device ID based on the current settings.
+        // Must happen before sandbox activation since platform_device_id()
+        // may need filesystem or registry access.
+        let spoof = self
+            .get_settings_provider()
+            .map(|sp| sp.get_settings().spoof_hardware_id)
+            .unwrap_or(false);
+
+        let id = if spoof {
+            interfaces::flash_drm::generate_spoofed_device_id()
+        } else {
+            interfaces::flash_drm::get_or_create_device_id()
+        };
+        tracing::trace!("Device ID generated: {} (spoofed={})", id, spoof);
+        self.set_device_id(id);
     }
 
     /// Set the host callbacks (from the player/UI layer).
@@ -587,6 +607,16 @@ impl HostState {
             .unwrap_or_else(|_| "en_US.UTF-8".to_string());
         let lang = lang.split('.').next().unwrap_or("en_US");
         lang.replace('_', "-")
+    }
+
+    /// Set the device ID returned by `PPB_Flash_DRM::GetDeviceID`.
+    pub fn set_device_id(&self, id: impl Into<String>) {
+        *self.device_id.lock() = id.into();
+    }
+
+    /// Get the device ID. Returns an empty string if not yet generated.
+    pub fn get_device_id(&self) -> String {
+        self.device_id.lock().clone()
     }
 
     /// Get a cloned `Arc` handle to the scripting provider, if set.

@@ -28,6 +28,7 @@ const SETTINGS_DEFAULTS = {
   hardwareAcceleration: false,
   audioBackend: 0,              // 0=Browser, 1=Native
   disableGeolocation: true,
+  spoofHardwareId: true,
   disableMicrophone: false,
   disableWebcam: false,
 };
@@ -1014,6 +1015,8 @@ class FlashInstance {
     FlashInstance._activePort = port;
 
     const inst = this;
+
+    console.log("[Flash Player] Starting instance with", _flashSettings);
 
     port.postMessage({
       type: "start",

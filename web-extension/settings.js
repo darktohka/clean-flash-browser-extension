@@ -16,8 +16,9 @@ const DEFAULTS = {
   hardwareAcceleration: false,
   audioBackend: 0,              // 0=Browser, 1=Native
   disableGeolocation: true,
+  spoofHardwareId: true,
   disableMicrophone: false,
-  disableWebcam: false,
+  disableWebcam: false
 };
 
 const storage = chrome.storage.sync || chrome.storage.local;
@@ -32,6 +33,7 @@ const disableCrossdomainSockets = document.getElementById("disableCrossdomainSoc
 const hardwareAcceleration = document.getElementById("hardwareAcceleration");
 const audioBackend = document.getElementById("audioBackend");
 const disableGeolocation = document.getElementById("disableGeolocation");
+const spoofHardwareId = document.getElementById("spoofHardwareId");
 const disableMicrophone = document.getElementById("disableMicrophone");
 const disableWebcam = document.getElementById("disableWebcam");
 
@@ -46,6 +48,7 @@ storage.get(DEFAULTS, (items) => {
   hardwareAcceleration.checked = items.hardwareAcceleration;
   audioBackend.value = items.audioBackend;
   disableGeolocation.checked = items.disableGeolocation;
+  spoofHardwareId.checked = items.spoofHardwareId;
   disableMicrophone.checked = items.disableMicrophone;
   disableWebcam.checked = items.disableWebcam;
 
@@ -112,6 +115,10 @@ audioBackend.addEventListener("change", () => {
 
 disableGeolocation.addEventListener("change", () => {
   save("disableGeolocation", disableGeolocation.checked);
+});
+
+spoofHardwareId.addEventListener("change", () => {
+  save("spoofHardwareId", spoofHardwareId.checked);
 });
 
 disableMicrophone.addEventListener("change", () => {

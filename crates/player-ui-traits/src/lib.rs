@@ -838,6 +838,8 @@ pub struct PlayerSettings {
     /// Block TCP connections to Adobe geolocation servers
     /// (`geo2.adobe.com`, `geo.adobe.com`).
     pub disable_geolocation: bool,
+    /// Return a random hardware/device ID instead of the real one.
+    pub spoof_hardware_id: bool,
 }
 
 impl Default for PlayerSettings {
@@ -847,6 +849,7 @@ impl Default for PlayerSettings {
             disable_crossdomain_sockets: true,
             hardware_acceleration: false,
             disable_geolocation: true,
+            spoof_hardware_id: false,
         }
     }
 }
