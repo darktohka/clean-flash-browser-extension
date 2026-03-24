@@ -215,7 +215,7 @@ impl player_ui_traits::AudioInputProvider for CpalAudioInputProvider {
         let ring = entry.ring.clone();
 
         let stream = match device.build_input_stream(
-            &config,
+            config,
             move |data: &[i16], _info: &cpal::InputCallbackInfo| {
                 // Convert i16 samples to bytes and push into ring buffer.
                 let bytes: &[u8] = unsafe {

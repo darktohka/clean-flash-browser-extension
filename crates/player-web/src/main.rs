@@ -166,22 +166,13 @@ fn main() {
         ));
         host.set_url_provider(Box::new(WebUrlProvider::new(script_bridge.clone())));
 
-        // Set up the audio provider. The dispatcher uses settings:
-        // - audioBackend=0 (Browser): forwards to Web Audio API.
-        // - audioBackend=1 (Native): returns no provider stream so
-        //   ppapi-host falls back to cpal native playback.
-        let use_native_audio = crate::WEB_SETTINGS
-            .get()
-            .map(|ws| *ws.audio_backend_native.lock())
-            .unwrap_or(false);
-
-        if !use_native_audio {
-            tracing::info!("Using Web Audio API for Flash audio output");
-            host.set_audio_provider(Box::new(WebAudioProvider::new()));
-        } else {
-            tracing::info!("Using native audio output for Flash");
-            // By returning no provider stream, ppapi-host falls back to cpal native playback.
-        }
+        // Set up the settings provider early so backend selection can read it.
+        let settings = Arc::new(WebSettingsProvider::new());
+        WEB_SETTINGS
+            .set(settings.clone())
+            .ok()
+            .expect("WEB_SETTINGS already initialised");
+        host.set_settings_provider(Box::new(WebSettingsProviderWrapper(settings)));
 
         // Set up the audio input provider so that Flash can capture from
         // the browser's microphone via MediaStream / getUserMedia.
@@ -257,15 +248,6 @@ fn main() {
             http_fetch::DispatchingHttpRequestProvider::new(fetch_provider, reqwest_provider),
         ));
 
-        // Set up the settings provider so that subsystems can query
-        // user-configurable player settings (Ruffle compat, network
-        // mode, hardware acceleration, etc.).
-        let settings = Arc::new(WebSettingsProvider::new());
-        WEB_SETTINGS
-            .set(settings.clone())
-            .ok()
-            .expect("WEB_SETTINGS already initialised");
-        host.set_settings_provider(Box::new(WebSettingsProviderWrapper(settings)));
     }
 
     // Load the Flash plugin now that all providers are set up.
@@ -386,6 +368,23 @@ static WEB_CONTEXT_MENU: OnceLock<Arc<WebContextMenuProvider>> = OnceLock::new()
 
 /// Global settings provider for live settings updates.
 pub(crate) static WEB_SETTINGS: OnceLock<Arc<WebSettingsProvider>> = OnceLock::new();
+
+fn apply_audio_provider_from_settings(host: &ppapi_host::HostState) {
+    let use_native_audio = WEB_SETTINGS
+        .get()
+        .map(|ws| *ws.audio_backend_native.lock())
+        .unwrap_or(false);
+
+    if use_native_audio {
+        tracing::info!("Selecting native (cpal) audio output for Flash");
+        host.switch_audio_provider(Box::new(
+            ppapi_host::audio_cpal::CpalAudioProvider::new(),
+        ));
+    } else {
+        tracing::info!("Selecting Web Audio API for Flash audio output");
+        host.switch_audio_provider(Box::new(WebAudioProvider::new()));
+    }
+}
 
 /// Lazily-initialized channel that receives messages from a background reader.
 fn try_read_command() -> Option<serde_json::Value> {
@@ -551,6 +550,9 @@ fn handle_command(
                 tracing::info!("Applying initial settings from open command");
                 if let Some(ws) = WEB_SETTINGS.get() {
                     ws.update_from_json(settings_obj);
+                }
+                if let Some(host) = ppapi_host::HOST.get() {
+                    apply_audio_provider_from_settings(host);
                 }
             }
 
@@ -781,6 +783,9 @@ fn handle_command(
                 if let Some(ws) = WEB_SETTINGS.get() {
                     ws.update_from_json(settings_obj);
                 }
+                if let Some(host) = ppapi_host::HOST.get() {
+                    apply_audio_provider_from_settings(host);
+                }
             }
         }
 
@@ -984,6 +989,10 @@ impl WebAudioProvider {
 }
 
 impl player_ui_traits::AudioProvider for WebAudioProvider {
+    fn provider_name(&self) -> &'static str {
+        "web-audio"
+    }
+
     fn create_stream(&self, sample_rate: u32, sample_frame_count: u32) -> u32 {
         let id = self.next_stream_id.fetch_add(1, Ordering::Relaxed);
         tracing::info!(

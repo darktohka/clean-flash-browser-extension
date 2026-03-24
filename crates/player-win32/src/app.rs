@@ -788,6 +788,12 @@ impl FlashPlayerApp {
                         ppapi_host::audio_input_cpal::CpalAudioInputProvider::new(),
                     ));
 
+                    // Set up the cpal-based audio output provider for
+                    // speaker playback (PPB_Audio / PPB_AudioOutput).
+                    host.set_audio_provider(Box::new(
+                        ppapi_host::audio_cpal::CpalAudioProvider::new(),
+                    ));
+
                     // Set up the arboard-based clipboard provider for
                     // system clipboard access (PPB_Flash_Clipboard).
                     host.set_clipboard_provider(Box::new(

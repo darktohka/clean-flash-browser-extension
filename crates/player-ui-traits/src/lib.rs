@@ -323,6 +323,14 @@ pub trait UrlProvider: Send + Sync {
 /// Audio format is always **stereo** (2 channels), interleaved signed
 /// 16-bit little-endian PCM.
 pub trait AudioProvider: Send + Sync {
+    /// Short identifier for this provider type (e.g. `"cpal"`, `"web-audio"`).
+    ///
+    /// Used to skip redundant provider switches when the old and new
+    /// providers are the same type.  Returns `""` by default.
+    fn provider_name(&self) -> &'static str {
+        ""
+    }
+
     /// Create a new audio output stream.
     ///
     /// - `sample_rate`: sample rate in Hz (e.g. 44100, 48000).

@@ -170,6 +170,17 @@ impl ResourceManager {
         map.retain(|_, entry| entry.instance != instance);
     }
 
+    /// Collect the IDs of all live resources whose `resource_type()` matches
+    /// the given name.  The returned vec can be iterated *outside* the lock
+    /// and each ID accessed individually via `with_downcast` / `with_downcast_mut`.
+    pub fn ids_by_type(&self, type_name: &str) -> Vec<PP_Resource> {
+        let map = self.resources.lock();
+        map.iter()
+            .filter(|(_, entry)| entry.resource.resource_type() == type_name)
+            .map(|(&id, _)| id)
+            .collect()
+    }
+
     /// Number of live resources.
     pub fn len(&self) -> usize {
         self.resources.lock().len()

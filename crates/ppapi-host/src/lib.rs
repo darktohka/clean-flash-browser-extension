@@ -12,6 +12,12 @@ pub mod gl_context;
 #[cfg(feature = "audio-cpal")]
 pub mod audio_input_cpal;
 
+#[cfg(feature = "audio-cpal")]
+pub mod audio_cpal;
+
+#[cfg(feature = "audio-cpal")]
+mod audio_thread;
+
 #[cfg(feature = "clipboard-arboard")]
 pub mod clipboard_arboard;
 
@@ -265,6 +271,15 @@ impl HostState {
         // worker thread.
         let _ = gl_context::gl_available();
 
+        #[cfg(feature = "audio-cpal")]
+        {
+            // Spawn the unsandboxed audio thread before the sandbox is
+            // activated.  Since seccomp filters are per-thread, this
+            // thread will retain full syscall access (including dlopen)
+            // even after sandbox::activate() is called on the main thread.
+            audio_thread::ensure_started();
+        }
+
         HOST.get().unwrap()
     }
 
@@ -286,6 +301,122 @@ impl HostState {
     /// Set the audio playback provider (for browser-hosted players).
     pub fn set_audio_provider(&self, provider: Box<dyn player_ui_traits::AudioProvider>) {
         *self.audio_provider.lock() = Some(Arc::from(provider));
+    }
+
+    /// Replace the audio playback provider, migrating any active streams.
+    ///
+    /// Active audio streams are stopped on the old provider, the new
+    /// provider is installed, and streams that were playing are restarted
+    /// on the new provider.
+    pub fn switch_audio_provider(&self, provider: Box<dyn player_ui_traits::AudioProvider>) {
+        use interfaces::audio::AudioResource;
+        use interfaces::audio_output::AudioOutputResource;
+
+        // Skip if the new provider is the same type as the current one.
+        {
+            let current = self.audio_provider.lock();
+            if let Some(ref existing) = *current {
+                let old_name = existing.provider_name();
+                let new_name = provider.provider_name();
+                if !old_name.is_empty() && old_name == new_name {
+                    tracing::debug!(
+                        "switch_audio_provider: provider type unchanged ({}), skipping",
+                        old_name,
+                    );
+                    return;
+                }
+            }
+        }
+
+        // Collect IDs of all live PPB_Audio and PPB_AudioOutput resources.
+        let audio_ids = self.resources.ids_by_type("PPB_Audio");
+        let audio_output_ids = self.resources.ids_by_type("PPB_AudioOutput");
+
+        // Phase 1: stop all playing streams (drops old stream handles,
+        // which calls close_stream on the old provider and terminates the
+        // audio pump threads).
+        let mut was_playing_audio: Vec<PP_Resource> = Vec::new();
+        for &id in &audio_ids {
+            let playing = self.resources.with_downcast_mut::<AudioResource, _>(id, |a| {
+                if a.playing.load(std::sync::atomic::Ordering::SeqCst) {
+                    a.playing.store(false, std::sync::atomic::Ordering::SeqCst);
+                    *a.stream.lock() = None;
+                    true
+                } else {
+                    false
+                }
+            });
+            if playing == Some(true) {
+                was_playing_audio.push(id);
+            }
+        }
+
+        let mut was_playing_output: Vec<PP_Resource> = Vec::new();
+        for &id in &audio_output_ids {
+            let playing = self.resources.with_downcast_mut::<AudioOutputResource, _>(id, |ao| {
+                if ao.playing.load(std::sync::atomic::Ordering::SeqCst) {
+                    ao.playing.store(false, std::sync::atomic::Ordering::SeqCst);
+                    *ao.stream.lock() = None;
+                    true
+                } else {
+                    false
+                }
+            });
+            if playing == Some(true) {
+                was_playing_output.push(id);
+            }
+        }
+
+        // Allow pump threads a moment to notice the playing flag and exit.
+        if !was_playing_audio.is_empty() || !was_playing_output.is_empty() {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        // Phase 2: install the new provider.
+        tracing::info!(
+            "switch_audio_provider: swapping provider ({} PPB_Audio, {} PPB_AudioOutput streams to restart)",
+            was_playing_audio.len(),
+            was_playing_output.len(),
+        );
+        *self.audio_provider.lock() = Some(Arc::from(provider));
+
+        // Phase 3: restart streams that were playing.
+        for &id in &was_playing_audio {
+            self.resources.with_downcast_mut::<AudioResource, _>(id, |a| {
+                if let Some(handle) = interfaces::audio::start_provider_stream(
+                    a.sample_rate,
+                    a.sample_frame_count,
+                    a.callback_1_0,
+                    a.callback_1_1,
+                    a.user_data,
+                    a.playing.clone(),
+                ) {
+                    a.playing.store(true, std::sync::atomic::Ordering::SeqCst);
+                    *a.stream.lock() = Some(handle);
+                    tracing::info!("switch_audio_provider: restarted PPB_Audio stream (resource={})", id);
+                } else {
+                    tracing::error!("switch_audio_provider: failed to restart PPB_Audio stream (resource={})", id);
+                }
+            });
+        }
+
+        for &id in &was_playing_output {
+            self.resources.with_downcast_mut::<AudioOutputResource, _>(id, |ao| {
+                if let Some(handle) = interfaces::audio_output::start_provider_stream(
+                    ao.sample_rate,
+                    ao.sample_frame_count,
+                    ao.callback,
+                    ao.user_data,
+                    ao.playing.clone(),
+                ) {
+                    ao.playing.store(true, std::sync::atomic::Ordering::SeqCst);
+                    *ao.stream.lock() = Some(handle);
+                    tracing::info!("switch_audio_provider: restarted PPB_AudioOutput stream (resource={})", id);
+                } else {
+                    tracing::error!("switch_audio_provider: failed to restart PPB_AudioOutput stream (resource={})", id);
+                }
+            });
+        }
     }
 
     /// Get a cloned `Arc` handle to the audio provider, if set.
