@@ -250,16 +250,11 @@ fn main() {
 
     }
 
-    // Load the Flash plugin now that all providers are set up.
-    // This activates the seccomp sandbox on the current thread.
-    if let Err(e) = player.load_plugin() {
-        let _ = protocol::send_host_message(&protocol::HostMessage::Error(
-            &format!("Failed to load plugin: {}", e),
-        ));
-        std::process::exit(1);
-    }
+    // Plugin loading is deferred until the first "open" message so that
+    // browser-supplied settings (GL backend, audio backend, …) are
+    // available before pre-sandbox initialization runs.
 
-    tracing::info!("Host initialized successfully, entering main loop");
+    tracing::info!("Entering main loop");
 
     // Send initial state.
     let _ = protocol::send_host_message(&protocol::HostMessage::State {
@@ -319,9 +314,9 @@ fn main() {
 }
 
 fn init_tracing_if_enabled() -> Option<WorkerGuard> {
-    if std::env::var_os("TRACE_FLASH").is_none() {
-        return None;
-    }
+    //if std::env::var_os("TRACE_FLASH").is_none() {
+    //    return None;
+    //}
 
     let filter = EnvFilter::new("trace");
     let log_dir = std::env::var("FLASH_PLAYER_LOG_DIR")
@@ -553,6 +548,19 @@ fn handle_command(
                 }
                 if let Some(host) = ppapi_host::HOST.get() {
                     apply_audio_provider_from_settings(host);
+                }
+            }
+
+            // On the first open, load the plugin now that settings are
+            // available.  pre_sandbox_init (EGL, audio thread) runs
+            // inside load_plugin, and the seccomp sandbox is activated
+            // immediately after.
+            if !player.is_plugin_loaded() {
+                if let Err(e) = player.load_plugin() {
+                    let _ = protocol::send_host_message(&protocol::HostMessage::Error(
+                        &format!("Failed to load plugin: {}", e),
+                    ));
+                    return true;
                 }
             }
 

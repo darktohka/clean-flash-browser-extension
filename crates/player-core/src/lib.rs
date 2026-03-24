@@ -305,6 +305,13 @@ impl FlashPlayer {
             source: path.to_string(),
         };
 
+        // Perform pre-sandbox initialization (EGL/GLES2. audio thread)
+        // now that settings are configured but before the sandbox blocks
+        // dlopen.  Idempotent, so safe if called more than once.
+        if let Some(host) = ppapi_host::HOST.get() {
+            host.pre_sandbox_init();
+        }
+
         let loader = unsafe {
             PluginLoader::load(Path::new(path))
                 .map_err(|e| format!("Failed to load plugin: {}", e))?

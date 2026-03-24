@@ -262,13 +262,21 @@ impl HostState {
                 flash_incognito: AtomicBool::new(false),
                 flash_language: Mutex::new(String::new()),
             }
-        });
+        })
+    }
 
-        // Eagerly initialize EGL/GLES2 *before* the seccomp sandbox is
-        // activated (load_plugin → sandbox::activate).  After the sandbox
-        // is in place, dlopen is blocked so libloading::Library::new will
-        // fail.  This is the same pattern used for the rfd file-chooser
-        // worker thread.
+    /// Perform pre-sandbox initialization: eagerly load libraries that
+    /// require `dlopen` before the seccomp sandbox blocks it.
+    ///
+    /// Must be called **after** settings providers are configured (so the
+    /// GL backend can consult settings) and **before**
+    /// [`FlashPlayer::load_plugin`](crate) activates the sandbox.
+    ///
+    /// Safe to call multiple times; each sub-init is idempotent.
+    pub fn pre_sandbox_init(&self) {
+        // Initialize EGL/GLES2 *before* the seccomp sandbox is activated.
+        // After the sandbox is in place, dlopen is blocked so
+        // libloading::Library::new will fail.
         let _ = gl_context::gl_available();
 
         #[cfg(feature = "audio-cpal")]
@@ -279,8 +287,6 @@ impl HostState {
             // even after sandbox::activate() is called on the main thread.
             audio_thread::ensure_started();
         }
-
-        HOST.get().unwrap()
     }
 
     /// Set the host callbacks (from the player/UI layer).
