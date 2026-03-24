@@ -21,7 +21,7 @@ const IS_FIREFOX = typeof navigator !== "undefined" && /\bFirefox\//.test(naviga
 // ---------------------------------------------------------------------------
 const SETTINGS_DEFAULTS = {
   ruffleCompat: 1,              // 0=PreferRuffle, 1=PreferCleanFlash, 2=ForceCleanFlash
-  networkBrowserOnly: true,
+  preferNetworkBrowser: true,
   networkFallbackNative: true,
   disableCrossdomainHttp: true,
   disableCrossdomainSockets: true,
@@ -31,6 +31,16 @@ const SETTINGS_DEFAULTS = {
   spoofHardwareId: true,
   disableMicrophone: false,
   disableWebcam: false,
+  // Sandboxing
+  httpSandboxMode: "blacklist",
+  httpBlacklist: [],
+  httpWhitelist: [],
+  tcpUdpSandboxMode: "blacklist",
+  tcpUdpBlacklist: [],
+  tcpUdpWhitelist: [],
+  fileWhitelistEnabled: true,
+  whitelistedFiles: [],
+  whitelistedFolders: [],
 };
 let _flashSettings = Object.assign({}, SETTINGS_DEFAULTS);
 
@@ -3234,6 +3244,24 @@ async function handleScriptRequest(req, port) {
     } else {
       sendScriptResponse(port, id, resp.value);
     }
+    return;
+  }
+
+  // ---------------------------------------------------------------
+  // Settings: persist settings edits from the native host
+  // ---------------------------------------------------------------
+
+  if (op === "editSettings") {
+    const edits = req.edits;
+    if (edits && typeof edits === "object") {
+      try {
+        const store = chrome.storage.sync || chrome.storage.local;
+        store.set(edits);
+      } catch (e) {
+        console.warn("[Flash Player] editSettings error:", e);
+      }
+    }
+    sendScriptResponse(port, id, { type: "bool", v: true });
     return;
   }
 

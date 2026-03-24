@@ -252,6 +252,39 @@ fn do_show(
         } else {
             result_code = PP_OK;
 
+            // Auto-add chosen files/folders to the whitelist
+            {
+                let mut files_to_add = Vec::new();
+                let mut folders_to_add = Vec::new();
+                for path in &chosen_files {
+                    if std::path::Path::new(path).is_dir() {
+                        folders_to_add.push(path.clone());
+                    } else {
+                        files_to_add.push(path.clone());
+                    }
+                }
+                if !files_to_add.is_empty() || !folders_to_add.is_empty() {
+                    if let Some(sp) = host.get_settings_provider() {
+                        // Merge with existing lists and send the complete updated lists
+                        let current = sp.get_settings();
+                        let mut wf = current.whitelisted_files;
+                        let mut wd = current.whitelisted_folders;
+                        for f in &files_to_add {
+                            if !wf.iter().any(|x| x == f) { wf.push(f.clone()); }
+                        }
+                        for d in &folders_to_add {
+                            if !wd.iter().any(|x| x == d) { wd.push(d.clone()); }
+                        }
+                        wf.sort();
+                        wd.sort();
+                        sp.edit_settings(serde_json::json!({
+                            "whitelistedFiles": wf,
+                            "whitelistedFolders": wd,
+                        }));
+                    }
+                }
+            }
+
             // Allocate the output array
             if let Some(get_data_buffer) = output_get {
                 let count = chosen_files.len() as u32;

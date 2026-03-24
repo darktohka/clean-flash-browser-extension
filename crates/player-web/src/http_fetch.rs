@@ -229,9 +229,9 @@ impl HttpRequestProvider for FetchHttpRequestProvider {
 // ===========================================================================
 
 /// HTTP request provider that dispatches to either the browser's `fetch()`
-/// or direct `reqwest` based on the `networkBrowserOnly` setting.
+/// or direct `reqwest` based on the `preferNetworkBrowser` setting.
 ///
-/// When `networkBrowserOnly` is `true` (default), uses `FetchHttpRequestProvider`.
+/// When `preferNetworkBrowser` is `true` (default), uses `FetchHttpRequestProvider`.
 /// When `false`, uses `ReqwestHttpRequestProvider` directly.
 pub struct DispatchingHttpRequestProvider {
     fetch_provider: FetchHttpRequestProvider,
@@ -262,7 +262,7 @@ impl HttpRequestProvider for DispatchingHttpRequestProvider {
     ) -> Result<HttpResponse, i32> {
         let use_browser = crate::WEB_SETTINGS
             .get()
-            .map(|ws| *ws.network_browser_only.lock())
+            .map(|ws| *ws.prefer_network_browser.lock())
             .unwrap_or(true);
 
         if use_browser {

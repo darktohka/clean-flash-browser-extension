@@ -72,11 +72,12 @@ fn is_blocked_tcp_host(host: &str) -> bool {
     }
 
     // Geolocation hosts are blocked only when the setting says so.
-    let disable_geo = crate::HOST
+    let settings = crate::HOST
         .get()
         .and_then(|h| h.get_settings_provider())
-        .map(|sp| sp.get_settings().disable_geolocation)
-        .unwrap_or(true);
+        .map(|sp| sp.get_settings());
+
+    let disable_geo = settings.as_ref().map(|s| s.disable_geolocation).unwrap_or(true);
 
     if disable_geo {
         if GEO_BLOCKED_TCP_HOSTS
@@ -84,6 +85,20 @@ fn is_blocked_tcp_host(host: &str) -> bool {
             .any(|blocked| normalized.eq_ignore_ascii_case(blocked))
         {
             return true;
+        }
+    }
+
+    // TCP/UDP sandbox check
+    if let Some(ref settings) = settings {
+        let normalized_lower = normalized.to_ascii_lowercase();
+        if settings.tcp_udp_sandbox_mode == player_ui_traits::SandboxMode::Whitelist {
+            if !settings.tcp_udp_whitelist.iter().any(|h| h.eq_ignore_ascii_case(&normalized_lower)) {
+                return true;
+            }
+        } else {
+            if settings.tcp_udp_blacklist.iter().any(|h| h.eq_ignore_ascii_case(&normalized_lower)) {
+                return true;
+            }
         }
     }
 

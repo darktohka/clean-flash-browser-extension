@@ -14,6 +14,59 @@ use super::net_address::{addr_to_socketaddr, socketaddr_to_addr, NetAddressResou
 use crate::HOST;
 
 // ---------------------------------------------------------------------------
+// UDP sandbox host check
+// ---------------------------------------------------------------------------
+
+/// Hosts that are always blocked for UDP sockets.
+const ALWAYS_BLOCKED_UDP_HOSTS: [&str; 1] = [
+    "fpdownload.macromedia.com",
+];
+
+/// Geolocation hosts blocked when the `disable_geolocation` setting is true.
+const GEO_BLOCKED_UDP_HOSTS: [&str; 2] = [
+    "geo2.adobe.com",
+    "geo.adobe.com",
+];
+
+/// Check if a UDP destination address should be blocked by sandbox settings.
+fn is_blocked_udp_addr(addr: &SocketAddr) -> bool {
+    let host = addr.ip().to_string();
+    let settings = crate::HOST
+        .get()
+        .and_then(|h| h.get_settings_provider())
+        .map(|sp| sp.get_settings());
+
+    let normalized = host.to_ascii_lowercase();
+
+    // Always blocked.
+    if ALWAYS_BLOCKED_UDP_HOSTS
+        .iter()
+        .any(|blocked| normalized.eq_ignore_ascii_case(blocked))
+    {
+        return true;
+    }
+
+    // Geolocation hosts are blocked only when the setting says so.
+    let disable_geo = settings.as_ref().map(|s| s.disable_geolocation).unwrap_or(true);
+    if disable_geo {
+        if GEO_BLOCKED_UDP_HOSTS
+            .iter()
+            .any(|blocked| normalized.eq_ignore_ascii_case(blocked))
+        {
+            return true;
+        }
+    }
+
+    let Some(settings) = settings else { return false };
+
+    if settings.tcp_udp_sandbox_mode == player_ui_traits::SandboxMode::Whitelist {
+        !settings.tcp_udp_whitelist.iter().any(|h| h.eq_ignore_ascii_case(&normalized))
+    } else {
+        settings.tcp_udp_blacklist.iter().any(|h| h.eq_ignore_ascii_case(&normalized))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Resource
 // ---------------------------------------------------------------------------
 
@@ -322,6 +375,14 @@ unsafe extern "C" fn send_to(
         udp_socket, num_bytes, dest
     );
 
+    if is_blocked_udp_addr(&dest) {
+        tracing::warn!(
+            "PPB_UDPSocket_Private::SendTo(resource={}): blocked by UDP sandbox settings (dest={})",
+            udp_socket, dest
+        );
+        return PP_ERROR_NOACCESS;
+    }
+
     let Some(host) = HOST.get() else {
         return PP_ERROR_FAILED;
     };
@@ -621,6 +682,14 @@ unsafe extern "C" fn pub_send_to(
         "PPB_UDPSocket::SendTo(resource={}, num_bytes={}, dest={})",
         udp_socket, num_bytes, dest
     );
+
+    if is_blocked_udp_addr(&dest) {
+        tracing::warn!(
+            "PPB_UDPSocket::SendTo(resource={}): blocked by UDP sandbox settings (dest={})",
+            udp_socket, dest
+        );
+        return PP_ERROR_NOACCESS;
+    }
 
     let socket_clone = host
         .resources

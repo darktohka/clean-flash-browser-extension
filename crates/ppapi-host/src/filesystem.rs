@@ -124,6 +124,77 @@ fn default_filesystem() -> Box<dyn FlashFileSystem> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// File whitelist manager
+// ---------------------------------------------------------------------------
+
+/// Check if a file path is allowed by the file whitelist settings.
+///
+/// When file whitelisting is disabled, all paths are allowed.
+/// When enabled, a path is allowed if:
+/// - It matches an entry in the whitelisted files list exactly, OR
+/// - It is under any of the whitelisted folders (prefix match on
+///   canonicalized path components).
+pub fn is_file_path_allowed(path: &str) -> bool {
+    let settings = crate::HOST
+        .get()
+        .and_then(|h| h.get_settings_provider())
+        .map(|sp| sp.get_settings());
+    let Some(settings) = settings else { return true };
+
+    if !settings.file_whitelist_enabled {
+        return true;
+    }
+
+    // Normalize the path for comparison
+    let normalized = normalize_path(path);
+
+    // Check exact file match
+    if settings.whitelisted_files.iter().any(|f| normalize_path(f) == normalized) {
+        return true;
+    }
+
+    // Check folder prefix match
+    for folder in &settings.whitelisted_folders {
+        let folder_normalized = normalize_path(folder);
+        let prefix = if folder_normalized.ends_with('/') {
+            folder_normalized.clone()
+        } else {
+            format!("{}/", folder_normalized)
+        };
+        if normalized.starts_with(&prefix) || normalized == folder_normalized {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Normalize a path for comparison: resolve `.` and `..`, normalize
+/// separators.
+fn normalize_path(path: &str) -> String {
+    use std::path::Path;
+    let p = Path::new(path);
+    // Try to canonicalize (resolve symlinks etc.), fall back to lexical
+    // normalization if the path doesn't exist yet.
+    match p.canonicalize() {
+        Ok(canonical) => canonical.to_string_lossy().to_string(),
+        Err(_) => {
+            // Lexical normalization: just clean up the path
+            let mut components = Vec::new();
+            for comp in p.components() {
+                match comp {
+                    std::path::Component::ParentDir => { components.pop(); }
+                    std::path::Component::CurDir => {}
+                    _ => components.push(comp),
+                }
+            }
+            let result: std::path::PathBuf = components.iter().collect();
+            result.to_string_lossy().to_string()
+        }
+    }
+}
+
 // ===========================================================================
 // OS Filesystem
 // ===========================================================================
@@ -239,6 +310,11 @@ extern "system" {
 
 impl FlashFileSystem for OsFileSystem {
     fn open_file(&self, path: &str, mode: i32) -> Result<PP_FileHandle, i32> {
+        if !is_file_path_allowed(path) {
+            tracing::warn!("OsFileSystem::open_file: path '{}' blocked by file whitelist", path);
+            return Err(PP_ERROR_NOACCESS);
+        }
+
         let p = std::path::Path::new(path);
 
         let mut opts = std::fs::OpenOptions::new();
@@ -289,11 +365,19 @@ impl FlashFileSystem for OsFileSystem {
     }
 
     fn query_file(&self, path: &str) -> Result<FlashFileInfo, i32> {
+        if !is_file_path_allowed(path) {
+            tracing::warn!("OsFileSystem::query_file: path '{}' blocked by file whitelist", path);
+            return Err(PP_ERROR_NOACCESS);
+        }
         let meta = std::fs::metadata(path).map_err(|e| Self::io_err_to_pp(&e))?;
         Ok(Self::metadata_to_info(&meta))
     }
 
     fn read_dir(&self, path: &str) -> Result<Vec<FlashDirEntry>, i32> {
+        if !is_file_path_allowed(path) {
+            tracing::warn!("OsFileSystem::read_dir: path '{}' blocked by file whitelist", path);
+            return Err(PP_ERROR_NOACCESS);
+        }
         let rd = std::fs::read_dir(path).map_err(|e| Self::io_err_to_pp(&e))?;
         let entries = rd
             .filter_map(|e| e.ok())

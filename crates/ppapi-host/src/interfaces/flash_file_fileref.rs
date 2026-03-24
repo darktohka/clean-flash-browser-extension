@@ -67,6 +67,11 @@ unsafe extern "C" fn open_file(
         return PP_ERROR_BADRESOURCE;
     };
 
+    if !filesystem::is_file_path_allowed(&path) {
+        tracing::warn!("PPB_Flash_File_FileRef::OpenFile: path '{}' blocked by file whitelist", path);
+        return PP_ERROR_NOACCESS;
+    }
+
     let _flags = pp_mode_to_provider_flags(mode);
     let fs = filesystem::get_filesystem();
     tracing::trace!("PPB_Flash_File_FileRef::OpenFile: opening path '{}' with mode 0x{:x}", path, mode);
@@ -108,6 +113,10 @@ unsafe extern "C" fn query_file(
 
     let fi = if file_type == super::file_ref::FileRefType::Name {
         let path_str = path.as_deref().unwrap_or("");
+        if !filesystem::is_file_path_allowed(path_str) {
+            tracing::warn!("PPB_Flash_File_FileRef::QueryFile: path '{}' blocked by file whitelist", path_str);
+            return PP_ERROR_NOACCESS;
+        }
         tracing::trace!("PPB_Flash_File_FileRef::QueryFile: querying path '{}'", path_str);
         match fs.query_file(path_str) {
             Ok(fi) => fi,

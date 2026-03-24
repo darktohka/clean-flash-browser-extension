@@ -72,6 +72,74 @@ fn is_crossdomain_xml_request(url: &str) -> bool {
     path_lower.ends_with("/crossdomain.xml")
 }
 
+/// Extract the hostname from an HTTP(s) URL.
+fn extract_host_from_url(url: &str) -> Option<String> {
+    let after_scheme = url.strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
+    let host = after_scheme.split(&['/', '?', '#'][..]).next()?;
+    let host = if host.contains('[') {
+        // IPv6 like [::1]:8080
+        host.split(']').next().unwrap_or(host).trim_start_matches('[')
+    } else {
+        host.split(':').next().unwrap_or(host)
+    };
+    if host.is_empty() { None } else { Some(host.to_ascii_lowercase()) }
+}
+
+/// Hosts that are always blocked for HTTP(s) requests.
+const ALWAYS_BLOCKED_HTTP_HOSTS: [&str; 1] = [
+    "fpdownload.macromedia.com",
+];
+
+/// Geolocation hosts blocked when the `disable_geolocation` setting is true.
+const GEO_BLOCKED_HTTP_HOSTS: [&str; 2] = [
+    "geo2.adobe.com",
+    "geo.adobe.com",
+];
+
+/// Check if an HTTP(s) URL should be blocked by the sandbox settings.
+///
+/// Hard-coded host blocks (always-blocked and geolocation) are checked
+/// first against the hostname portion of the URL.  The user-configured
+/// blacklist / whitelist operates on the *full URL* using wildcard
+/// patterns (`*` matches any sequence of characters).
+fn is_http_url_blocked(url: &str, host: &str) -> bool {
+    let settings = crate::HOST
+        .get()
+        .and_then(|h| h.get_settings_provider())
+        .map(|sp| sp.get_settings());
+
+    let normalized_host = host.trim().to_ascii_lowercase();
+
+    // Always blocked (by host).
+    if ALWAYS_BLOCKED_HTTP_HOSTS
+        .iter()
+        .any(|blocked| normalized_host.eq_ignore_ascii_case(blocked))
+    {
+        return true;
+    }
+
+    // Geolocation hosts are blocked only when the setting says so.
+    let disable_geo = settings.as_ref().map(|s| s.disable_geolocation).unwrap_or(true);
+    if disable_geo {
+        if GEO_BLOCKED_HTTP_HOSTS
+            .iter()
+            .any(|blocked| normalized_host.eq_ignore_ascii_case(blocked))
+        {
+            return true;
+        }
+    }
+
+    let Some(settings) = settings else { return false };
+
+    // User-configured URL pattern matching.
+    if settings.http_sandbox_mode == player_ui_traits::SandboxMode::Whitelist {
+        !settings.http_whitelist.iter().any(|pat| player_ui_traits::url_pattern_matches(url, pat))
+    } else {
+        settings.http_blacklist.iter().any(|pat| player_ui_traits::url_pattern_matches(url, pat))
+    }
+}
+
 /// Perform URL loading: file paths, http/https (via the configured
 /// [`HttpRequestProvider`]), or crossdomain.xml interception.
 ///
@@ -162,6 +230,17 @@ fn perform_url_open(
 
     // ----- http:// / https:// → delegate to HttpRequestProvider -----
     if url.starts_with("http://") || url.starts_with("https://") {
+        // HTTP(s) sandbox check
+        if let Some(host_str) = extract_host_from_url(url) {
+            if is_http_url_blocked(url, &host_str) {
+                tracing::warn!(
+                    "URL open: blocked by HTTP sandbox settings: {}",
+                    url
+                );
+                return Err(PP_ERROR_FAILED);
+            }
+        }
+
         let provider = HOST
             .get()
             .and_then(|h| h.get_http_request_provider());

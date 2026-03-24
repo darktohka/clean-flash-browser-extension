@@ -11,139 +11,288 @@
     <h1>Clean Flash Player</h1>
     <p class="reload-notice">Changes will take effect on next page reload.</p>
 
-    <!-- Compatibility -->
-    <section class="settings-group">
-      <h2>Compatibility</h2>
+    <!-- Tab bar -->
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="general">General</button>
+      <button class="tab-btn" data-tab="sandboxing">Sandboxing</button>
+    </div>
 
-      <div class="setting-row slider-row">
-        <label class="setting-label" data-tooltip="Controls how Clean Flash Player coexists with the Ruffle ActionScript emulator.">
-          Ruffle Compatibility
-          <span class="help-icon">?</span>
-        </label>
-        <div class="slider-container">
-          <input type="range" id="ruffleCompat" min="0" max="2" step="1" value="1">
-          <div class="slider-labels">
-            <span class="slider-label" data-value="0" data-tooltip="Ruffle will override Clean Flash Player content. Flash plugin spoofing and RufflePlayer shim are both disabled.">
-              Prefer Ruffle
-              <span class="help-icon">?</span>
-            </span>
-            <span class="slider-label" data-value="1" data-tooltip="Clean Flash Player will override the Ruffle extension. Flash plugin is spoofed so Ruffle backs off, but page-bundled Ruffle can still activate.">
-              Prefer Clean Flash
-              <span class="help-icon">?</span>
-            </span>
-            <span class="slider-label" data-value="2" data-tooltip="Clean Flash Player will aggressively override Ruffle, even on websites that manually embed Ruffle.">
-              Force Clean Flash
-              <span class="help-icon">?</span>
-            </span>
+    <!-- ============ General tab ============ -->
+    <div class="tab-content active" id="tab-general">
+
+      <!-- Compatibility -->
+      <section class="settings-group">
+        <h2>Compatibility</h2>
+
+        <div class="setting-row slider-row">
+          <label class="setting-label" data-tooltip="Controls how Clean Flash Player coexists with the Ruffle emulator.">
+            Ruffle Compatibility
+            <span class="help-icon">?</span>
+          </label>
+          <div class="slider-container">
+            <input type="range" id="ruffleCompat" min="0" max="2" step="1" value="1">
+            <div class="slider-labels">
+              <span class="slider-label" data-value="0" data-tooltip="Ruffle will override Clean Flash Player content. Flash plugin spoofing and RufflePlayer shim are both disabled.">
+                Prefer Ruffle
+                <span class="help-icon">?</span>
+              </span>
+              <span class="slider-label" data-value="1" data-tooltip="Clean Flash Player will override the Ruffle extension. Flash plugin is spoofed so Ruffle backs off, but page-bundled Ruffle can still activate.">
+                Prefer Clean Flash
+                <span class="help-icon">?</span>
+              </span>
+              <span class="slider-label" data-value="2" data-tooltip="Clean Flash Player will aggressively override Ruffle, even on websites that manually embed Ruffle.">
+                Force Clean Flash
+                <span class="help-icon">?</span>
+              </span>
+            </div>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- Networking -->
-    <section class="settings-group">
-      <h2>Networking</h2>
+      <!-- Networking -->
+      <section class="settings-group">
+        <h2>Networking</h2>
 
-      <div class="setting-row">
-        <label class="setting-check" data-tooltip="The browser will make HTTP requests on behalf of Clean Flash Player. This is the most secure option and allows for caching.">
-          <input type="checkbox" id="networkBrowserOnly">
-          <span>Always prefer browser network requests</span>
-          <span class="help-icon">?</span>
-        </label>
-      </div>
+        <div class="setting-row">
+          <label class="setting-check" data-tooltip="The browser will make HTTP requests on behalf of Clean Flash Player. This is the most secure option and allows for caching.">
+            <input type="checkbox" id="preferNetworkBrowser">
+            <span>Prefer browser network requests</span>
+            <span class="help-icon">?</span>
+          </label>
+        </div>
 
-      <div class="setting-row">
-        <label class="setting-check" data-tooltip="When CORS blocks a request, the Clean Flash Player native host will make the request instead. Disabled when 'Always prefer browser network requests' is checked.">
-          <input type="checkbox" id="networkFallbackNative">
-          <span>Fall back to native requests for CORS</span>
-          <span class="help-icon">?</span>
-        </label>
-      </div>
+        <div class="setting-row">
+          <label class="setting-check" data-tooltip="When CORS blocks a request, the Clean Flash Player native host will make the request instead. Disabled when browser network requests are not preferred.">
+            <input type="checkbox" id="networkFallbackNative">
+            <span>Fall back to native requests for CORS</span>
+            <span class="help-icon">?</span>
+          </label>
+        </div>
 
-      <div class="setting-row">
-        <label class="setting-check" data-tooltip="Flash checks for a crossdomain.xml file before making cross-origin HTTP requests. If it does not exist, HTTP requests are blocked. Disabling this check skips that behavior.">
-          <input type="checkbox" id="disableCrossdomainHttp" checked>
-          <span>Disable crossdomain checks for HTTP requests</span>
-          <span class="help-icon">?</span>
-        </label>
-      </div>
+        <div class="setting-row">
+          <label class="setting-check" data-tooltip="Flash checks for a crossdomain.xml file before making cross-origin HTTP requests. If it does not exist, HTTP requests are blocked. Disabling this check skips that behavior.">
+            <input type="checkbox" id="disableCrossdomainHttp" checked>
+            <span>Disable crossdomain checks for HTTP requests</span>
+            <span class="help-icon">?</span>
+          </label>
+        </div>
 
-      <div class="setting-row">
-        <label class="setting-check" data-tooltip="Flash checks for a crossdomain policy on port 843 before opening TCP/UDP socket connections. Disabling this check skips that behavior.">
-          <input type="checkbox" id="disableCrossdomainSockets" checked>
-          <span>Disable crossdomain checks for TCP sockets</span>
-          <span class="help-icon">?</span>
-        </label>
-      </div>
-    </section>
+        <div class="setting-row">
+          <label class="setting-check" data-tooltip="Flash checks for a crossdomain policy on port 843 before opening TCP/UDP socket connections. Disabling this check skips that behavior.">
+            <input type="checkbox" id="disableCrossdomainSockets" checked>
+            <span>Disable crossdomain checks for TCP sockets</span>
+            <span class="help-icon">?</span>
+          </label>
+        </div>
+      </section>
 
-    <!-- Privacy -->
-    <section class="settings-group">
-      <h2>Privacy</h2>
+      <!-- Privacy -->
+      <section class="settings-group">
+        <h2>Privacy</h2>
 
-      <div class="setting-row">
-        <label class="setting-check" data-tooltip="Blocks connections to geolocation servers. Prevents Flash from determining your location.">
-          <input type="checkbox" id="disableGeolocation" checked>
-          <span>Disable geolocation services</span>
-          <span class="help-icon">?</span>
-        </label>
-      </div>
+        <div class="setting-row">
+          <label class="setting-check" data-tooltip="Blocks connections to geolocation servers. Prevents Flash from determining your location.">
+            <input type="checkbox" id="disableGeolocation" checked>
+            <span>Disable geolocation services</span>
+            <span class="help-icon">?</span>
+          </label>
+        </div>
 
-      <div class="setting-row">
-        <label class="setting-check" data-tooltip="Provides a random hardware ID to Flash instead of the real machine identifier. The spoofed ID is regenerated on each page load.">
-          <input type="checkbox" id="spoofHardwareId">
-          <span>Spoof hardware ID</span>
-          <span class="help-icon">?</span>
-        </label>
-      </div>
+        <div class="setting-row">
+          <label class="setting-check" data-tooltip="Provides a random hardware ID to Flash instead of the real machine identifier. The spoofed ID is regenerated on each page load.">
+            <input type="checkbox" id="spoofHardwareId">
+            <span>Spoof hardware ID</span>
+            <span class="help-icon">?</span>
+          </label>
+        </div>
 
-      <div class="setting-row">
-        <label class="setting-check" data-tooltip="Prevents Flash from accessing the microphone. Flash content will see no audio input devices available.">
-          <input type="checkbox" id="disableMicrophone">
-          <span>Disable microphone input</span>
-          <span class="help-icon">?</span>
-        </label>
-      </div>
+        <div class="setting-row">
+          <label class="setting-check" data-tooltip="Prevents Flash from accessing the microphone. Flash content will see no audio input devices available.">
+            <input type="checkbox" id="disableMicrophone">
+            <span>Disable microphone input</span>
+            <span class="help-icon">?</span>
+          </label>
+        </div>
 
-      <div class="setting-row">
-        <label class="setting-check" data-tooltip="Prevents Flash from accessing the webcam. Flash content will see no video capture devices available.">
-          <input type="checkbox" id="disableWebcam">
-          <span>Disable web camera input</span>
-          <span class="help-icon">?</span>
-        </label>
-      </div>
-    </section>
+        <div class="setting-row">
+          <label class="setting-check" data-tooltip="Prevents Flash from accessing the webcam. Flash content will see no video capture devices available.">
+            <input type="checkbox" id="disableWebcam">
+            <span>Disable web camera input</span>
+            <span class="help-icon">?</span>
+          </label>
+        </div>
+      </section>
 
-    <!-- Graphics -->
-    <section class="settings-group">
-      <h2>Graphics</h2>
+      <!-- Graphics -->
+      <section class="settings-group">
+        <h2>Graphics</h2>
 
-      <div class="setting-row">
-        <label class="setting-check" data-tooltip="Uses OpenGL ES 2.0 hardware acceleration. Unstable and not supported on every computer. Your mileage may vary.">
-          <input type="checkbox" id="hardwareAcceleration">
-          <span>Enable hardware acceleration</span>
-          <span class="help-icon">?</span>
-        </label>
-      </div>
-    </section>
+        <div class="setting-row">
+          <label class="setting-check" data-tooltip="Uses OpenGL ES 2.0 hardware acceleration. Unstable and not supported on every computer. Your mileage may vary.">
+            <input type="checkbox" id="hardwareAcceleration">
+            <span>Enable hardware acceleration</span>
+            <span class="help-icon">?</span>
+          </label>
+        </div>
+      </section>
 
-    <!-- Audio -->
-    <section class="settings-group">
-      <h2>Audio</h2>
+      <!-- Audio -->
+      <section class="settings-group">
+        <h2>Audio</h2>
 
-      <div class="setting-row audio-row">
-        <label class="setting-label" data-tooltip="Controls how audio is played. Browser uses the Web Audio API and provides tab-level audio control, while Native plays audio directly on the system.">
-          Audio Backend
-          <span class="help-icon">?</span>
-        </label>
-        <select id="audioBackend">
-          <option value="0">Browser (Web Audio)</option>
-          <option value="1">Native (cpal)</option>
-        </select>
-      </div>
-    </section>
+        <div class="setting-row audio-row">
+          <label class="setting-label" data-tooltip="Controls how audio is played. Browser uses the Web Audio API and provides tab-level audio control, while Native plays audio directly on the system.">
+            Audio Backend
+            <span class="help-icon">?</span>
+          </label>
+          <select id="audioBackend">
+            <option value="0">Browser (Web Audio)</option>
+            <option value="1">Native (cpal)</option>
+          </select>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- ============ Sandboxing tab ============ -->
+    <div class="tab-content" id="tab-sandboxing">
+
+      <!-- HTTP(s) Sandboxing -->
+      <section class="settings-group">
+        <h2>HTTP(s) Sandboxing</h2>
+
+        <div class="setting-row mode-row">
+          <label class="setting-label" data-tooltip="Controls whether Flash HTTP(s) requests are filtered by a blacklist (block matching URLs) or whitelist (only allow matching URLs). Use * as a wildcard to match any sequence of characters.">
+            Mode
+            <span class="help-icon">?</span>
+          </label>
+          <select id="httpSandboxMode">
+            <option value="blacklist">Blacklist</option>
+            <option value="whitelist">Whitelist</option>
+          </select>
+        </div>
+
+        <div id="httpBlacklistSection" class="list-section">
+          <label class="list-label" data-tooltip="URL patterns that Flash is not allowed to request. Use * as a wildcard.">
+            Blacklisted URL Patterns
+            <span class="help-icon">?</span>
+          </label>
+          <div class="list-editor" id="httpBlacklistEditor">
+            <div class="list-items" id="httpBlacklistItems"></div>
+            <div class="list-add-row">
+              <input type="text" id="httpBlacklistInput" placeholder="e.g. *://example.com/* or *://*.tracker.net/*">
+              <button class="list-add-btn" id="httpBlacklistAdd">Add</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="httpWhitelistSection" class="list-section" style="display:none">
+          <label class="list-label" data-tooltip="URL patterns that Flash is allowed to request. All non-matching URLs will be blocked. Use * as a wildcard.&#10;&#10;Examples:&#10;  *://example.com/* — allow all URLs on example.com&#10;  *://*.cdn.example.com/* — allow all CDN subdomains&#10;  https://*  — allow all HTTPS requests&#10;  *://*/game/* — allow any URL with '/game/' in the path">
+            Whitelisted URL Patterns
+            <span class="help-icon">?</span>
+          </label>
+          <div class="list-editor" id="httpWhitelistEditor">
+            <div class="list-items" id="httpWhitelistItems"></div>
+            <div class="list-add-row">
+              <input type="text" id="httpWhitelistInput" placeholder="e.g. *://example.com/* or https://*.cdn.net/*">
+              <button class="list-add-btn" id="httpWhitelistAdd">Add</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TCP/UDP Sandboxing -->
+      <section class="settings-group">
+        <h2>TCP/UDP Sandboxing</h2>
+
+        <div class="setting-row mode-row">
+          <label class="setting-label" data-tooltip="Controls whether Flash TCP and UDP socket connections are filtered by a blacklist (block listed hosts) or whitelist (only allow listed hosts). In blacklist mode, all hosts are allowed except those in the list. In whitelist mode, only hosts in the list are allowed.">
+            Mode
+            <span class="help-icon">?</span>
+          </label>
+          <select id="tcpUdpSandboxMode">
+            <option value="blacklist">Blacklist</option>
+            <option value="whitelist">Whitelist</option>
+          </select>
+        </div>
+
+        <div id="tcpUdpBlacklistSection" class="list-section">
+          <label class="list-label" data-tooltip="Hostnames or IP addresses that Flash is not allowed to open TCP/UDP socket connections to. One entry per line.">
+            Blacklisted Hosts
+            <span class="help-icon">?</span>
+          </label>
+          <div class="list-editor" id="tcpUdpBlacklistEditor">
+            <div class="list-items" id="tcpUdpBlacklistItems"></div>
+            <div class="list-add-row">
+              <input type="text" id="tcpUdpBlacklistInput" placeholder="e.g. example.com or 10.0.0.1">
+              <button class="list-add-btn" id="tcpUdpBlacklistAdd">Add</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="tcpUdpWhitelistSection" class="list-section" style="display:none">
+          <label class="list-label" data-tooltip="Hostnames or IP addresses that Flash is allowed to open TCP/UDP socket connections to. All other hosts will be blocked. One entry per line.">
+            Whitelisted Hosts
+            <span class="help-icon">?</span>
+          </label>
+          <div class="list-editor" id="tcpUdpWhitelistEditor">
+            <div class="list-items" id="tcpUdpWhitelistItems"></div>
+            <div class="list-add-row">
+              <input type="text" id="tcpUdpWhitelistInput" placeholder="e.g. example.com or 10.0.0.1">
+              <button class="list-add-btn" id="tcpUdpWhitelistAdd">Add</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- File/Folder Whitelisting -->
+      <section class="settings-group">
+        <h2>File System Access</h2>
+
+        <div class="setting-row">
+          <label class="setting-check" data-tooltip="When enabled, Flash can only access files and folders that appear in the whitelist below. Files chosen through the file picker dialog are automatically added. When disabled, Flash has unrestricted file access.">
+            <input type="checkbox" id="fileWhitelistEnabled" checked>
+            <span>Allow access to whitelisted files and folders only</span>
+            <span class="help-icon">?</span>
+          </label>
+        </div>
+
+        <div id="fileWhitelistDetails">
+          <div class="list-section">
+            <label class="list-label" data-tooltip="Individual files that Flash is allowed to access. Files chosen via the Flash file picker are automatically added here.">
+              Whitelisted Files
+              <span class="help-icon">?</span>
+            </label>
+            <div class="list-editor" id="whitelistedFilesEditor">
+              <div class="list-items" id="whitelistedFilesItems"></div>
+              <div class="list-add-row">
+                <input type="text" id="whitelistedFilesInput" placeholder="e.g. /home/user/document.txt">
+                <button class="list-add-btn" id="whitelistedFilesAdd">Add</button>
+                <button class="list-browse-btn" id="whitelistedFilesBrowse" title="Browse for file">Browse…</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="list-section">
+            <label class="list-label" data-tooltip="Folders that Flash is allowed to access. All files under these folders (including subfolders) are permitted.">
+              Whitelisted Folders
+              <span class="help-icon">?</span>
+            </label>
+            <div class="list-editor" id="whitelistedFoldersEditor">
+              <div class="list-items" id="whitelistedFoldersItems"></div>
+              <div class="list-add-row">
+                <input type="text" id="whitelistedFoldersInput" placeholder="e.g. /home/user/documents">
+                <button class="list-add-btn" id="whitelistedFoldersAdd">Add</button>
+                <button class="list-browse-btn" id="whitelistedFoldersBrowse" title="Browse for folder">Browse…</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </div>
   </div>
 
-    <script src="settings.js"></script>
+  <script src="settings.js"></script>
 </body>
 </html>

@@ -11,3 +11,4 @@ rfd = ["dep:rfd"]
 
 [dependencies]
 rfd = { version = "0.17", optional = true }
+serde_json = "1"

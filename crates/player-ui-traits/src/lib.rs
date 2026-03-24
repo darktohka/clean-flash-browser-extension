@@ -187,6 +187,8 @@ pub trait FileChooserProvider: Send + Sync {
     ) -> Vec<String>;
 }
 
+
+
 // ===========================================================================
 // JavaScript / DOM scripting bridge  (for browser-hosted players)
 // ===========================================================================
@@ -818,6 +820,78 @@ pub trait HttpRequestProvider: Send + Sync {
 // Player settings — shared across all frontends (browser, desktop, etc.)
 // ===========================================================================
 
+/// Whether a sandbox operates in blacklist or whitelist mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxMode {
+    /// All destinations are allowed except those explicitly listed.
+    Blacklist,
+    /// Only explicitly listed destinations are allowed.
+    Whitelist,
+}
+
+impl SandboxMode {
+    /// Parse from a string value (e.g. from JSON settings).
+    /// Returns `Blacklist` for any unrecognised value.
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "whitelist" => Self::Whitelist,
+            _ => Self::Blacklist,
+        }
+    }
+
+    /// Return the canonical string representation.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Blacklist => "blacklist",
+            Self::Whitelist => "whitelist",
+        }
+    }
+}
+
+/// Check whether a URL matches a simple wildcard pattern.
+///
+/// The pattern uses `*` to match any sequence of characters (including
+/// the empty string).  Matching is case-insensitive.
+///
+/// # Examples
+/// ```
+/// assert!(player_ui_traits::url_pattern_matches(
+///     "http://example.com/path", "*://example.com/*"));
+/// assert!(player_ui_traits::url_pattern_matches(
+///     "https://cdn.example.com/res.swf", "*://*.example.com/*"));
+/// ```
+pub fn url_pattern_matches(url: &str, pattern: &str) -> bool {
+    let url_bytes = url.as_bytes();
+    let pat_bytes = pattern.as_bytes();
+    let (n, m) = (url_bytes.len(), pat_bytes.len());
+    // dp[j] = true means pat[..j] matches url[..i] (rolling over i).
+    let mut dp = vec![false; m + 1];
+    dp[0] = true;
+    // Initialise: leading `*`s in the pattern match the empty string.
+    for j in 0..m {
+        if pat_bytes[j] == b'*' {
+            dp[j + 1] = dp[j];
+        } else {
+            break;
+        }
+    }
+    for i in 0..n {
+        let mut new_dp = vec![false; m + 1];
+        for j in 0..m {
+            if pat_bytes[j] == b'*' {
+                // `*` matches zero chars (new_dp[j]) or one more char (dp[j+1]).
+                new_dp[j + 1] = new_dp[j] || dp[j + 1];
+            } else if dp[j]
+                && url_bytes[i].to_ascii_lowercase() == pat_bytes[j].to_ascii_lowercase()
+            {
+                new_dp[j + 1] = true;
+            }
+        }
+        dp = new_dp;
+    }
+    dp[m]
+}
+
 /// All user-configurable settings for the Flash player that affect the
 /// native PPAPI host.  Browser-only settings (Ruffle compatibility,
 /// network mode, microphone/webcam toggles) are handled in the browser
@@ -840,6 +914,32 @@ pub struct PlayerSettings {
     pub disable_geolocation: bool,
     /// Return a random hardware/device ID instead of the real one.
     pub spoof_hardware_id: bool,
+
+    // -- Sandboxing: HTTP(s) --
+    /// Blacklist or whitelist mode for HTTP(s) requests.
+    pub http_sandbox_mode: SandboxMode,
+    /// URL patterns blocked when mode is `Blacklist`.
+    /// Patterns use `*` as a wildcard (e.g. `*://example.com/*`).
+    pub http_blacklist: Vec<String>,
+    /// URL patterns allowed when mode is `Whitelist`.
+    /// Patterns use `*` as a wildcard (e.g. `*://example.com/*`).
+    pub http_whitelist: Vec<String>,
+
+    // -- Sandboxing: TCP/UDP --
+    /// Blacklist or whitelist mode for TCP/UDP connections.
+    pub tcp_udp_sandbox_mode: SandboxMode,
+    /// Hosts blocked when mode is `Blacklist`.
+    pub tcp_udp_blacklist: Vec<String>,
+    /// Hosts allowed when mode is `Whitelist`.
+    pub tcp_udp_whitelist: Vec<String>,
+
+    // -- Sandboxing: File system --
+    /// Whether file system whitelisting is active.
+    pub file_whitelist_enabled: bool,
+    /// Individual files Flash is allowed to access.
+    pub whitelisted_files: Vec<String>,
+    /// Folders Flash is allowed to access (all children included).
+    pub whitelisted_folders: Vec<String>,
 }
 
 impl Default for PlayerSettings {
@@ -850,6 +950,15 @@ impl Default for PlayerSettings {
             hardware_acceleration: false,
             disable_geolocation: true,
             spoof_hardware_id: false,
+            http_sandbox_mode: SandboxMode::Blacklist,
+            http_blacklist: Vec::new(),
+            http_whitelist: Vec::new(),
+            tcp_udp_sandbox_mode: SandboxMode::Blacklist,
+            tcp_udp_blacklist: Vec::new(),
+            tcp_udp_whitelist: Vec::new(),
+            file_whitelist_enabled: true,
+            whitelisted_files: Vec::new(),
+            whitelisted_folders: Vec::new(),
         }
     }
 }
@@ -860,4 +969,14 @@ impl Default for PlayerSettings {
 pub trait SettingsProvider: Send + Sync {
     /// Return the current settings snapshot.
     fn get_settings(&self) -> PlayerSettings;
+
+    /// Request that the browser/UI persist a settings change.
+    ///
+    /// `edits` is a JSON object whose keys correspond to settings fields
+    /// and values are the new values.  For list-valued fields such as
+    /// `whitelistedFiles` or `whitelistedFolders` the values should be
+    /// the *complete* new list (the caller is responsible for merging).
+    fn edit_settings(&self, _edits: serde_json::Value) {
+        // Default: no-op (desktop players can override if needed).
+    }
 }

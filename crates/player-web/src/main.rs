@@ -168,6 +168,8 @@ fn main() {
 
         // Set up the settings provider early so backend selection can read it.
         let settings = Arc::new(WebSettingsProvider::new());
+        let settings_bridge = SCRIPT_BRIDGE.get().expect("SCRIPT_BRIDGE not initialised").clone();
+        let _ = settings.bridge.set(settings_bridge);
         WEB_SETTINGS
             .set(settings.clone())
             .ok()
@@ -234,7 +236,7 @@ fn main() {
         host.set_cookie_provider(Box::new(WebCookieProvider::new(cookie_bridge)));
 
         // Set up the HTTP request provider.  Uses a dispatching provider
-        // that checks the networkBrowserOnly setting at request time:
+        // that checks the preferNetworkBrowser setting at request time:
         // - When true (default): routes through the browser's fetch() API
         //   via the script bridge, with optional reqwest fallback on CORS.
         // - When false: uses reqwest (direct HTTP) exclusively.
@@ -1609,6 +1611,39 @@ fn parse_settings(val: &serde_json::Value) -> PlayerSettings {
         s.spoof_hardware_id = v;
     }
 
+    // Sandboxing: HTTP(s)
+    if let Some(v) = val.get("httpSandboxMode").and_then(|v| v.as_str()) {
+        s.http_sandbox_mode = player_ui_traits::SandboxMode::from_str(v);
+    }
+    if let Some(arr) = val.get("httpBlacklist").and_then(|v| v.as_array()) {
+        s.http_blacklist = arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
+    }
+    if let Some(arr) = val.get("httpWhitelist").and_then(|v| v.as_array()) {
+        s.http_whitelist = arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
+    }
+
+    // Sandboxing: TCP/UDP
+    if let Some(v) = val.get("tcpUdpSandboxMode").and_then(|v| v.as_str()) {
+        s.tcp_udp_sandbox_mode = player_ui_traits::SandboxMode::from_str(v);
+    }
+    if let Some(arr) = val.get("tcpUdpBlacklist").and_then(|v| v.as_array()) {
+        s.tcp_udp_blacklist = arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
+    }
+    if let Some(arr) = val.get("tcpUdpWhitelist").and_then(|v| v.as_array()) {
+        s.tcp_udp_whitelist = arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
+    }
+
+    // Sandboxing: File system
+    if let Some(v) = val.get("fileWhitelistEnabled").and_then(|v| v.as_bool()) {
+        s.file_whitelist_enabled = v;
+    }
+    if let Some(arr) = val.get("whitelistedFiles").and_then(|v| v.as_array()) {
+        s.whitelisted_files = arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
+    }
+    if let Some(arr) = val.get("whitelistedFolders").and_then(|v| v.as_array()) {
+        s.whitelisted_folders = arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
+    }
+
     s
 }
 
@@ -1619,11 +1654,13 @@ fn parse_settings(val: &serde_json::Value) -> PlayerSettings {
 /// webcam) that don't belong in the shared `PlayerSettings` struct.
 pub(crate) struct WebSettingsProvider {
     inner: Mutex<PlayerSettings>,
+    /// Script bridge used to push settings edits back to the browser.
+    bridge: OnceLock<Arc<script_bridge::ScriptBridge>>,
     /// Whether native (cpal) audio should be used instead of browser audio.
     pub audio_backend_native: Mutex<bool>,
     /// Whether to always prefer the browser's fetch() for HTTP requests.
     /// When false, use direct reqwest HTTP instead of fetch.
-    pub network_browser_only: Mutex<bool>,
+    pub prefer_network_browser: Mutex<bool>,
     /// Whether to allow native HTTP fallback when fetch() hits CORS.
     pub network_fallback_native: Mutex<bool>,
     /// Whether Flash microphone access is blocked.
@@ -1636,8 +1673,9 @@ impl WebSettingsProvider {
     fn new() -> Self {
         Self {
             inner: Mutex::new(PlayerSettings::default()),
+            bridge: OnceLock::new(),
             audio_backend_native: Mutex::new(false),
-            network_browser_only: Mutex::new(true),
+            prefer_network_browser: Mutex::new(true),
             network_fallback_native: Mutex::new(false),
             disable_microphone: Mutex::new(false),
             disable_webcam: Mutex::new(false),
@@ -1651,8 +1689,8 @@ impl WebSettingsProvider {
         if let Some(v) = val.get("audioBackend").and_then(|v| v.as_u64()) {
             *self.audio_backend_native.lock() = v == 1;
         }
-        if let Some(v) = val.get("networkBrowserOnly").and_then(|v| v.as_bool()) {
-            *self.network_browser_only.lock() = v;
+        if let Some(v) = val.get("preferNetworkBrowser").and_then(|v| v.as_bool()) {
+            *self.prefer_network_browser.lock() = v;
         }
         if let Some(v) = val.get("networkFallbackNative").and_then(|v| v.as_bool()) {
             *self.network_fallback_native.lock() = v;
@@ -1670,6 +1708,15 @@ impl player_ui_traits::SettingsProvider for WebSettingsProvider {
     fn get_settings(&self) -> PlayerSettings {
         self.inner.lock().clone()
     }
+
+    fn edit_settings(&self, edits: serde_json::Value) {
+        if let Some(bridge) = self.bridge.get() {
+            let _ = bridge.request(serde_json::json!({
+                "op": "editSettings",
+                "edits": edits,
+            }));
+        }
+    }
 }
 
 /// Thin wrapper so we can pass `Arc<WebSettingsProvider>` as a
@@ -1679,6 +1726,10 @@ struct WebSettingsProviderWrapper(Arc<WebSettingsProvider>);
 impl player_ui_traits::SettingsProvider for WebSettingsProviderWrapper {
     fn get_settings(&self) -> PlayerSettings {
         self.0.get_settings()
+    }
+
+    fn edit_settings(&self, edits: serde_json::Value) {
+        self.0.edit_settings(edits);
     }
 }
 

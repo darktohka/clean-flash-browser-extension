@@ -291,6 +291,11 @@ unsafe extern "C" fn query(
         return PP_ERROR_BADRESOURCE;
     };
 
+    if !crate::filesystem::is_file_path_allowed(&path) {
+        tracing::warn!("PPB_FileRef::Query: path '{}' blocked by file whitelist", path);
+        return PP_ERROR_NOACCESS;
+    }
+
     let fs = crate::filesystem::get_filesystem();
     let fi = match fs.query_file(&path) {
         Ok(fi) => fi,
