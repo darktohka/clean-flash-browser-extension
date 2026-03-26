@@ -52,6 +52,9 @@ use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
 
+/// Protocol version — must match EXTENSION_VERSION in content.js.
+const HOST_VERSION: &str = "1.0.1";
+
 fn main() {
     // Save the real stdout and stdin fds before we redirect stdout to
     // /dev/null.  Using saved handles makes the host immune to any later
@@ -268,6 +271,9 @@ fn main() {
     // available before pre-sandbox initialization runs.
 
     tracing::info!("Entering main loop");
+
+    // Send version so the extension can detect mismatches.
+    let _ = protocol::send_host_message(&protocol::HostMessage::Version(HOST_VERSION));
 
     // Send initial state.
     let _ = protocol::send_host_message(&protocol::HostMessage::State {

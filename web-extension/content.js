@@ -14,6 +14,7 @@
 const FLASH_DEBUG = false;
 const LOG_HOST_EVENTS = false;
 const IS_FIREFOX = typeof navigator !== "undefined" && /\bFirefox\//.test(navigator.userAgent);
+const EXTENSION_VERSION = "1.0.0";
 
 // ---------------------------------------------------------------------------
 // Settings — read from chrome.storage.sync and exposed to page-script.js
@@ -322,6 +323,7 @@ const TAG_NAMES = {
   [0x61]: "VIDCAP_START",
   [0x62]: "VIDCAP_STOP",
   [0x63]: "VIDCAP_CLOSE",
+  [0x70]: "VERSION",
 };
 
 /**
@@ -536,6 +538,8 @@ class FlashInstance {
   static _activePort = null;
   /** True while we are intentionally tearing down (page navigation). */
   static _navigatingAway = false;
+  /** True while all ports are intentionally closed due to version mismatch. */
+  static _closingForVersionMismatch = false;
   /** Pending broadcastViewUpdate timer. */
   static _viewUpdateTimer = null;
 
@@ -611,6 +615,25 @@ class FlashInstance {
         inst.ctx.clearRect(0, 0, inst.canvas.width, inst.canvas.height);
         inst.start();
       }
+    }
+  }
+
+  /**
+   * Close all active native messaging ports when host/extension versions differ.
+   * Leaves a mismatch overlay so users can install the matching version.
+   *
+   * @param {string} hostVersion - Version reported by the native host.
+   */
+  static closeAllForVersionMismatch(hostVersion) {
+    if (FlashInstance._closingForVersionMismatch) return;
+    FlashInstance._closingForVersionMismatch = true;
+    try {
+      for (const inst of FlashInstance._instances.values()) {
+        inst.destroy();
+        inst.showVersionMismatchOverlay(hostVersion);
+      }
+    } finally {
+      FlashInstance._closingForVersionMismatch = false;
     }
   }
 
@@ -1101,7 +1124,9 @@ class FlashInstance {
 
     port.onDisconnect.addListener(() => {
       console.warn("[Flash Player] Native host disconnected for instance", inst.instanceId);
-      if (!FlashInstance._navigatingAway) inst.showCrashOverlay();
+      if (!FlashInstance._navigatingAway && !FlashInstance._closingForVersionMismatch) {
+        inst.showCrashOverlay();
+      }
     });
 
     // On restart, clone the canvas to strip old event listeners.
@@ -1132,6 +1157,8 @@ class FlashInstance {
   restart() {
     const overlay = this.container.querySelector(".flash-crash-overlay");
     if (overlay) overlay.remove();
+    const vOverlay = this.container.querySelector(".flash-version-mismatch-overlay");
+    if (vOverlay) vOverlay.remove();
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     this.start();
   }
@@ -1148,9 +1175,11 @@ class FlashInstance {
       }
       this.port = null;
     }
-    // Remove crash overlay.
-    const overlay = this.container.querySelector(".flash-crash-overlay");
-    if (overlay) overlay.remove();
+    // Remove overlays.
+    for (const cls of [".flash-crash-overlay", ".flash-notinstalled-overlay", ".flash-version-mismatch-overlay"]) {
+      const overlay = this.container.querySelector(cls);
+      if (overlay) overlay.remove();
+    }
     // Disconnect observers.
     if (this._mutationObserver) { this._mutationObserver.disconnect(); this._mutationObserver = null; }
     if (this._resizeObserver) { this._resizeObserver.disconnect(); this._resizeObserver = null; }
@@ -1199,16 +1228,37 @@ class FlashInstance {
     this._debugStats = stats;
   }
 
+  // ---- Shared overlay infrastructure ----
+
   /**
-   * Show a styled crash overlay on top of the canvas.
+   * Create a styled overlay on top of the canvas with shared structure
+   * (background, grid pattern, icon, title, subtitle) and an optional
+   * action element (button or link).
+   *
+   * @param {Object} opts
+   * @param {string} opts.className      - CSS class for the overlay element.
+   * @param {string[]} [opts.removeBefore] - Selectors of overlays to remove first.
+   * @param {string} opts.title          - Main heading text.
+   * @param {string} opts.subtitle       - Secondary description (plain text or HTML).
+   * @param {boolean} [opts.subtitleHtml] - If true, subtitle is set via innerHTML.
+   * @param {Object} [opts.iconStyle]    - Extra styles merged onto the icon element.
+   * @param {Element} [opts.actionEl]    - An action element (button/link) to append.
+   * @returns {Element|null} The overlay element, or null if it already exists.
    */
-  showCrashOverlay() {
+  _showOverlay({ className, removeBefore, title, subtitle, subtitleHtml, iconStyle, actionEl }) {
     const { container } = this;
 
-    if (container.querySelector(".flash-crash-overlay")) return;
+    if (container.querySelector(`.${className}`)) return null;
+
+    if (removeBefore) {
+      for (const sel of removeBefore) {
+        const el = container.querySelector(sel);
+        if (el) el.remove();
+      }
+    }
 
     const overlay = document.createElement("div");
-    overlay.className = "flash-crash-overlay";
+    overlay.className = className;
     Object.assign(overlay.style, {
       position: "absolute",
       inset: "0",
@@ -1217,135 +1267,6 @@ class FlashInstance {
       alignItems: "center",
       justifyContent: "center",
       background: "linear-gradient(135deg, #0b1a3e 0%, #162d6b 40%, #1e3f8f 70%, #2557b8 100%)",
-      color: "#fff",
-      fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-      textAlign: "center",
-      zIndex: "999999",
-      borderRadius: "0",
-      overflow: "hidden",
-      userSelect: "none",
-    });
-
-    // Subtle grid-line pattern for depth.
-    const patternOverlay = document.createElement("div");
-    Object.assign(patternOverlay.style, {
-      position: "absolute",
-      inset: "0",
-      backgroundImage:
-        "linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px), " +
-        "linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px)",
-      backgroundSize: "40px 40px",
-      pointerEvents: "none",
-    });
-    overlay.appendChild(patternOverlay);
-
-    // Icon
-    const icon = document.createElement("div");
-    icon.textContent = "\u26A0";
-    Object.assign(icon.style, {
-      fontSize: "48px",
-      marginBottom: "12px",
-      filter: "drop-shadow(0 2px 8px rgba(0,0,0,0.4))",
-      animation: "flash-crash-pulse 2s ease-in-out infinite",
-      position: "relative",
-      zIndex: "1",
-    });
-    overlay.appendChild(icon);
-
-    // Title
-    const title = document.createElement("div");
-    title.textContent = "Oops! Flash Player has crashed!";
-    Object.assign(title.style, {
-      fontSize: "22px",
-      fontWeight: "700",
-      letterSpacing: "0.3px",
-      marginBottom: "8px",
-      textShadow: "0 2px 12px rgba(0,0,0,0.5)",
-      position: "relative",
-      zIndex: "1",
-    });
-    overlay.appendChild(title);
-
-    // Subtitle
-    const subtitle = document.createElement("div");
-    subtitle.textContent = "The native host process ended unexpectedly.";
-    Object.assign(subtitle.style, {
-      fontSize: "13px",
-      opacity: "0.7",
-      marginBottom: "24px",
-      position: "relative",
-      zIndex: "1",
-    });
-    overlay.appendChild(subtitle);
-
-    const inst = this;
-    const btn = document.createElement("button");
-    btn.textContent = "\u21BB  Restart";
-    Object.assign(btn.style, {
-      padding: "10px 32px",
-      fontSize: "14px",
-      fontWeight: "600",
-      color: "#0b1a3e",
-      background: "linear-gradient(135deg, #7ec8f2, #b4dff7)",
-      border: "none",
-      borderRadius: "8px",
-      cursor: "pointer",
-      boxShadow: "0 4px 20px rgba(30, 63, 143, 0.45), inset 0 1px 0 rgba(255,255,255,0.4)",
-      transition: "0.5s ease",
-      position: "relative",
-      zIndex: "1",
-      letterSpacing: "0.5px",
-    });
-    btn.addEventListener("mouseenter", () => {
-      // Slightly brighten the button on hover, do not grow.
-      btn.style.background = "linear-gradient(135deg, #8ed0f4, #c0e5fb)";
-    });
-    btn.addEventListener("mouseleave", () => {
-      btn.style.background = "linear-gradient(135deg, #7ec8f2, #b4dff7)";
-    });
-    btn.addEventListener("click", () => {
-      inst.restart();
-    });
-    overlay.appendChild(btn);
-
-    // Inject keyframe animation (once)
-    if (!document.getElementById("flash-crash-styles")) {
-      const style = document.createElement("style");
-      style.id = "flash-crash-styles";
-      style.textContent = `
-        @keyframes flash-crash-pulse {
-          0%, 100% { opacity: 1; transform: scale(1); }
-          50% { opacity: 0.6; transform: scale(1.08); }
-        }
-      `;
-      document.head.appendChild(style);
-    }
-
-    container.appendChild(overlay);
-  }
-
-  /**
-   * Show an overlay explaining that Flash Player (the native host) is missing.
-   */
-  showNotInstalledOverlay() {
-    const { container } = this;
-
-    if (container.querySelector(".flash-notinstalled-overlay")) return;
-    // Also remove any crash overlay that might have appeared first.
-    const existing = container.querySelector(".flash-crash-overlay");
-    if (existing) existing.remove();
-
-    const overlay = document.createElement("div");
-    overlay.className = "flash-notinstalled-overlay";
-    Object.assign(overlay.style, {
-      position: "absolute",
-      inset: "0",
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      justifyContent: "center",
-      background:
-        "linear-gradient(135deg, #0b1a3e 0%, #162d6b 40%, #1e3f8f 70%, #2557b8 100%)",
       color: "#fff",
       fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
       textAlign: "center",
@@ -1370,19 +1291,19 @@ class FlashInstance {
 
     // Warning icon.
     const icon = document.createElement("div");
-    icon.textContent = "\u26A0"; // ⚠️
+    icon.textContent = "\u26A0";
     Object.assign(icon.style, {
       fontSize: "48px",
       marginBottom: "12px",
       position: "relative",
       zIndex: "1",
-    });
+    }, iconStyle || {});
     overlay.appendChild(icon);
 
     // Title.
-    const title = document.createElement("div");
-    title.textContent = "Clean Flash Player not found";
-    Object.assign(title.style, {
+    const titleEl = document.createElement("div");
+    titleEl.textContent = title;
+    Object.assign(titleEl.style, {
       fontSize: "20px",
       fontWeight: "700",
       letterSpacing: "0.3px",
@@ -1391,14 +1312,16 @@ class FlashInstance {
       position: "relative",
       zIndex: "1",
     });
-    overlay.appendChild(title);
+    overlay.appendChild(titleEl);
 
-    // Explanation.
-    const desc = document.createElement("div");
-    desc.innerHTML =
-      "The Clean Flash Player browser extension is working,<br />" +
-      "but Flash Player is not yet installed on your system.";
-    Object.assign(desc.style, {
+    // Subtitle.
+    const subtitleEl = document.createElement("div");
+    if (subtitleHtml) {
+      subtitleEl.innerHTML = subtitle;
+    } else {
+      subtitleEl.textContent = subtitle;
+    }
+    Object.assign(subtitleEl.style, {
       fontSize: "13px",
       opacity: "0.8",
       maxWidth: "420px",
@@ -1407,16 +1330,37 @@ class FlashInstance {
       position: "relative",
       zIndex: "1",
     });
-    overlay.appendChild(desc);
+    overlay.appendChild(subtitleEl);
 
-    // Download button.
-    const btn = document.createElement("a");
-    btn.href = "https://gitlab.com/cleanflash/installer/-/releases";
-    btn.target = "_blank";
-    btn.rel = "noopener noreferrer";
-    btn.textContent = "\u2B07  Download Installer";
+    // Action element.
+    if (actionEl) {
+      overlay.appendChild(actionEl);
+    }
+
+    container.appendChild(overlay);
+    return overlay;
+  }
+
+  /**
+   * Create a styled button or link element for use in overlays.
+   * @param {Object} opts
+   * @param {string} opts.text         - Button label text.
+   * @param {string} [opts.href]       - If set, creates an <a> link instead of a <button>.
+   * @param {Function} [opts.onClick]  - Click handler (for buttons).
+   * @returns {Element}
+   */
+  static _createOverlayAction({ text, href, onClick }) {
+    const isLink = !!href;
+    const btn = document.createElement(isLink ? "a" : "button");
+    if (isLink) {
+      btn.href = href;
+      btn.target = "_blank";
+      btn.rel = "noopener noreferrer";
+      btn.style.textDecoration = "none";
+      btn.style.display = "inline-block";
+    }
+    btn.textContent = text;
     Object.assign(btn.style, {
-      display: "inline-block",
       padding: "10px 32px",
       fontSize: "14px",
       fontWeight: "600",
@@ -1425,13 +1369,11 @@ class FlashInstance {
       border: "none",
       borderRadius: "8px",
       cursor: "pointer",
-      boxShadow:
-        "0 4px 20px rgba(30, 63, 143, 0.45), inset 0 1px 0 rgba(255,255,255,0.4)",
+      boxShadow: "0 4px 20px rgba(30, 63, 143, 0.45), inset 0 1px 0 rgba(255,255,255,0.4)",
       transition: "0.5s ease",
       position: "relative",
       zIndex: "1",
       letterSpacing: "0.5px",
-      textDecoration: "none",
     });
     btn.addEventListener("mouseenter", () => {
       btn.style.background = "linear-gradient(135deg, #8ed0f4, #c0e5fb)";
@@ -1439,9 +1381,83 @@ class FlashInstance {
     btn.addEventListener("mouseleave", () => {
       btn.style.background = "linear-gradient(135deg, #7ec8f2, #b4dff7)";
     });
-    overlay.appendChild(btn);
+    if (onClick) {
+      btn.addEventListener("click", onClick);
+    }
+    return btn;
+  }
 
-    container.appendChild(overlay);
+  /**
+   * Show a styled crash overlay on top of the canvas.
+   */
+  showCrashOverlay() {
+    // Inject keyframe animation (once).
+    if (!document.getElementById("flash-crash-styles")) {
+      const style = document.createElement("style");
+      style.id = "flash-crash-styles";
+      style.textContent = `
+        @keyframes flash-crash-pulse {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50% { opacity: 0.6; transform: scale(1.08); }
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    const inst = this;
+    this._showOverlay({
+      className: "flash-crash-overlay",
+      title: "Oops! Flash Player has crashed!",
+      subtitle: "The native host process ended unexpectedly.",
+      iconStyle: {
+        filter: "drop-shadow(0 2px 8px rgba(0,0,0,0.4))",
+        animation: "flash-crash-pulse 2s ease-in-out infinite",
+      },
+      actionEl: FlashInstance._createOverlayAction({
+        text: "\u21BB  Restart",
+        onClick: () => inst.restart(),
+      }),
+    });
+  }
+
+  /**
+   * Show an overlay explaining that Flash Player (the native host) is missing.
+   */
+  showNotInstalledOverlay() {
+    this._showOverlay({
+      className: "flash-notinstalled-overlay",
+      removeBefore: [".flash-crash-overlay"],
+      title: "Clean Flash Player not found",
+      subtitle:
+        "The Clean Flash Player browser extension is working,<br />" +
+        "but Flash Player is not yet installed on your system.",
+      subtitleHtml: true,
+      actionEl: FlashInstance._createOverlayAction({
+        text: "\u2B07  Download Installer",
+        href: "https://gitlab.com/cleanflash/installer/-/releases",
+      }),
+    });
+  }
+
+  /**
+   * Show an overlay when the native host version does not match the extension.
+   * @param {string} hostVersion - The version string reported by the native host.
+   */
+  showVersionMismatchOverlay(hostVersion) {
+    this._showOverlay({
+      className: "flash-version-mismatch-overlay",
+      removeBefore: [".flash-crash-overlay"],
+      title: "Flash Player version mismatch",
+      subtitle:
+        "The installed native Clean Flash Player version (v" + hostVersion + ") does not match " +
+        "the browser extension version (v" + EXTENSION_VERSION + ").<br /><br />" +
+        "Please download the latest installer to update.<br />Ensure your extensions are also updated.",
+      subtitleHtml: true,
+      actionEl: FlashInstance._createOverlayAction({
+        text: "\u2B07  Download Installer",
+        href: "https://gitlab.com/cleanflash/installer/-/releases",
+      }),
+    });
   }
 
   /**
@@ -1724,6 +1740,7 @@ const TAG_VIDEO_CAPTURE_OPEN = 0x60;
 const TAG_VIDEO_CAPTURE_START = 0x61;
 const TAG_VIDEO_CAPTURE_STOP = 0x62;
 const TAG_VIDEO_CAPTURE_CLOSE = 0x63;
+const TAG_VERSION = 0x70;
 
 function tagHex(tag) {
   return `0x${tag.toString(16).padStart(2, "0")}`;
@@ -3014,6 +3031,19 @@ function handleBinaryMessage(instance, b64) {
         }
       } catch (e) {
         console.error("[Flash Player] Print error:", e);
+      }
+      break;
+    }
+
+    case TAG_VERSION: {
+      // 1 byte tag + u32 version_len + UTF-8 version string
+      const versionLen = readU32(dv, 1);
+      const versionBytes = bytes.subarray(5, 5 + versionLen);
+      const hostVersion = _textDecoder.decode(versionBytes);
+      console.log(`[Flash Player] Host version: ${hostVersion}, extension version: ${EXTENSION_VERSION}`);
+      if (hostVersion !== EXTENSION_VERSION) {
+        console.warn(`[Flash Player] Version mismatch! Host=${hostVersion} Extension=${EXTENSION_VERSION}`);
+        FlashInstance.closeAllForVersionMismatch(hostVersion);
       }
       break;
     }

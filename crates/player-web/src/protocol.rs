@@ -34,7 +34,7 @@
 //! | 0x61  | VidCapStart     | u32 stream_id                                        |
 //! | 0x62  | VidCapStop      | u32 stream_id                                        |
 //! | 0x63  | VidCapClose     | u32 stream_id                                        |
-//!
+//! | 0x70  | Version         | u32 version_len + UTF-8 version string               |//!
 //! Because stdout/stderr are redirected to `/dev/null` (Unix) or `NUL`
 //! (Windows) to prevent the Flash plugin from corrupting the native
 //! messaging channel, we write to a duplicated fd/handle that was saved
@@ -301,6 +301,8 @@ pub enum HostMessage<'a> {
     VideoCaptureClose {
         stream_id: u32,
     },
+    /// Protocol version handshake.
+    Version(&'a str),
 }
 
 // Message type tags.
@@ -325,6 +327,7 @@ const TAG_VIDEO_CAPTURE_OPEN: u8 = 0x60;
 const TAG_VIDEO_CAPTURE_START: u8 = 0x61;
 const TAG_VIDEO_CAPTURE_STOP: u8 = 0x62;
 const TAG_VIDEO_CAPTURE_CLOSE: u8 = 0x63;
+const TAG_VERSION: u8 = 0x70;
 
 impl<'a> HostMessage<'a> {
     /// Serialize to a compact binary representation (little-endian).
@@ -481,6 +484,14 @@ impl<'a> HostMessage<'a> {
                 let mut buf = Vec::with_capacity(5);
                 buf.push(TAG_VIDEO_CAPTURE_CLOSE);
                 buf.extend_from_slice(&stream_id.to_le_bytes());
+                buf
+            }
+            HostMessage::Version(version) => {
+                let bytes = version.as_bytes();
+                let mut buf = Vec::with_capacity(1 + 4 + bytes.len());
+                buf.push(TAG_VERSION);
+                buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+                buf.extend_from_slice(bytes);
                 buf
             }
         }
