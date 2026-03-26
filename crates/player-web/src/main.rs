@@ -53,7 +53,7 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
 
 /// Protocol version — must match EXTENSION_VERSION in content.js.
-const HOST_VERSION: &str = "1.0.1";
+const HOST_VERSION: &str = "1.0.0";
 
 fn main() {
     // Save the real stdout and stdin fds before we redirect stdout to
