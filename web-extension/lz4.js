@@ -24,7 +24,7 @@ function base64decode(b64) {
   return bytes;
 }
 
-const bytes = base64decode("AGFzbQEAAAABUQ1gAn9/AX9gA39/fwF/YAF/AGADf39/AGAEf39/fwBgAABgAn9/AGAEf39/fwF/Y\
+const WASM_B64 = "AGFzbQEAAAABUQ1gAn9/AX9gA39/fwF/YAF/AGADf39/AGAEf39/fwBgAABgAn9/AGAEf39/fwF/Y\
 AAEf39/f2AAAn9/YAJ/fwFvYAJ/fwR/f39/YAJ/fwJ/fwJfAhEuL2x6NC5pbnRlcm5hbC5qcxVfX3\
 diaW5kZ2VuX3N0cmluZ19uZXcAChEuL2x6NC5pbnRlcm5hbC5qcx9fX3diaW5kZ2VuX2luaXRfZXh\
 0ZXJucmVmX3RhYmxlAAUDGhkAAAAEBgMFAwQGBAIDAAcHCwwCAgIBAwAABAkCcAEHB28AgAEFAwEA\
@@ -201,14 +201,16 @@ mFscysTbm9udHJhcHBpbmctZnB0b2ludCsHc2ltZDEyOCsLYnVsay1tZW1vcnkrCHNpZ24tZXh0Kx\
 JleGNlcHRpb24taGFuZGxpbmcrCXRhaWwtY2FsbCsPcmVmZXJlbmNlLXR5cGVzKwptdWx0aXZhbHV\
 lKwJnYysIbWVtb3J5NjQrDHJlbGF4ZWQtc2ltZCsOZXh0ZW5kZWQtY29uc3QrB3N0cmluZ3MrC211\
 bHRpbWVtb3J5KxN0eXBlZC1jb250aW51YXRpb25zKxFzaGFyZWQtZXZlcnl0aGluZysEZnAxNisPY\
-nVsay1tZW1vcnktb3B0KxZjYWxsLWluZGlyZWN0LW92ZXJsb25n");
-const wasmModule = new WebAssembly.Module(bytes);
+nVsay1tZW1vcnktb3B0KxZjYWxsLWluZGlyZWN0LW92ZXJsb25n";
+
+let wasm = null;
+let wasmModule = null;
+let wasmInitDone = false;
 
 // Build the import object. The __wbindgen_* functions close over `wasm`
 // which is assigned immediately after instantiation - this is safe because
 // the functions are only *called* from within WASM exports, never during
 // instantiation itself.
-let wasm;
 const imports = {
   __wbindgen_string_new(arg0, arg1) {
     return getStringFromWasm0(arg0, arg1);
@@ -223,9 +225,22 @@ const imports = {
     table.set(offset + 3, false);
   },
 };
-wasm = new WebAssembly.Instance(wasmModule, {
-  "./lz4.internal.js": imports,
-}).exports;
+
+function ensureWasmInitialized() {
+  if (wasm) return;
+  if (!wasmModule) {
+    const bytes = base64decode(WASM_B64);
+    wasmModule = new WebAssembly.Module(bytes);
+  }
+  wasm = new WebAssembly.Instance(wasmModule, {
+    "./lz4.internal.js": imports,
+  }).exports;
+  if (!wasmInitDone) {
+    imports.__wbindgen_init_externref_table();
+    if (wasm.__wbindgen_start) wasm.__wbindgen_start();
+    wasmInitDone = true;
+  }
+}
 
 let cachedTextDecoder = new TextDecoder("utf-8", {
   ignoreBOM: true,
@@ -274,6 +289,7 @@ function getArrayU8FromWasm0(ptr, len) {
  * @returns {Uint8Array}
  */
 function compress(input) {
+  ensureWasmInitialized();
   const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
   const len0 = WASM_VECTOR_LEN;
   const ret = wasm.compress(ptr0, len0);
@@ -296,6 +312,7 @@ function takeFromExternrefTable0(idx) {
  * @returns {Uint8Array}
  */
 function decompress(input) {
+  ensureWasmInitialized();
   const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_malloc);
   const len0 = WASM_VECTOR_LEN;
   const ret = wasm.decompress(ptr0, len0);
@@ -306,10 +323,6 @@ function decompress(input) {
   wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
   return v2;
 }
-
-// Initialise the externref table and start the WASM module.
-imports.__wbindgen_init_externref_table();
-if (wasm.__wbindgen_start) wasm.__wbindgen_start();
 
 // Expose as globals for content.js.
 lz4_compress = compress;

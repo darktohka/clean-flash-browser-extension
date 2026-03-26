@@ -264,7 +264,7 @@ function resolveSwfUrl(src) {
 }
 
 // ---------------------------------------------------------------------------
-// QOI WASM decoder - loaded once, reused for every frame.
+// QOI WASM decoder - lazily loaded on first frame decode.
 // ---------------------------------------------------------------------------
 
 /** @type {Function|null} decode(data_len) → output_ptr */
@@ -272,8 +272,8 @@ let _qoiDecode = null;
 /** @type {WebAssembly.Memory|null} */
 let _qoiMemory = null;
 
-/** Resolves when the QOI WASM module is ready (or failed). */
-const _qoiReady = (async () => {
+function _ensureQoiDecoderReady() {
+  if (_qoiDecode && _qoiMemory) return true;
   try {
     const b64 = "AGFzbQEAAAABDgNgAX8AYAABf2ABfwF/AwoJAAABAAAAAAACBAUBcAEEBAUDAQABBhoFfwFBAAt/AUEAC38BQQALfwFBAAt/AUEACwcvBQZtZW1vcnkCAAtvdXRwdXRfYmFzZQMBBGlwdHIDAwRvcHRyAwQGZGVjb2RlAAgJCgEAQQALBAQGBwUK3gUJJAAjBCAAaiQEA0AjBD8AQRB0TwRAQQFAAEEASARAAAsMAQsLCw0AIwQgADYCAEEEEAALKgECf0EEIQADQCMDLQAAIAFBCHdyIQEjA0EBaiQDIABBAWsiAA0ACyABC0oAIwAgADYCACMAIABBCHZB/wFxQQVsIABB/wFxQQNsaiAAQRB2Qf8BcUEHbGogAEEYdkELbGpBP3FBAnRBBGpqIAA2AgAgABABCxIAIwAgAEECdEEEamooAgAQAwscACAAQQFqIQADQCMAKAIAEAMgAEEBayIADQALC3ABAX8jACgCACIBQf//g3hxIABBA3FBAmsgAUEQdkH/AXFqQf8BcUEQdHIiAUH/gXxxIABBAnYiAEEDcUECayABQQh2Qf8BcWpB/wFxQQh0ciIBQYB+cSAAQQJ2QQNxQQJrIAFB/wFxakH/AXFyEAMLewECfyMAKAIAIgFBgH5xIwMtAAAhAiMDQQFqJAMgAEEgayIAIAJBBHZBCGtqIAFB/wFxakH/AXFyIgFB/4F8cSAAIAFBCHZB/wFxakH/AXFBCHRyIgFB//+DeHEgAkEPcUEIayAAaiABQRB2Qf8BcWpB/wFxQRB0chADC5UCACAAJAJBACQDIABBfHFBBGokACMAQYQCaiQBIwBBgICAeDYCACMBJARBABAAIwMtAAAjA0EBaiQDQfEARwRAAAsjAy0AACMDQQFqJANB7wBHBEAACyMDLQAAIwNBAWokA0HpAEcEQAALIwMtAAAjA0EBaiQDQeYARwRAAAsQAhABEAIQASMDLQAAGiMDQQFqJAMjAy0AABojA0EBaiQDA0AjAy0AACEAIwNBAWokAwJAIABB/gFGBEAjAygCACMDQQRqJAMjA0EBayQDQf///wdxIwAoAgBBgICAeHFyEAMMAQsgAEH/AUYEQCMDKAIAIwNBBGokAxADDAELIABBP3EgAEEGdhEAAAsjAyMCRw0ACyMBCw==";
 
@@ -287,14 +287,17 @@ const _qoiReady = (async () => {
       wasmBytes = out;
     }
 
-    const { instance } = await WebAssembly.instantiate(wasmBytes);
+    const module = new WebAssembly.Module(wasmBytes);
+    const instance = new WebAssembly.Instance(module);
     _qoiDecode = instance.exports.decode;
     _qoiMemory = instance.exports.memory;
     console.log("[Flash Player] QOI WASM decoder ready");
+    return true;
   } catch (e) {
     console.error("[Flash Player] Failed to load QOI WASM decoder:", e);
+    return false;
   }
-})();
+}
 
 // ---------------------------------------------------------------------------
 // Debug statistics
@@ -926,7 +929,7 @@ class FlashInstance {
    */
   sendViewUpdate() {
     if (this.port) {
-      console.log("Broadcasting view update for instance with", this.collectViewInfo());
+      console.log("[Flash Player] Broadcasting view update for instance with", this.collectViewInfo());
       this.port.postMessage({ type: "viewUpdate", ...this.collectViewInfo() });
     }
   }
@@ -961,7 +964,7 @@ class FlashInstance {
         inst.origWidth = w;
         inst.origHeight = h;
         if (inst.port) {
-          console.log("Resize detected for instance updating with", { width: w, height: h, ...inst.collectViewInfo() });
+          console.log("[Flash Player] Resize detected for instance updating with", { width: w, height: h, ...inst.collectViewInfo() });
           inst.port.postMessage({ type: "resize", width: w, height: h, ...inst.collectViewInfo() });
         }
       }
@@ -1057,12 +1060,6 @@ class FlashInstance {
    * background service worker and wiring up message handlers.
    */
   async start() {
-    // Ensure the QOI WASM decoder is ready before we tell the native host to
-    // start sending frames.  Without this, early frames arrive before
-    // _qoiDecode is set and are silently dropped - leaving a black screen
-    // until something (resize, devtools) triggers a re-render.
-    await _qoiReady;
-
     const port = chrome.runtime.connect({ name: "flash-instance" });
     this.port = port;
     FlashInstance._activePort = port;
@@ -2732,6 +2729,9 @@ function handleBinaryMessage(instance, b64) {
 
   switch (tag) {
     case TAG_FRAME: {
+      // Lazy-init the QOI decoder only when frame data actually arrives.
+      if (!_ensureQoiDecoderReady()) break;
+
       // 1 byte tag + 7 x u32 header (28 bytes) + QOI-encoded RGBA pixels
       const x = readU32(dv, 1);
       const y = readU32(dv, 5);
@@ -2749,7 +2749,7 @@ function handleBinaryMessage(instance, b64) {
         ctx.canvas.height = frameH;
       }
 
-      if (!_qoiDecode || !_qoiMemory) break; // WASM not ready yet
+      if (!_qoiDecode || !_qoiMemory) break;
 
       // Ensure WASM memory can hold input + working space + decoded output.
       const needBytes = qoiLen + 268 + width * height * 4;
