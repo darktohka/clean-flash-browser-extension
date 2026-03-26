@@ -50,8 +50,12 @@ const PERMISSIVE_POLICY: &[u8] =
 const POLICY_FILE_REQUEST: &[u8] = b"<policy-file-request/>\0";
 
 /// Hosts that are always blocked through PPB_TCPSocket_Private.
-const ALWAYS_BLOCKED_TCP_HOSTS: [&str; 1] = [
+const ALWAYS_BLOCKED_TCP_HOSTS: [&str; 3] = [
+    // These two are used for the ood.xml service.
     "fpdownload.macromedia.com",
+    "a4fizyp1nl.execute-api.us-east-1.amazonaws.com",
+    // This is used for various CN services
+    "api.flash.cn"
 ];
 
 /// Geolocation hosts blocked when the `disable_geolocation` setting is true.
