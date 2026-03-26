@@ -154,6 +154,20 @@ fn perform_url_open(
     follow_redirects: bool,
     cookie_provider: Option<&dyn CookieProvider>,
 ) -> Result<HttpResponse, i32> {
+    // ---- URL rewriting (before any other processing) ----
+    let rewritten;
+    let url = if let Some(provider) = HOST.get().and_then(|h| h.get_url_rewrite_provider()) {
+        if let Some(new_url) = provider.rewrite_url(url) {
+            tracing::info!("URL rewrite: {} → {}", url, new_url);
+            rewritten = new_url;
+            rewritten.as_str()
+        } else {
+            url
+        }
+    } else {
+        url
+    };
+
     tracing::info!("URL open requested: {} {}", method, url);
 
     // ----- crossdomain.xml interception -----

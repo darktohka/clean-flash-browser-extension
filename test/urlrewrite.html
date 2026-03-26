@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>URL Rewrite Test Suite</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #1e1e2e;
+            color: #cdd6f4;
+            font-family: "Segoe UI", Tahoma, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            padding-top: 20px;
+        }
+        h1 {
+            font-size: 18px;
+            margin-bottom: 8px;
+            color: #89b4fa;
+        }
+        .info {
+            font-size: 12px;
+            color: #6c7086;
+            margin-bottom: 16px;
+            max-width: 800px;
+            text-align: center;
+            line-height: 1.5;
+        }
+        .info code {
+            background: #313244;
+            padding: 1px 4px;
+            border-radius: 3px;
+            color: #a6e3a1;
+            font-size: 11px;
+        }
+        #flash-container {
+            border: 2px solid #313244;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <h1>URL Rewrite Test Suite</h1>
+    <div class="info">
+        This page embeds the test SWF with a <code>data-url-rewriter</code> JS callback.
+        The callback rewrites <code>/rewrite-src/*</code> paths to their actual
+        server endpoints. Extension settings also include regex rewrite rules
+        for <code>/rr-source/</code> and <code>/rr-chain-a/</code> cascading tests.
+    </div>
+    <div id="flash-container">
+        <embed
+            src="URLRewriteTests.swf"
+            type="application/x-shockwave-flash"
+            width="800"
+            height="600"
+            allowNetworking="all"
+            allowScriptAccess="always"
+            quality="high"
+            data-url-rewriter="flashUrlRewriter"
+        />
+    </div>
+
+    <script>
+    /**
+     * JS URL rewriter callback.
+     *
+     * This function is invoked by the Clean Flash Player native host for
+     * every URL that Flash tries to load via URLLoader / Loader.
+     *
+     * Rewrite rules:
+     *   /rewrite-src/text  →  /text
+     *   /rewrite-src/json  →  /json
+     *   /rewrite-src/echo  →  /echo
+     *   /rewrite-src/gone  →  /text   (rescues a would-be 404)
+     *
+     * Non-matching URLs are returned unchanged.
+     *
+     * @param {string} url - The original URL Flash is requesting.
+     * @returns {string} The (possibly rewritten) URL.
+     */
+    function flashUrlRewriter(url) {
+        var map = {
+            "/rewrite-src/text": "/text",
+            "/rewrite-src/json": "/json",
+            "/rewrite-src/echo": "/echo",
+            "/rewrite-src/gone": "/text"
+        };
+
+        for (var pattern in map) {
+            var idx = url.indexOf(pattern);
+            if (idx !== -1) {
+                var rewritten = url.substring(0, idx) + map[pattern] + url.substring(idx + pattern.length);
+                console.log("[URL Rewriter] " + url + " to " + rewritten);
+                return rewritten;
+            }
+        }
+
+        // No match — return original URL unchanged.
+        return url;
+    }
+    </script>
+</body>
+</html>

@@ -41,8 +41,19 @@ const SETTINGS_DEFAULTS = {
   fileWhitelistEnabled: true,
   whitelistedFiles: [],
   whitelistedFolders: [],
+  // Advanced
+  urlRewriteRules: [],
 };
-let _flashSettings = Object.assign({}, SETTINGS_DEFAULTS);
+
+function normalizeFlashSettings(raw) {
+  const merged = Object.assign({}, SETTINGS_DEFAULTS, raw || {});
+  if (!Array.isArray(merged.urlRewriteRules)) {
+    merged.urlRewriteRules = [];
+  }
+  return merged;
+}
+
+let _flashSettings = normalizeFlashSettings();
 
 // Read settings and inject into the DOM for the MAIN-world page script.
 (function loadSettings() {
@@ -54,7 +65,7 @@ let _flashSettings = Object.assign({}, SETTINGS_DEFAULTS);
       document.documentElement.setAttribute("data-flash-settings", cached);
       // Also apply cached settings to the content-script's own copy.
       const parsed = JSON.parse(cached);
-      if (parsed) Object.assign(_flashSettings, parsed);
+      if (parsed) _flashSettings = normalizeFlashSettings(parsed);
     }
   } catch (_) {}
 
@@ -62,9 +73,9 @@ let _flashSettings = Object.assign({}, SETTINGS_DEFAULTS);
   if (!storage) return;
   storage.get(SETTINGS_DEFAULTS, (items) => {
     if (chrome.runtime.lastError) return;
-    _flashSettings = items;
+    _flashSettings = normalizeFlashSettings(items);
     // Write to <html> so page-script.js (MAIN world) can read them.
-    const json = JSON.stringify(items);
+    const json = JSON.stringify(_flashSettings);
     try {
       document.documentElement.setAttribute("data-flash-settings", json);
       localStorage.setItem("_flashSettings", json);
@@ -77,15 +88,15 @@ let _flashSettings = Object.assign({}, SETTINGS_DEFAULTS);
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "settingsUpdate" && msg.settings) {
     console.log("[Flash Player] Received settings update:", msg.settings);
-    _flashSettings = msg.settings;
+    _flashSettings = normalizeFlashSettings(msg.settings);
     // Update the DOM attribute for future page-script.js reads.
-    const json = JSON.stringify(msg.settings);
+    const json = JSON.stringify(_flashSettings);
     try {
       document.documentElement.setAttribute("data-flash-settings", json);
       localStorage.setItem("_flashSettings", json);
     } catch (_) {}
     // Forward to all active Flash instance native host connections.
-    FlashInstance.broadcastSettingsUpdate(msg.settings);
+    FlashInstance.broadcastSettingsUpdate(_flashSettings);
   }
 });
 
@@ -736,6 +747,11 @@ class FlashInstance {
     /** True while a Flash context menu is open — suppresses input events. */
     this.contextMenuOpen = false;
 
+    // URL rewriter JS callback object ID (resolved in start()).
+    this._urlRewriterCallbackId = null;
+    // Store the raw attribute for deferred resolution.
+    this._urlRewriterAttr = elem.getAttribute("data-url-rewriter") || params["data-url-rewriter"] || null;
+
     // ---- Create the replacement <canvas> ----
     const canvas = document.createElement("canvas");
     canvas.setAttribute("data-flash-player", this.instanceId);
@@ -1026,9 +1042,25 @@ class FlashInstance {
 
     const inst = this;
 
+    // Resolve the JS URL rewriter callback if the attribute was set.
+    if (this._urlRewriterAttr) {
+      try {
+        const resp = sendToPageScript({
+          op: "executeScript",
+          script: "(" + this._urlRewriterAttr + ")",
+        });
+        if (resp && resp.value && resp.value.type === "object") {
+          this._urlRewriterCallbackId = resp.value.v;
+          console.log("[Flash Player] URL rewriter callback resolved, object ID:", resp.value.v);
+        }
+      } catch (e) {
+        console.warn("[Flash Player] Failed to resolve data-url-rewriter:", e);
+      }
+    }
+
     console.log("[Flash Player] Starting instance with", _flashSettings);
 
-    port.postMessage({
+    const startMsg = {
       type: "start",
       instanceId: this.instanceId,
       url: this.swfUrl,
@@ -1038,7 +1070,11 @@ class FlashInstance {
       language: navigator.language || "en-US",
       settings: _flashSettings,
       ...this.collectViewInfo(),
-    });
+    };
+    if (this._urlRewriterCallbackId != null) {
+      startMsg.urlRewriterCallbackId = this._urlRewriterCallbackId;
+    }
+    port.postMessage(startMsg);
 
     // ---- Handle messages from the native host (via background) ----
     port.onMessage.addListener((msg) => {
@@ -3243,6 +3279,38 @@ async function handleScriptRequest(req, port) {
       sendScriptError(port, id, resp.error);
     } else {
       sendScriptResponse(port, id, resp.value);
+    }
+    return;
+  }
+
+  // ---------------------------------------------------------------
+  // URL rewriting: apply regex rewrite rules from extension settings
+  // ---------------------------------------------------------------
+
+  if (op === "rewriteUrl") {
+    const url = req.url || "";
+    const rules = Array.isArray(_flashSettings.urlRewriteRules)
+      ? _flashSettings.urlRewriteRules
+      : [];
+    let current = url;
+    let changed = false;
+    for (const rule of rules) {
+      try {
+        const re = new RegExp(rule.source);
+        if (re.test(current)) {
+          const target = rule.target.replace(/\\(\d+)/g, "\$$1");
+          current = current.replace(re, target);
+          changed = true;
+        }
+      } catch (_) {
+        // skip invalid regex
+      }
+    }
+    if (changed) {
+      console.log(`[Flash Player] URL rewritten:`, { original: url, rewritten: current });
+      sendScriptResponse(port, id, { type: "string", v: current });
+    } else {
+      sendScriptResponse(port, id, { type: "null" });
     }
     return;
   }

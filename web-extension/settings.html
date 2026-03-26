@@ -15,6 +15,7 @@
     <div class="tab-bar">
       <button class="tab-btn active" data-tab="general">General</button>
       <button class="tab-btn" data-tab="sandboxing">Sandboxing</button>
+      <button class="tab-btn" data-tab="advanced">Advanced</button>
     </div>
 
     <!-- ============ General tab ============ -->
@@ -288,6 +289,47 @@
             </div>
           </div>
         </div>
+      </section>
+
+    </div>
+
+    <!-- ============ Advanced tab ============ -->
+    <div class="tab-content" id="tab-advanced">
+
+      <!-- URL Rewriting -->
+      <section class="settings-group">
+        <h2>URL Rewriting</h2>
+
+        <p class="section-desc" data-tooltip="Rewrite rules let you redirect Flash resource URLs using regular expressions. The source is a regex pattern and the target can use backreferences like $1, $2 to insert captured groups. For developers: it is also possible to set data-url-rewriter on the SWF embed to a JavaScript function name to have more control over URL rewriting.">
+          Redirect matching URLs to different targets using regular expressions.
+          <span class="help-icon">?</span>
+        </p>
+
+        <div class="rewrite-rules" id="rewriteRulesItems"></div>
+
+        <div class="rewrite-add-row">
+          <div class="rewrite-add-line">
+            <span class="rewrite-add-prefix">&bull;</span>
+            <input type="text" id="rewriteSourceInput" placeholder="Source regex, e.g. ^https://old\.example\.com/(.*)">
+          </div>
+          <div class="rewrite-add-line">
+            <span class="rewrite-add-prefix">&rarr;</span>
+            <input type="text" id="rewriteTargetInput" placeholder="Target, e.g. https://new.example.com/$1">
+            <button class="list-add-btn" id="rewriteRuleAdd">Add</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- URL Tester -->
+      <section class="settings-group">
+        <h2>URL Tester</h2>
+
+        <p class="section-desc">Enter a URL to see what it would be rewritten to.</p>
+
+        <div class="url-tester-row">
+          <input type="text" id="urlTesterInput" placeholder="https://old.example.com/path/to/resource.swf">
+        </div>
+        <div class="url-tester-result" id="urlTesterResult"></div>
       </section>
 
     </div>

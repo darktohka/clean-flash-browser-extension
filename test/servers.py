@@ -112,6 +112,9 @@ def make_handler(server_name, port, serve_crossdomain):
             if path == "/stage3d" and port == 3000:
                 self._serve_file("stage3d.html", "text/html")
                 return
+            if path == "/urlrewrite" and port == 3000:
+                self._serve_file("urlrewrite.html", "text/html")
+                return
             if path == "/URLLoaderTests.swf" and port == 3000:
                 self._serve_file("URLLoaderTests.swf", "application/x-shockwave-flash")
                 return
@@ -126,6 +129,9 @@ def make_handler(server_name, port, serve_crossdomain):
                 return
             if path == "/Stage3DTests.swf" and port == 3000:
                 self._serve_file("Stage3DTests.swf", "application/x-shockwave-flash")
+                return
+            if path == "/URLRewriteTests.swf" and port == 3000:
+                self._serve_file("URLRewriteTests.swf", "application/x-shockwave-flash")
                 return
             # Serve LoadableChild.swf from all servers (for cross-origin SWF loading tests)
             if path == "/LoadableChild.swf":

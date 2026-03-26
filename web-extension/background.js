@@ -186,6 +186,7 @@ chrome.runtime.onConnect.addListener((port) => {
         width: msg.width,
         height: msg.height,
         settings: msg.settings || {},
+        urlRewriterCallbackId: msg.urlRewriterCallbackId || undefined,
       });
 
       // Send initial resize with view info.

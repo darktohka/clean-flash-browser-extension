@@ -174,7 +174,18 @@ fn main() {
             .set(settings.clone())
             .ok()
             .expect("WEB_SETTINGS already initialised");
-        host.set_settings_provider(Box::new(WebSettingsProviderWrapper(settings)));
+        host.set_settings_provider(Box::new(WebSettingsProviderWrapper(settings.clone())));
+
+        // Set up the URL rewrite provider backed by extension settings rules
+        // (and optional JS callback for custom rewriting).
+        let url_rewrite = Arc::new(WebUrlRewriteProvider::new(
+            SCRIPT_BRIDGE.get().expect("SCRIPT_BRIDGE not initialised").clone(),
+        ));
+        WEB_URL_REWRITE
+            .set(url_rewrite.clone())
+            .ok()
+            .expect("WEB_URL_REWRITE already initialised");
+        host.set_url_rewrite_provider(Box::new(WebUrlRewriteProviderWrapper(url_rewrite)));
 
         // Set up the audio input provider so that Flash can capture from
         // the browser's microphone via MediaStream / getUserMedia.
@@ -366,6 +377,9 @@ static WEB_CONTEXT_MENU: OnceLock<Arc<WebContextMenuProvider>> = OnceLock::new()
 /// Global settings provider for live settings updates.
 pub(crate) static WEB_SETTINGS: OnceLock<Arc<WebSettingsProvider>> = OnceLock::new();
 
+/// Global URL rewrite provider for resolving the JS callback.
+static WEB_URL_REWRITE: OnceLock<Arc<WebUrlRewriteProvider>> = OnceLock::new();
+
 fn apply_audio_provider_from_settings(host: &ppapi_host::HostState) {
     let use_native_audio = WEB_SETTINGS
         .get()
@@ -550,6 +564,16 @@ fn handle_command(
                 }
                 if let Some(host) = ppapi_host::HOST.get() {
                     apply_audio_provider_from_settings(host);
+                }
+            }
+
+            // Resolve the JS URL rewrite callback if provided.
+            // The open command may include a `urlRewriterCallbackId` field
+            // (a JS object handle for a `(url: string) => string` function).
+            if let Some(cb_id) = cmd.get("urlRewriterCallbackId").and_then(|v| v.as_u64()) {
+                if let Some(rewriter) = WEB_URL_REWRITE.get() {
+                    tracing::info!("URL rewriter JS callback set (object_id={})", cb_id);
+                    rewriter.set_js_callback(cb_id);
                 }
             }
 
@@ -1695,6 +1719,103 @@ impl player_ui_traits::SettingsProvider for WebSettingsProviderWrapper {
 
     fn edit_settings(&self, edits: serde_json::Value) {
         self.0.edit_settings(edits);
+    }
+}
+
+// ===========================================================================
+// Web URL rewrite provider - regex rules from settings + optional JS callback
+// ===========================================================================
+
+/// URL rewrite provider that delegates regex-based rewrite rules to the
+/// browser extension (content.js) and, optionally, invokes a JavaScript
+/// callback function set on the `<embed>` / `<object>` element.
+///
+/// The regex rules live in the extension's settings storage and are
+/// applied in cascade by content.js.  After the regex pass, the JS
+/// callback (if set) gets a final chance to rewrite.
+struct WebUrlRewriteProvider {
+    bridge: Arc<script_bridge::ScriptBridge>,
+    /// Object ID of the JS rewrite callback, if set via embed/object attribute.
+    js_callback_id: Mutex<Option<u64>>,
+}
+
+impl WebUrlRewriteProvider {
+    fn new(bridge: Arc<script_bridge::ScriptBridge>) -> Self {
+        Self {
+            bridge,
+            js_callback_id: Mutex::new(None),
+        }
+    }
+
+    /// Set the JS callback function object ID (resolved from embed/object
+    /// attribute `data-url-rewriter`).
+    fn set_js_callback(&self, object_id: u64) {
+        *self.js_callback_id.lock() = Some(object_id);
+    }
+}
+
+impl player_ui_traits::UrlRewriteProvider for WebUrlRewriteProvider {
+    fn rewrite_url(&self, url: &str) -> Option<String> {
+        let mut current = url.to_string();
+        let mut changed = false;
+
+        // Delegate regex rewrite rules to the browser extension.
+        match self.bridge.request(serde_json::json!({
+            "op": "rewriteUrl",
+            "url": url,
+        })) {
+            Some(resp) => {
+                if resp.get("error").is_none() {
+                    if let Some(val) = resp.get("value") {
+                        let js_val = script_bridge::json_to_js_value(val);
+                        if let player_ui_traits::JsValue::String(new_url) = js_val {
+                            if !new_url.is_empty() {
+                                current = new_url;
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+            None => {}
+        }
+
+        // Apply the JS callback (if set) as a final rewrite step.
+        if let Some(cb_id) = *self.js_callback_id.lock() {
+            let arg = player_ui_traits::JsValue::String(current.clone());
+            match self.bridge.request(serde_json::json!({
+                "op": "call",
+                "obj": cb_id,
+                "args": [script_bridge::js_value_to_json(&arg)],
+            })) {
+                Some(resp) => {
+                    if resp.get("error").is_none() {
+                        if let Some(val) = resp.get("value") {
+                            let js_val = script_bridge::json_to_js_value(val);
+                            if let player_ui_traits::JsValue::String(new_url) = js_val {
+                                if !new_url.is_empty() && new_url != current {
+                                    current = new_url;
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                None => {}
+            }
+        }
+
+        if changed { Some(current) } else { None }
+    }
+}
+
+/// Thin wrapper so we can pass `Arc<WebUrlRewriteProvider>` as a
+/// `Box<dyn UrlRewriteProvider>` to the host.
+struct WebUrlRewriteProviderWrapper(Arc<WebUrlRewriteProvider>);
+
+impl player_ui_traits::UrlRewriteProvider for WebUrlRewriteProviderWrapper {
+    fn rewrite_url(&self, url: &str) -> Option<String> {
+        self.0.rewrite_url(url)
     }
 }
 

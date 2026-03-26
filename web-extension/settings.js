@@ -28,7 +28,9 @@ const DEFAULTS = {
   tcpUdpWhitelist: [],
   fileWhitelistEnabled: true,
   whitelistedFiles: [],
-  whitelistedFolders: []
+  whitelistedFolders: [],
+  // Advanced
+  urlRewriteRules: []   // Array of {source: "regex", target: "replacement"}
 };
 
 const storage = chrome.storage.sync || chrome.storage.local;
@@ -236,6 +238,190 @@ const whitelistedFoldersEditor = setupListEditor("whitelistedFolders",
   document.getElementById("whitelistedFoldersAdd"),
   { sorted: true, browseBtn: document.getElementById("whitelistedFoldersBrowse"), browseMode: "folder" });
 
+// ---- Rewrite rules editor (Advanced tab) ----
+
+const rewriteRulesItems = document.getElementById("rewriteRulesItems");
+const rewriteSourceInput = document.getElementById("rewriteSourceInput");
+const rewriteTargetInput = document.getElementById("rewriteTargetInput");
+const rewriteRuleAddBtn = document.getElementById("rewriteRuleAdd");
+const urlTesterInput = document.getElementById("urlTesterInput");
+const urlTesterResult = document.getElementById("urlTesterResult");
+
+let rewriteRules = [];
+
+function renderRewriteRules() {
+  rewriteRulesItems.innerHTML = "";
+  if (rewriteRules.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "rewrite-empty";
+    empty.textContent = "No rewrite rules";
+    rewriteRulesItems.appendChild(empty);
+    return;
+  }
+  rewriteRules.forEach((rule, idx) => {
+    const row = document.createElement("div");
+    row.className = "rewrite-rule-item";
+
+    // Source line
+    const srcLine = document.createElement("div");
+    srcLine.className = "rewrite-rule-line";
+    const srcPrefix = document.createElement("span");
+    srcPrefix.className = "rewrite-rule-prefix source";
+    srcPrefix.innerHTML = "&bull;";
+    srcLine.appendChild(srcPrefix);
+    const srcText = document.createElement("span");
+    srcText.className = "rewrite-rule-text source";
+    srcText.textContent = rule.source;
+    srcText.title = rule.source;
+    srcLine.appendChild(srcText);
+    row.appendChild(srcLine);
+
+    // Target line
+    const tgtLine = document.createElement("div");
+    tgtLine.className = "rewrite-rule-line";
+    const tgtPrefix = document.createElement("span");
+    tgtPrefix.className = "rewrite-rule-prefix target";
+    tgtPrefix.innerHTML = "&rarr;";
+    tgtLine.appendChild(tgtPrefix);
+    const tgtText = document.createElement("span");
+    tgtText.className = "rewrite-rule-text target";
+    tgtText.textContent = rule.target;
+    tgtText.title = rule.target;
+    tgtLine.appendChild(tgtText);
+    row.appendChild(tgtLine);
+
+    const controls = document.createElement("div");
+    controls.className = "rewrite-rule-controls";
+
+    const upBtn = document.createElement("button");
+    upBtn.className = "rewrite-rule-btn rewrite-rule-up";
+    upBtn.textContent = "\u2191";
+    upBtn.disabled = idx === 0;
+    upBtn.addEventListener("click", () => {
+      if (idx <= 0) return;
+      const tmp = rewriteRules[idx - 1];
+      rewriteRules[idx - 1] = rewriteRules[idx];
+      rewriteRules[idx] = tmp;
+      save("urlRewriteRules", rewriteRules.slice());
+      renderRewriteRules();
+      runUrlTester();
+    });
+    controls.appendChild(upBtn);
+
+    const downBtn = document.createElement("button");
+    downBtn.className = "rewrite-rule-btn rewrite-rule-down";
+    downBtn.textContent = "\u2193";
+    downBtn.disabled = idx === rewriteRules.length - 1;
+    downBtn.addEventListener("click", () => {
+      if (idx >= rewriteRules.length - 1) return;
+      const tmp = rewriteRules[idx + 1];
+      rewriteRules[idx + 1] = rewriteRules[idx];
+      rewriteRules[idx] = tmp;
+      save("urlRewriteRules", rewriteRules.slice());
+      renderRewriteRules();
+      runUrlTester();
+    });
+    controls.appendChild(downBtn);
+
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "rewrite-rule-btn rewrite-rule-remove";
+    removeBtn.textContent = "x";
+    removeBtn.addEventListener("click", () => {
+      rewriteRules.splice(idx, 1);
+      save("urlRewriteRules", rewriteRules.slice());
+      renderRewriteRules();
+      runUrlTester();
+    });
+    controls.appendChild(removeBtn);
+
+    row.appendChild(controls);
+
+    rewriteRulesItems.appendChild(row);
+  });
+}
+
+function addRewriteRule() {
+  const src = rewriteSourceInput.value.trim();
+  const tgt = rewriteTargetInput.value.trim();
+  if (!src) return;
+  // Validate the regex
+  try {
+    new RegExp(src);
+  } catch (e) {
+    rewriteSourceInput.style.borderColor = "#e05050";
+    setTimeout(() => { rewriteSourceInput.style.borderColor = ""; }, 1500);
+    return;
+  }
+  rewriteRules.push({ source: src, target: tgt });
+  save("urlRewriteRules", rewriteRules.slice());
+  renderRewriteRules();
+  rewriteSourceInput.value = "";
+  rewriteTargetInput.value = "";
+  runUrlTester();
+}
+
+rewriteRuleAddBtn.addEventListener("click", addRewriteRule);
+// Allow Enter in either input to add the rule
+rewriteSourceInput.addEventListener("keydown", (e) => { if (e.key === "Enter") addRewriteRule(); });
+rewriteTargetInput.addEventListener("keydown", (e) => { if (e.key === "Enter") addRewriteRule(); });
+
+// ---- URL Tester ----
+
+/**
+ * Applies the current rewrite rules to a URL string, cascading through
+ * all matching rules in order. Returns { rewritten, steps } where steps
+ * is an array of { rule, result } for each rule that matched, or null
+ * if no rules matched at all.
+ */
+function applyRewriteRules(url) {
+  let current = url;
+  const steps = [];
+  for (const rule of rewriteRules) {
+    try {
+      const re = new RegExp(rule.source);
+      if (re.test(current)) {
+        // Normalise backreferences: convert \1 to $1 so String.replace works
+        const target = rule.target.replace(/\\(\d+)/g, "\$$1");
+        current = current.replace(re, target);
+        steps.push({ rule, result: current });
+      }
+    } catch (e) {
+      // skip invalid regex silently
+    }
+  }
+  if (steps.length === 0) return null;
+  return { rewritten: current, steps };
+}
+
+function runUrlTester() {
+  const url = urlTesterInput.value.trim();
+  urlTesterResult.innerHTML = "";
+  if (!url) return;
+
+  const result = applyRewriteRules(url);
+  if (!result) {
+    const span = document.createElement("span");
+    span.className = "tester-no-match";
+    span.textContent = "No rules matched.";
+    urlTesterResult.appendChild(span);
+    return;
+  }
+
+  result.steps.forEach((step, i) => {
+    const label = document.createElement("span");
+    label.className = "tester-rule-label";
+    label.textContent = "#" + (i + 1) + " matched: " + step.rule.source;
+    urlTesterResult.appendChild(label);
+
+    const stepResult = document.createElement("span");
+    stepResult.className = "tester-match";
+    stepResult.textContent = step.result;
+    urlTesterResult.appendChild(stepResult);
+  });
+}
+
+urlTesterInput.addEventListener("input", runUrlTester);
+
 // ---- Load saved settings ----
 
 storage.get(DEFAULTS, (items) => {
@@ -262,6 +448,10 @@ storage.get(DEFAULTS, (items) => {
   tcpUdpWhitelistEditor.load(items.tcpUdpWhitelist);
   whitelistedFilesEditor.load(items.whitelistedFiles);
   whitelistedFoldersEditor.load(items.whitelistedFolders);
+
+  // Advanced
+  rewriteRules = Array.isArray(items.urlRewriteRules) ? items.urlRewriteRules.slice() : [];
+  renderRewriteRules();
 
   updateSliderLabels();
   updateNetworkDependencies();

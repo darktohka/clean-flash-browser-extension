@@ -95,6 +95,20 @@ if [ ! -f Stage3DTests.swf ]; then
 fi
 echo "   ✓ Stage3DTests.swf $(du -h Stage3DTests.swf | cut -f1)"
 
+echo "  URLRewriteTests.as → URLRewriteTests.swf"
+mxmlc URLRewriteTests.as \
+    -output URLRewriteTests.swf \
+    -default-size 800 600 \
+    -default-background-color=0x1e1e2e \
+    $MXMLC_COMMON \
+    2>&1
+
+if [ ! -f URLRewriteTests.swf ]; then
+    echo "ERROR: URLRewriteTests.swf compilation failed."
+    exit 1
+fi
+echo "   ✓ URLRewriteTests.swf $(du -h URLRewriteTests.swf | cut -f1)"
+
 # 2. Kill any pre-existing servers on our ports
 echo ""
 echo "[2/3] Starting test servers..."
@@ -130,6 +144,7 @@ echo "     http://localhost:3000/filechooser      FileChooser tests"
 echo "     http://localhost:3000/cursorlock        Cursor Lock tests"
 echo "     http://localhost:3000/fullscreen        Fullscreen tests"
 echo "     http://localhost:3000/stage3d            Stage3D tests"
+echo "     http://localhost:3000/urlrewrite          URL Rewrite tests"
 echo ""
 echo "   Press Ctrl+C to stop servers."
 

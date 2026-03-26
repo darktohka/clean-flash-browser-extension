@@ -986,3 +986,26 @@ pub trait SettingsProvider: Send + Sync {
         // Default: no-op (desktop players can override if needed).
     }
 }
+
+// ===========================================================================
+// URL rewrite provider - allows rewriting URLs before requests are made
+// ===========================================================================
+
+/// Provides URL rewriting capabilities for the PPAPI URL loader.
+///
+/// When set on the host, every URL passed to `PPB_URLLoader::Open` is
+/// offered to this provider for rewriting before the network request is
+/// made.  This enables the browser extension's regex-based rewrite rules
+/// as well as custom JavaScript callback functions set via `<embed>` /
+/// `<object>` attributes.
+///
+/// Implementations should be thread-safe; the method may be called from
+/// background I/O threads.
+pub trait UrlRewriteProvider: Send + Sync {
+    /// Rewrite a URL.
+    ///
+    /// Returns `Some(new_url)` if the URL was rewritten, or `None` to
+    /// leave it unchanged.  Implementations may apply multiple rules
+    /// in cascade (the output of one rule feeds into the next).
+    fn rewrite_url(&self, url: &str) -> Option<String>;
+}
