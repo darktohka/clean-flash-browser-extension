@@ -32,7 +32,7 @@ pub unsafe fn register(registry: &mut InterfaceRegistry) {
 }
 
 /// Get the Flash data directory.
-fn data_dir() -> PathBuf {
+pub(crate) fn data_dir() -> PathBuf {
     #[cfg(target_os = "macos")]
     let base = std::env::var("HOME")
         .map(|h| format!("{}/Library/Application Support", h))

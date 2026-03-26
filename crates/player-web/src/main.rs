@@ -1699,6 +1699,23 @@ impl player_ui_traits::SettingsProvider for WebSettingsProvider {
     }
 
     fn edit_settings(&self, edits: serde_json::Value) {
+        // Apply edits to in-memory settings immediately so subsequent
+        // get_settings() calls reflect the change without waiting for
+        // the round-trip through the browser extension.
+        {
+            let mut settings = self.inner.lock();
+            if let Some(arr) = edits.get("whitelistedFiles").and_then(|v| v.as_array()) {
+                settings.whitelisted_files = arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
+            }
+            if let Some(arr) = edits.get("whitelistedFolders").and_then(|v| v.as_array()) {
+                settings.whitelisted_folders = arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
+            }
+            if let Some(v) = edits.get("fileWhitelistEnabled").and_then(|v| v.as_bool()) {
+                settings.file_whitelist_enabled = v;
+            }
+        }
+
+        // Also persist to browser extension storage.
         if let Some(bridge) = self.bridge.get() {
             let _ = bridge.request(serde_json::json!({
                 "op": "editSettings",

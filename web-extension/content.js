@@ -55,6 +55,23 @@ function normalizeFlashSettings(raw) {
 
 let _flashSettings = normalizeFlashSettings();
 
+/**
+ * Apply settings to in-memory + DOM/localStorage cache, then optionally broadcast.
+ * @param {Object} raw - Partial/full settings object.
+ * @param {(settings: Object) => void} [broadcastFn] - Optional broadcast callback.
+ */
+function applyFlashSettings(raw, broadcastFn) {
+  _flashSettings = normalizeFlashSettings(raw);
+  try {
+    const json = JSON.stringify(_flashSettings);
+    document.documentElement.setAttribute("data-flash-settings", json);
+    localStorage.setItem("_flashSettings", json);
+  } catch (_) {}
+  if (typeof broadcastFn === "function") {
+    broadcastFn(_flashSettings);
+  }
+}
+
 // Read settings and inject into the DOM for the MAIN-world page script.
 (function loadSettings() {
   // Synchronously set cached settings so page-script.js (MAIN world) can
@@ -73,13 +90,8 @@ let _flashSettings = normalizeFlashSettings();
   if (!storage) return;
   storage.get(SETTINGS_DEFAULTS, (items) => {
     if (chrome.runtime.lastError) return;
-    _flashSettings = normalizeFlashSettings(items);
-    // Write to <html> so page-script.js (MAIN world) can read them.
-    const json = JSON.stringify(_flashSettings);
-    try {
-      document.documentElement.setAttribute("data-flash-settings", json);
-      localStorage.setItem("_flashSettings", json);
-    } catch (_) {}
+    // Keep content-script cache + DOM/localStorage in sync.
+    applyFlashSettings(items);
   });
 })();
 
@@ -88,15 +100,7 @@ let _flashSettings = normalizeFlashSettings();
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "settingsUpdate" && msg.settings) {
     console.log("[Flash Player] Received settings update:", msg.settings);
-    _flashSettings = normalizeFlashSettings(msg.settings);
-    // Update the DOM attribute for future page-script.js reads.
-    const json = JSON.stringify(_flashSettings);
-    try {
-      document.documentElement.setAttribute("data-flash-settings", json);
-      localStorage.setItem("_flashSettings", json);
-    } catch (_) {}
-    // Forward to all active Flash instance native host connections.
-    FlashInstance.broadcastSettingsUpdate(_flashSettings);
+    applyFlashSettings(msg.settings, FlashInstance.broadcastSettingsUpdate);
   }
 });
 
@@ -3324,7 +3328,14 @@ async function handleScriptRequest(req, port) {
     if (edits && typeof edits === "object") {
       try {
         const store = chrome.storage.sync || chrome.storage.local;
-        store.set(edits);
+        store.set(edits, () => {
+          // After persisting, update the in-memory settings and broadcast
+          // so all Flash instances (including the one that triggered this)
+          // see the updated values immediately.
+          store.get(null, (items) => {
+            applyFlashSettings(items, FlashInstance.broadcastSettingsUpdate);
+          });
+        });
       } catch (e) {
         console.warn("[Flash Player] editSettings error:", e);
       }

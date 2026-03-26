@@ -149,6 +149,18 @@ pub fn is_file_path_allowed(path: &str) -> bool {
     // Normalize the path for comparison
     let normalized = normalize_path(path);
 
+    // Always allow paths under the Flash data directory
+    let data_dir = crate::interfaces::flash_file::data_dir();
+    let data_dir_normalized = normalize_path(&data_dir.to_string_lossy());
+    let data_dir_prefix = if data_dir_normalized.ends_with('/') {
+        data_dir_normalized.clone()
+    } else {
+        format!("{}/", data_dir_normalized)
+    };
+    if normalized.starts_with(&data_dir_prefix) || normalized == data_dir_normalized {
+        return true;
+    }
+
     // Check exact file match
     if settings.whitelisted_files.iter().any(|f| normalize_path(f) == normalized) {
         return true;
