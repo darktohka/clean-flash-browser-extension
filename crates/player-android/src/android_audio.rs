@@ -50,7 +50,7 @@ impl AudioProvider for AndroidAudioProvider {
         pw.write_bytes(samples);
 
         // Fire-and-forget — audio data is time-sensitive, don't block.
-        if let Err(e) = self.ipc.send(tags::AUDIO_INIT, pw.finish()) {
+        if let Err(e) = self.ipc.send(tags::AUDIO_SAMPLES, pw.finish()) {
             tracing::warn!("Failed to send audio samples: {}", e);
         }
     }

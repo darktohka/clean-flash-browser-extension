@@ -21,7 +21,7 @@ impl AndroidFullscreenProvider {
         Self {
             ipc,
             screen_size: Mutex::new(None),
-            is_fullscreen: Mutex::new(true), // Android app starts fullscreen
+            is_fullscreen: Mutex::new(false), // Start non-fullscreen; Flash will request if needed
         }
     }
 

@@ -90,7 +90,7 @@ unsafe extern "C" fn create(
     size: *const PP_Size,
     is_always_opaque: PP_Bool,
 ) -> PP_Resource {
-    tracing::trace!(
+    tracing::info!(
         "PPB_Graphics2D::Create(instance={}, size={:?}, opaque={})",
         instance,
         if size.is_null() {
@@ -289,7 +289,7 @@ unsafe extern "C" fn replace_contents(graphics_2d: PP_Resource, image_data: PP_R
 }
 
 unsafe extern "C" fn flush(graphics_2d: PP_Resource, callback: PP_CompletionCallback) -> i32 {
-    tracing::debug!(
+    tracing::info!(
         "PPB_Graphics2D::Flush(graphics_2d={}, callback={:?})",
         graphics_2d,
         callback

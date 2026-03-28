@@ -406,7 +406,7 @@ unsafe extern "C" fn get_setting_int(
 ) -> i32 {
     tracing::debug!("PPB_Flash::GetSettingInt(setting={})", setting);
     match setting {
-        PP_FLASHSETTING_3DENABLED => 1,
+        PP_FLASHSETTING_3DENABLED => if crate::gl_context::gl_available() { 1 } else { 0 },
         PP_FLASHSETTING_INCOGNITO => {
             HOST.get()
                 .map(|h| if h.get_flash_incognito() { 1 } else { 0 })

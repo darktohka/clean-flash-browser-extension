@@ -202,7 +202,7 @@ fn main() {
 
     // Send initial view change
     player.notify_view_change(width, height, Some(&ViewInfo {
-        is_fullscreen: true,
+        is_fullscreen: false,
         is_visible: true,
         is_page_visible: true,
         ..Default::default()
@@ -214,11 +214,31 @@ fn main() {
     tracing::info!("Entering main loop");
 
     let mut last_cursor: i32 = -1;
+    let mut loop_count: u64 = 0;
+    let mut view_resent = false;
 
     // Main loop
     loop {
         // 1. Poll PPAPI
         player.poll_main_loop();
+        loop_count += 1;
+        if loop_count % 10000 == 0 {
+            tracing::info!("Main loop iteration {}", loop_count);
+        }
+
+        // Re-send DidChangeView after a short delay so Flash can process it
+        // with the message loop running (some SWFs only set up rendering in
+        // response to view changes that arrive after initialization).
+        if !view_resent && loop_count == 50 {
+            tracing::info!("Re-sending DidChangeView ({}x{}) after main loop start", width, height);
+            player.notify_view_change(width, height, Some(&ViewInfo {
+                is_fullscreen: false,
+                is_visible: true,
+                is_page_visible: true,
+                ..Default::default()
+            }));
+            view_resent = true;
+        }
 
         // 2. Send dirty frames
         {
@@ -257,7 +277,7 @@ fn main() {
                 tags::RESIZE => {
                     if let Ok((w, h)) = parse_resize(&cmd) {
                         player.notify_view_change(w, h, Some(&ViewInfo {
-                            is_fullscreen: true,
+                            is_fullscreen: false,
                             is_visible: true,
                             is_page_visible: true,
                             ..Default::default()
@@ -409,10 +429,27 @@ fn main() {
                 }
 
                 tags::VIEW_UPDATE => {
+                    // Replicate player-web "viewUpdate" behaviour:
+                    // re-send DidChangeView with the current stored
+                    // dimensions and updated visibility / focus.
                     let mut pr = PayloadReader::new(&cmd.payload);
-                    if let (Ok(visible), Ok(focused)) = (pr.read_u8(), pr.read_u8()) {
-                        if visible != 0 {
-                            player.notify_focus_change(focused != 0);
+                    let visible = pr.read_u8().unwrap_or(1) != 0;
+                    let focused = pr.read_u8().unwrap_or(1) != 0;
+
+                    player.notify_focus_change(focused);
+
+                    // Re-send DidChangeView with current dimensions.
+                    if let Some(host) = ppapi_host::HOST.get() {
+                        if let Some(inst_id) = player.instance_id() {
+                            let (cw, ch) = host.instances.with_instance(inst_id, |inst| {
+                                (inst.view_rect.size.width, inst.view_rect.size.height)
+                            }).unwrap_or((width, height));
+                            player.notify_view_change(cw, ch, Some(&ViewInfo {
+                                is_fullscreen: false,
+                                is_visible: visible,
+                                is_page_visible: visible,
+                                ..Default::default()
+                            }));
                         }
                     }
                 }
@@ -433,7 +470,11 @@ fn init_tracing() {
     use tracing_subscriber::EnvFilter;
 
     let filter = EnvFilter::from_default_env()
-        .add_directive(tracing::Level::INFO.into());
+        .add_directive(tracing::Level::DEBUG.into());
+
+    // Always keep a stderr layer so ProcessLauncher can capture logs into
+    // files/tmp/flash-host-stderr.log for Android-side diagnostics.
+    let stderr_layer = tracing_subscriber::fmt::layer().with_ansi(false);
 
     let log_dir = std::env::var("FLASH_LOG_DIR")
         .unwrap_or_else(|_| "/tmp/flash".to_string());
@@ -447,13 +488,13 @@ fn init_tracing() {
 
         tracing_subscriber::registry()
             .with(filter)
+            .with(stderr_layer)
             .with(file_layer)
             .init();
     } else {
-        // Fallback: stderr logging (won't be visible after redirect)
         tracing_subscriber::registry()
             .with(filter)
-            .with(tracing_subscriber::fmt::layer().with_ansi(false))
+            .with(stderr_layer)
             .init();
     }
 }

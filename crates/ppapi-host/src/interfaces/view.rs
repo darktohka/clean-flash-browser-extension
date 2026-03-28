@@ -108,7 +108,7 @@ unsafe extern "C" fn get_rect(resource: PP_Resource, rect: *mut PP_Rect) -> PP_B
             PP_TRUE
         })
         .unwrap_or(PP_FALSE);
-    tracing::trace!("PPB_View::GetRect({}, {:?}) -> {}", resource, if rect.is_null() { None } else { Some(unsafe { &*rect }) }, result);
+    tracing::info!("PPB_View::GetRect({}, {:?}) -> {}", resource, if rect.is_null() { None } else { Some(unsafe { &*rect }) }, result);
     result
 }
 

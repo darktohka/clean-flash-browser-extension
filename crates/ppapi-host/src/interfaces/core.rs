@@ -58,7 +58,7 @@ unsafe extern "C" fn call_on_main_thread(
     callback: PP_CompletionCallback,
     result: i32,
 ) {
-    //tracing::debug!("PPB_Core::CallOnMainThread(delay={}ms, result={})", delay_in_milliseconds, result);
+    tracing::info!("PPB_Core::CallOnMainThread(delay={}ms, result={})", delay_in_milliseconds, result);
     if let Some(host) = HOST.get() {
         if let Some(poster) = &*host.main_loop_poster.lock() {
             poster.post_work(callback, delay_in_milliseconds as i64, result);

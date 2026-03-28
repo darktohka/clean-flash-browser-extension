@@ -17,7 +17,7 @@ pub unsafe fn register(registry: &mut InterfaceRegistry) {
 }
 
 unsafe extern "C" fn bind_graphics(instance: PP_Instance, device: PP_Resource) -> PP_Bool {
-    tracing::trace!("BindGraphics called with instance {} and device {}", instance, device);
+    tracing::info!("BindGraphics called with instance {} and device {}", instance, device);
     let Some(host) = HOST.get() else {
         return PP_FALSE;
     };

@@ -66,6 +66,7 @@ pub mod tags {
     pub const AUDIO_START: u8 = 0x91;
     pub const AUDIO_STOP: u8 = 0x92;
     pub const AUDIO_CLOSE: u8 = 0x93;
+    pub const AUDIO_SAMPLES: u8 = 0x94;
 
     pub const AUDIO_INPUT_OPEN: u8 = 0xA0;
     pub const AUDIO_INPUT_START: u8 = 0xA1;
