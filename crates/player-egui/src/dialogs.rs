@@ -219,10 +219,10 @@ pub fn draw_dialog(dialog: &mut ActiveDialog, ctx: &egui::Context) -> Option<Dia
 }
 
 // ===========================================================================
-// File chooser provider - re-exported from player-ui-traits (rfd feature)
+// File chooser provider - from file-chooser-rfd crate
 // ===========================================================================
 
-pub use player_ui_traits::RfdFileChooserProvider;
+pub use file_chooser_rfd::RfdFileChooserProvider;
 
 // ===========================================================================
 // Egui fullscreen provider - uses eframe ViewportCommand

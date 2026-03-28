@@ -4,9 +4,15 @@ members = [
     "crates/ppapi-host",
     "crates/player-core",
     "crates/player-ui-traits",
+    "crates/http-reqwest",
+    "crates/audio-cpal",
+    "crates/gl-glow",
+    "crates/file-chooser-rfd",
     "crates/player-egui",
     "crates/player-win32",
     "crates/player-web",
+    "crates/player-android",
+    "crates/tls-rustls",
 ]
 resolver = "2"
 
@@ -17,6 +23,11 @@ license = "MIT"
 [workspace.dependencies]
 ppapi-sys = { path = "crates/ppapi-sys" }
 ppapi-host = { path = "crates/ppapi-host", default-features = false }
+http-reqwest = { path = "crates/http-reqwest" }
+audio-cpal = { path = "crates/audio-cpal" }
+gl-glow = { path = "crates/gl-glow" }
+file-chooser-rfd = { path = "crates/file-chooser-rfd" }
+tls-rustls = { path = "crates/tls-rustls" }
 player-core = { path = "crates/player-core", default-features = false }
 player-ui-traits = { path = "crates/player-ui-traits" }
 

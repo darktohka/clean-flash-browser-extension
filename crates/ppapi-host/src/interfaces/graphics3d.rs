@@ -343,6 +343,7 @@ unsafe extern "C" fn get_error(context: PP_Resource) -> i32 {
     }
 
     // Query the real GL error if we have a context.
+    #[cfg(feature = "gl-glow")]
     if gl_context::ensure_context_current(context) {
         if let Some(gl) = gl_context::gl_functions() {
             let err = unsafe { glow::HasContext::get_error(gl) };
@@ -436,6 +437,7 @@ unsafe extern "C" fn swap_buffers(context: PP_Resource, callback: PP_CompletionC
         context, |g3d| g3d.gl_context.is_some()
     ).unwrap_or(false);
 
+    #[cfg(feature = "gl-glow")]
     if has_gl {
         // Ensure context is current on this thread.
         gl_context::ensure_context_current(context);

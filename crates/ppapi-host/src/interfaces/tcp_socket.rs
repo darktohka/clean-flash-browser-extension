@@ -2,7 +2,8 @@
 //!
 //! Provides TCP socket operations: create, connect (by host:port or
 //! by PP_NetAddress_Private), read, write, disconnect, and set-option.
-//! SSL handshake is implemented using rustls.
+//! SSL handshake is delegated to the [`TlsProvider`](player_ui_traits::TlsProvider)
+//! registered on the host state.
 //!
 //! ## Flash socket policy handling
 //!
@@ -25,10 +26,11 @@ use std::ffi::{c_char, CStr};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
+use player_ui_traits::TlsStreamIo;
 
 use super::net_address::{addr_to_socketaddr, socketaddr_to_addr};
 use crate::HOST;
@@ -169,14 +171,17 @@ fn trace_socket_payload(kind: &str, resource_id: PP_Resource, payload: &[u8]) {
 
 pub enum SocketStream {
     Plain(TcpStream),
-    Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
+    Tls(Box<dyn TlsStreamIo>),
 }
 
 impl SocketStream {
     fn set_read_timeout(&mut self, timeout: Option<Duration>) -> std::io::Result<()> {
         match self {
             Self::Plain(s) => s.set_read_timeout(timeout),
-            Self::Tls(s) => s.get_mut().set_read_timeout(timeout),
+            Self::Tls(s) => match s.get_tcp_ref() {
+                Some(tcp) => tcp.set_read_timeout(timeout),
+                None => Ok(()),
+            },
         }
     }
 }
@@ -535,42 +540,23 @@ unsafe extern "C" fn get_remote_address(
 }
 
 // ---------------------------------------------------------------------------
-// TLS support - rustls
+// TLS support – delegated to the TlsProvider registered on HostState
 // ---------------------------------------------------------------------------
 
-/// Returns a shared `ClientConfig` with Mozilla root certificates.
-fn tls_client_config() -> Arc<rustls::ClientConfig> {
-    static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
-    CONFIG
-        .get_or_init(|| {
-            let mut root_store = rustls::RootCertStore::empty();
-            root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            Arc::new(
-                rustls::ClientConfig::builder()
-                    .with_root_certificates(root_store)
-                    .with_no_client_auth(),
-            )
-        })
-        .clone()
-}
-
 /// Perform TLS handshake on the stream inside the mutex, upgrading
-/// `SocketStream::Plain` → `SocketStream::Tls`.
+/// `SocketStream::Plain` → `SocketStream::Tls` via the registered
+/// [`TlsProvider`](player_ui_traits::TlsProvider).
 fn do_tls_handshake(
     stream: &Mutex<Option<SocketStream>>,
     server_name: &str,
 ) -> Result<Vec<u8>, i32> {
-    let config = tls_client_config();
-
-    let sni = rustls::pki_types::ServerName::try_from(server_name.to_owned()).map_err(|e| {
-        tracing::warn!("SSLHandshake: invalid server name {:?}: {}", server_name, e);
-        PP_ERROR_BADARGUMENT
-    })?;
-
-    let mut conn = rustls::ClientConnection::new(config, sni).map_err(|e| {
-        tracing::warn!("SSLHandshake: ClientConnection::new failed: {}", e);
-        PP_ERROR_FAILED
-    })?;
+    let provider = HOST
+        .get()
+        .and_then(|h| h.get_tls_provider())
+        .ok_or_else(|| {
+            tracing::warn!("SSLHandshake: no TlsProvider registered");
+            PP_ERROR_FAILED
+        })?;
 
     // Lock the stream and take the plain TcpStream out.
     let mut guard = stream.lock();
@@ -579,36 +565,22 @@ fn do_tls_handshake(
         Some(SocketStream::Tls(_)) => return Err(PP_ERROR_FAILED),
         Some(SocketStream::Plain(_)) => {}
     }
-    let mut tcp = match guard.take() {
+    let tcp = match guard.take() {
         Some(SocketStream::Plain(tcp)) => tcp,
         _ => unreachable!(),
     };
 
-    // Drive the TLS handshake to completion (blocking I/O).
-    // We hold the mutex during the handshake.  Per the PPAPI spec, no
-    // pending reads/writes should exist during SSLHandshake, so this
-    // will not cause contention.
-    while conn.is_handshaking() {
-        if let Err(e) = conn.complete_io(&mut tcp) {
-            tracing::warn!("SSLHandshake: handshake I/O error: {}", e);
-            let _ = tcp.shutdown(Shutdown::Both);
-            return Err(PP_ERROR_FAILED);
+    match provider.handshake(tcp, server_name) {
+        Ok(tls) => {
+            let cert_der = tls.server_cert_der;
+            *guard = Some(SocketStream::Tls(tls.stream));
+            Ok(cert_der)
+        }
+        Err(e) => {
+            tracing::warn!("SSLHandshake: TlsProvider error: {}", e);
+            Err(PP_ERROR_FAILED)
         }
     }
-
-    // Extract the server's leaf certificate (DER).
-    let cert_der = conn
-        .peer_certificates()
-        .and_then(|certs| certs.first())
-        .map(|c| c.as_ref().to_vec())
-        .unwrap_or_default();
-
-    // Wrap in StreamOwned and store back.
-    *guard = Some(SocketStream::Tls(Box::new(rustls::StreamOwned::new(
-        conn, tcp,
-    ))));
-
-    Ok(cert_der)
 }
 
 unsafe extern "C" fn ssl_handshake(

@@ -38,7 +38,10 @@ pub mod memory;
 pub mod message_loop;
 pub mod net_address;
 pub mod network_monitor;
+#[cfg(feature = "gl-glow")]
 pub mod opengles2;
+#[cfg(not(feature = "gl-glow"))]
+mod opengles2_stubs;
 pub mod pdf;
 pub mod printing;
 pub mod stubs;
@@ -96,7 +99,10 @@ pub unsafe fn register_all(registry: &mut InterfaceRegistry) {
         self::flash_menu::register(registry);
         self::flash_message_loop::register(registry);
         self::flash_print::register(registry);
+        #[cfg(feature = "gl-glow")]
         self::opengles2::register(registry);
+        #[cfg(not(feature = "gl-glow"))]
+        self::opengles2_stubs::register(registry);
         self::printing::register(registry);
         self::url_util::register(registry);
         self::net_address::register(registry);

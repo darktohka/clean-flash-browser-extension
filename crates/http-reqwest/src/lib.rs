@@ -1,7 +1,7 @@
 //! Reqwest-based [`HttpRequestProvider`] implementation.
 //!
 //! Provides real HTTP/HTTPS networking using the `reqwest` crate with a
-//! `rustls` TLS backend.  Enabled by the `url-reqwest` Cargo feature.
+//! `rustls` TLS backend.
 
 use std::sync::OnceLock;
 

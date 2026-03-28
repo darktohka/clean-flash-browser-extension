@@ -12,7 +12,10 @@ path = "src/main.rs"
 [dependencies]
 player-core = { workspace = true }
 player-ui-traits = { workspace = true }
-ppapi-host = { workspace = true, features = ["fs-os", "audio-cpal", "clipboard-arboard", "url-reqwest"] }
+ppapi-host = { workspace = true, features = ["fs-os", "clipboard-arboard", "gl-glow"] }
+http-reqwest = { workspace = true }
+tls-rustls = { workspace = true }
+audio-cpal = { workspace = true }
 ppapi-sys = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

@@ -37,11 +37,19 @@ impl Graphics2DResource {
     pub fn new(size: PP_Size, is_always_opaque: bool) -> Self {
         let stride = size.width * 4;
         let len = (stride * size.height) as usize;
+        let mut pixels = vec![0u8; len];
+        // Opaque surfaces: Flash doesn't manage alpha (leaves it at 0).
+        // Chrome treats these as fully opaque, so pre-fill alpha=255.
+        if is_always_opaque {
+            for i in (3..len).step_by(4) {
+                pixels[i] = 255;
+            }
+        }
         Self {
             size,
             is_always_opaque,
             scale: 1.0,
-            pixels: vec![0u8; len],
+            pixels,
             stride,
             dirty_rect: None,
         }
@@ -343,6 +351,21 @@ unsafe extern "C" fn flush(graphics_2d: PP_Resource, callback: PP_CompletionCall
             .with_downcast_mut::<Graphics2DResource, _>(graphics_2d, |g| {
                 if let Some((dx, dy, dw, dh)) = g.dirty_rect.take() {
                     if dw > 0 && dh > 0 {
+                        // Opaque surfaces: Flash leaves alpha at 0.
+                        // Stamp alpha=255 in the dirty region so the
+                        // output matches Chrome's opaque compositing.
+                        if g.is_always_opaque {
+                            for row in 0..dh {
+                                let y = dy + row;
+                                let row_start = (y * g.stride + dx * 4) as usize;
+                                for col in 0..dw {
+                                    let alpha_off = row_start + (col as usize) * 4 + 3;
+                                    if alpha_off < g.pixels.len() {
+                                        g.pixels[alpha_off] = 255;
+                                    }
+                                }
+                            }
+                        }
                         if let Some(cb) = callbacks_guard.as_ref() {
                             cb.on_flush(
                                 graphics_2d, &g.pixels,
@@ -356,9 +379,24 @@ unsafe extern "C" fn flush(graphics_2d: PP_Resource, callback: PP_CompletionCall
         drop(callbacks_guard);
     } else {
         // Just clear the dirty rect; 3D SwapBuffers will pick up the pixels.
+        // Still stamp alpha for opaque surfaces so the compositor reads
+        // correct alpha values when blending 2D over 3D.
         host.resources
             .with_downcast_mut::<Graphics2DResource, _>(graphics_2d, |g| {
-                g.dirty_rect.take();
+                if let Some((dx, dy, dw, dh)) = g.dirty_rect.take() {
+                    if g.is_always_opaque && dw > 0 && dh > 0 {
+                        for row in 0..dh {
+                            let y = dy + row;
+                            let row_start = (y * g.stride + dx * 4) as usize;
+                            for col in 0..dw {
+                                let alpha_off = row_start + (col as usize) * 4 + 3;
+                                if alpha_off < g.pixels.len() {
+                                    g.pixels[alpha_off] = 255;
+                                }
+                            }
+                        }
+                    }
+                }
             });
     }
 

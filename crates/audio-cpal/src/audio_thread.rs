@@ -6,7 +6,7 @@
 //! filters are **per-thread** (installed without `SECCOMP_FILTER_FLAG_TSYNC`),
 //! a thread spawned *before* `sandbox::activate()` remains unsandboxed.
 //!
-//! This module provides that thread.  [`CpalAudioProvider`](super::audio_cpal::CpalAudioProvider)
+//! This module provides that thread.  [`CpalAudioProvider`](super::CpalAudioProvider)
 //! proxies every cpal call through it via a command channel.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -300,7 +300,6 @@ pub fn create_stream(sample_rate: u32, sample_frame_count: u32) -> u32 {
 
 /// Push PCM samples to a stream's ring buffer.
 pub fn write_samples(stream_id: u32, samples: &[u8]) {
-    // Copy into an owned Vec so it can be sent across threads.
     send(AudioCmd::WriteSamples {
         stream_id,
         samples: samples.to_vec(),

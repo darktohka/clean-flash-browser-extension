@@ -143,7 +143,7 @@ impl FlashPlayerApp {
     /// Handle the "Open" file dialog.
     fn handle_open_file(&mut self) {
         // Use rfd for native file dialogs.
-        if let Some(path) = player_ui_traits::rfd::FileDialog::new()
+        if let Some(path) = file_chooser_rfd::rfd::FileDialog::new()
             .add_filter("SWF Files", &["swf"])
             .add_filter("All Files", &["*"])
             .pick_file()
@@ -165,13 +165,13 @@ impl FlashPlayerApp {
                     // microphone capture (PPB_AudioInput).
                     let host = ppapi_host::HOST.get().expect("HOST not initialised");
                     host.set_audio_input_provider(Box::new(
-                        ppapi_host::audio_input_cpal::CpalAudioInputProvider::new(),
+                        audio_cpal::CpalAudioInputProvider::new(),
                     ));
 
                     // Set up the cpal-based audio output provider for
                     // speaker playback (PPB_Audio / PPB_AudioOutput).
                     host.set_audio_provider(Box::new(
-                        ppapi_host::audio_cpal::CpalAudioProvider::new(),
+                        audio_cpal::CpalAudioProvider::new(),
                     ));
 
                     // Set up the arboard-based clipboard provider for
@@ -200,8 +200,17 @@ impl FlashPlayerApp {
 
                     // Set up the HTTP request provider for URL loading.
                     host.set_http_request_provider(Box::new(
-                        ppapi_host::http_reqwest::ReqwestHttpRequestProvider::new(),
+                        http_reqwest::ReqwestHttpRequestProvider::new(),
                     ));
+
+                    // Set up the TLS provider for TCP socket SSL handshakes.
+                    host.set_tls_provider(Box::new(
+                        tls_rustls::RustlsTlsProvider::new(),
+                    ));
+
+                    // Spawn the unsandboxed audio thread before the
+                    // sandbox is activated inside load_plugin().
+                    audio_cpal::ensure_started();
 
                     // Load the Flash plugin now that all providers are set
                     // up.  This activates the seccomp sandbox on the

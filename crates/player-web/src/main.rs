@@ -240,7 +240,7 @@ fn main() {
         // This spawns a worker thread that must exist BEFORE load_plugin()
         // activates the seccomp sandbox.
         host.set_file_chooser_provider(Box::new(
-            player_ui_traits::RfdFileChooserProvider::new(),
+            file_chooser_rfd::RfdFileChooserProvider::new(),
         ));
 
         // Set up the cookie provider so that HTTP cookies from the browser
@@ -256,12 +256,17 @@ fn main() {
         // - When false: uses reqwest (direct HTTP) exclusively.
         let fetch_bridge = SCRIPT_BRIDGE.get().expect("SCRIPT_BRIDGE not initialised").clone();
         let reqwest_provider = std::sync::Arc::new(
-            ppapi_host::http_reqwest::ReqwestHttpRequestProvider::new(),
+            http_reqwest::ReqwestHttpRequestProvider::new(),
         );
         let fetch_provider = http_fetch::FetchHttpRequestProvider::new(fetch_bridge)
             .with_fallback(reqwest_provider.clone());
         host.set_http_request_provider(Box::new(
             http_fetch::DispatchingHttpRequestProvider::new(fetch_provider, reqwest_provider),
+        ));
+
+        // Set up the TLS provider for TCP socket SSL handshakes.
+        host.set_tls_provider(Box::new(
+            tls_rustls::RustlsTlsProvider::new(),
         ));
 
     }
@@ -395,7 +400,7 @@ fn apply_audio_provider_from_settings(host: &ppapi_host::HostState) {
     if use_native_audio {
         tracing::info!("Selecting native (cpal) audio output for Flash");
         host.switch_audio_provider(Box::new(
-            ppapi_host::audio_cpal::CpalAudioProvider::new(),
+            audio_cpal::CpalAudioProvider::new(),
         ));
     } else {
         tracing::info!("Selecting Web Audio API for Flash audio output");
@@ -588,6 +593,10 @@ fn handle_command(
             // inside load_plugin, and the seccomp sandbox is activated
             // immediately after.
             if !player.is_plugin_loaded() {
+                // Spawn the unsandboxed audio thread before the
+                // sandbox is activated inside load_plugin().
+                audio_cpal::ensure_started();
+
                 if let Err(e) = player.load_plugin() {
                     let _ = protocol::send_host_message(&protocol::HostMessage::Error(
                         &format!("Failed to load plugin: {}", e),

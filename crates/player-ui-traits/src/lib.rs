@@ -1,16 +1,6 @@
 //! Player UI traits - abstracts the GUI layer so the player core doesn't
 //! depend on any specific UI framework (egui, GTK, etc.).
 
-#[cfg(feature = "rfd")]
-mod rfd_file_chooser;
-#[cfg(feature = "rfd")]
-pub use rfd_file_chooser::RfdFileChooserProvider;
-
-/// Re-export `rfd` so consumers that enable the `rfd` feature can use the
-/// crate without adding a direct dependency.
-#[cfg(feature = "rfd")]
-pub use rfd;
-
 /// The current state of the player, communicated from core to the UI.
 #[derive(Debug, Clone)]
 pub enum PlayerState {
@@ -1008,4 +998,44 @@ pub trait UrlRewriteProvider: Send + Sync {
     /// leave it unchanged.  Implementations may apply multiple rules
     /// in cascade (the output of one rule feeds into the next).
     fn rewrite_url(&self, url: &str) -> Option<String>;
+}
+
+// ---------------------------------------------------------------------------
+// TLS provider
+// ---------------------------------------------------------------------------
+
+/// A TLS-wrapped stream returned by [`TlsProvider::handshake`].
+///
+/// Wraps the original TCP connection with TLS encryption.  The
+/// underlying transport must remain usable through `Read + Write`.
+pub struct TlsStream {
+    /// The TLS-wrapped I/O stream.
+    pub stream: Box<dyn TlsStreamIo>,
+    /// DER-encoded server leaf certificate, if available.
+    pub server_cert_der: Vec<u8>,
+}
+
+/// Trait object for a TLS-wrapped stream.  Combines `Read + Write + Send`
+/// so it can replace a plain `TcpStream` in socket resource code.
+pub trait TlsStreamIo: std::io::Read + std::io::Write + Send {
+    /// Access the underlying `TcpStream` (e.g. for `set_read_timeout`).
+    fn get_tcp_ref(&self) -> Option<&std::net::TcpStream>;
+}
+
+/// Provides TLS handshake capability for TCP sockets.
+///
+/// Desktop players register a rustls-based implementation; the Android
+/// player delegates to the Android app via IPC (which uses the platform
+/// TLS stack).
+pub trait TlsProvider: Send + Sync {
+    /// Perform a TLS handshake on `tcp`, upgrading it to an encrypted
+    /// stream.  `server_name` is the SNI hostname.
+    ///
+    /// On success returns a [`TlsStream`] that wraps the connection.
+    /// On failure returns an error string.
+    fn handshake(
+        &self,
+        tcp: std::net::TcpStream,
+        server_name: &str,
+    ) -> Result<TlsStream, String>;
 }

@@ -9,20 +9,8 @@ pub mod filesystem;
 pub mod font_rasterizer;
 pub mod gl_context;
 
-#[cfg(feature = "audio-cpal")]
-pub mod audio_input_cpal;
-
-#[cfg(feature = "audio-cpal")]
-pub mod audio_cpal;
-
-#[cfg(feature = "audio-cpal")]
-mod audio_thread;
-
 #[cfg(feature = "clipboard-arboard")]
 pub mod clipboard_arboard;
-
-#[cfg(feature = "url-reqwest")]
-pub mod http_reqwest;
 
 pub mod http_stub;
 
@@ -191,6 +179,10 @@ pub struct HostState {
     /// When set, the URL loader offers each URL to this provider and uses
     /// the rewritten URL if one is returned.
     pub url_rewrite_provider: Mutex<Option<Arc<dyn player_ui_traits::UrlRewriteProvider>>>,
+    /// TLS provider for TCP socket SSL handshakes.
+    /// When set, PPB_TCPSocket_Private uses this for `SSLHandshake` instead
+    /// of requiring an in-process TLS library.
+    pub tls_provider: Mutex<Option<Arc<dyn player_ui_traits::TlsProvider>>>,
     /// Number of pending interactive operations (context menus, file dialogs)
     /// that are waiting for user input.  While > 0, the Flash nested message
     /// loop skips its safety-net timeout so the user has time to interact.
@@ -263,6 +255,7 @@ impl HostState {
                 http_request_provider: Mutex::new(None),
                 settings_provider: Mutex::new(None),
                 url_rewrite_provider: Mutex::new(None),
+                tls_provider: Mutex::new(None),
                 pending_interactive_ops: AtomicI32::new(0),
                 flash_command_line_args: Mutex::new(String::new()),
                 instance_object: Mutex::new(None),
@@ -283,19 +276,18 @@ impl HostState {
     ///
     /// Safe to call multiple times; each sub-init is idempotent.
     pub fn pre_sandbox_init(&self) {
+        // Tell the GL subsystem whether hardware acceleration is enabled
+        // (based on settings) before triggering initialization.
+        let hw_accel = self
+            .get_settings_provider()
+            .map(|sp| sp.get_settings().hardware_acceleration)
+            .unwrap_or(true);
+        gl_context::set_hardware_acceleration(hw_accel);
+
         // Initialize EGL/GLES2 *before* the seccomp sandbox is activated.
         // After the sandbox is in place, dlopen is blocked so
         // libloading::Library::new will fail.
         let _ = gl_context::gl_available();
-
-        #[cfg(feature = "audio-cpal")]
-        {
-            // Spawn the unsandboxed audio thread before the sandbox is
-            // activated.  Since seccomp filters are per-thread, this
-            // thread will retain full syscall access (including dlopen)
-            // even after sandbox::activate() is called on the main thread.
-            audio_thread::ensure_started();
-        }
 
         // Generate the device ID based on the current settings.
         // Must happen before sandbox activation since platform_device_id()
@@ -583,6 +575,16 @@ impl HostState {
     /// Get a cloned `Arc` handle to the URL rewrite provider, if set.
     pub fn get_url_rewrite_provider(&self) -> Option<Arc<dyn player_ui_traits::UrlRewriteProvider>> {
         self.url_rewrite_provider.lock().clone()
+    }
+
+    /// Set the TLS provider used for TCP socket SSL handshakes.
+    pub fn set_tls_provider(&self, provider: Box<dyn player_ui_traits::TlsProvider>) {
+        *self.tls_provider.lock() = Some(Arc::from(provider));
+    }
+
+    /// Get a cloned `Arc` handle to the TLS provider, if set.
+    pub fn get_tls_provider(&self) -> Option<Arc<dyn player_ui_traits::TlsProvider>> {
+        self.tls_provider.lock().clone()
     }
 
     /// Set the command-line string returned by

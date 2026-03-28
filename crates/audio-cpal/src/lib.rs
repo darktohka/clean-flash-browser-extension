@@ -1,16 +1,18 @@
-//! cpal-based [`AudioProvider`] implementation.
+//! cpal-based audio output and input providers for the Flash player.
 //!
-//! All cpal operations are proxied to a dedicated **unsandboxed** thread
-//! (see [`audio_thread`](super::audio_thread)) so that ALSA/PipeWire can
-//! `dlopen` plugin modules even after the seccomp sandbox is active on the
-//! calling thread.
-//!
-//! If the audio thread was never started (e.g. `ensure_started()` wasn't
-//! called), audio will be silent.
+//! This crate provides [`CpalAudioProvider`] (output) and
+//! [`CpalAudioInputProvider`] (input/capture) backed by the `cpal` crate.
 
-use crate::audio_thread;
+mod audio_thread;
+mod audio_input;
+
+pub use audio_thread::ensure_started;
 
 /// cpal-backed audio output provider (thread-proxied).
+///
+/// All cpal operations are proxied to a dedicated **unsandboxed** thread
+/// (see [`audio_thread`]) so that ALSA/PipeWire can `dlopen` plugin modules
+/// even after the seccomp sandbox is active on the calling thread.
 pub struct CpalAudioProvider;
 
 impl CpalAudioProvider {
@@ -44,3 +46,5 @@ impl player_ui_traits::AudioProvider for CpalAudioProvider {
         audio_thread::close_stream(stream_id);
     }
 }
+
+pub use audio_input::CpalAudioInputProvider;

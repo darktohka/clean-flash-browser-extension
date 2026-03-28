@@ -433,6 +433,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "audio-cpal"
+version = "0.1.0"
+dependencies = [
+ "cpal",
+ "parking_lot",
+ "player-ui-traits",
+ "tracing",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1225,6 +1235,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "file-chooser-rfd"
+version = "0.1.0"
+dependencies = [
+ "player-ui-traits",
+ "rfd",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1446,6 +1464,19 @@ dependencies = [
  "rand_core 0.10.0",
  "wasip2",
  "wasip3",
+]
+
+[[package]]
+name = "gl-glow"
+version = "0.1.0"
+dependencies = [
+ "glow 0.17.0",
+ "glutin",
+ "ppapi-sys",
+ "raw-window-handle",
+ "tracing",
+ "wayland-backend",
+ "wayland-client",
 ]
 
 [[package]]
@@ -1704,6 +1735,18 @@ dependencies = [
  "http",
  "http-body",
  "pin-project-lite",
+]
+
+[[package]]
+name = "http-reqwest"
+version = "0.1.0"
+dependencies = [
+ "player-ui-traits",
+ "ppapi-sys",
+ "reqwest",
+ "rustls",
+ "tracing",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -2896,6 +2939,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
+name = "player-android"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "parking_lot",
+ "player-core",
+ "player-ui-traits",
+ "ppapi-host",
+ "ppapi-sys",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "player-core"
 version = "0.1.0"
 dependencies = [
@@ -2911,13 +2970,18 @@ dependencies = [
 name = "player-egui"
 version = "0.1.0"
 dependencies = [
+ "audio-cpal",
  "eframe",
  "egui",
+ "file-chooser-rfd",
+ "gl-glow",
+ "http-reqwest",
  "parking_lot",
  "player-core",
  "player-ui-traits",
  "ppapi-host",
  "ppapi-sys",
+ "tls-rustls",
  "tracing",
  "tracing-subscriber",
 ]
@@ -2926,14 +2990,17 @@ dependencies = [
 name = "player-ui-traits"
 version = "0.1.0"
 dependencies = [
- "rfd",
+ "serde_json",
 ]
 
 [[package]]
 name = "player-web"
 version = "0.1.0"
 dependencies = [
+ "audio-cpal",
  "base64",
+ "file-chooser-rfd",
+ "http-reqwest",
  "libc",
  "lz4_flex",
  "parking_lot",
@@ -2943,6 +3010,7 @@ dependencies = [
  "ppapi-sys",
  "serde",
  "serde_json",
+ "tls-rustls",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -2953,6 +3021,8 @@ dependencies = [
 name = "player-win32"
 version = "0.1.0"
 dependencies = [
+ "audio-cpal",
+ "http-reqwest",
  "native-windows-derive",
  "native-windows-gui",
  "parking_lot",
@@ -2960,6 +3030,7 @@ dependencies = [
  "player-ui-traits",
  "ppapi-host",
  "ppapi-sys",
+ "tls-rustls",
  "tracing",
  "tracing-subscriber",
  "windows-sys 0.61.2",
@@ -3052,10 +3123,9 @@ version = "0.1.0"
 dependencies = [
  "ab_glyph",
  "arboard",
- "cpal",
  "fontdb",
+ "gl-glow",
  "glow 0.17.0",
- "glutin",
  "libc",
  "libloading 0.9.0",
  "once_cell",
@@ -3063,15 +3133,10 @@ dependencies = [
  "player-ui-traits",
  "ppapi-sys",
  "rand 0.10.0",
- "raw-window-handle",
- "reqwest",
- "rustls",
+ "serde_json",
  "tokio",
  "tracing",
  "ttf-parser",
- "wayland-backend",
- "wayland-client",
- "webpki-roots",
  "winapi",
  "windows-sys 0.61.2",
  "winreg",
@@ -4094,6 +4159,16 @@ name = "tinyvec_macros"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
+
+[[package]]
+name = "tls-rustls"
+version = "0.1.0"
+dependencies = [
+ "player-ui-traits",
+ "rustls",
+ "tracing",
+ "webpki-roots",
+]
 
 [[package]]
 name = "tokio"
