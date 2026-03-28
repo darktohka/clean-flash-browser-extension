@@ -17,6 +17,7 @@ mod android_http;
 mod android_settings;
 mod android_url;
 mod android_video_capture;
+mod frame_shm;
 mod ipc_transport;
 mod protocol;
 
@@ -200,6 +201,32 @@ fn main() {
         std::process::exit(1);
     }
 
+    // Create shared memory framebuffer for zero-copy frame transfer.
+    // The file lives at a well-known guest path that the Android app
+    // can also access via the rootfs directory on the real filesystem.
+    let mut frame_shm: Option<frame_shm::FrameShm> = None;
+    if width > 0 && height > 0 {
+        match frame_shm::FrameShm::create(
+            std::path::Path::new(frame_shm::SHM_GUEST_PATH),
+            width as u32,
+            height as u32,
+        ) {
+            Ok(shm) => {
+                // Tell Android the framebuffer dimensions and path so it can mmap.
+                let mut pw = PayloadWriter::new();
+                pw.write_u32(width as u32);
+                pw.write_u32(height as u32);
+                pw.write_string(frame_shm::SHM_GUEST_PATH);
+                let _ = ipc.send(tags::FRAME_INIT, pw.finish());
+                frame_shm = Some(shm);
+                tracing::info!("Shared memory framebuffer enabled ({}x{})", width, height);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to create SHM framebuffer, falling back to socket: {}", e);
+            }
+        }
+    }
+
     // Send initial view change
     player.notify_view_change(width, height, Some(&ViewInfo {
         is_fullscreen: false,
@@ -250,7 +277,7 @@ fn main() {
             };
 
             if ready {
-                send_dirty_frame(&frame_handle, &ipc);
+                send_dirty_frame(&frame_handle, &ipc, &frame_shm);
             }
         }
 
@@ -510,6 +537,7 @@ fn send_state_change(ipc: &IpcTransport, state: u8, width: i32, height: i32) {
 fn send_dirty_frame(
     frame_handle: &Arc<Mutex<Option<player_core::SharedFrameBuffer>>>,
     ipc: &IpcTransport,
+    frame_shm: &Option<frame_shm::FrameShm>,
 ) {
     let mut frame_guard = frame_handle.lock();
     let frame = match frame_guard.as_mut() {
@@ -525,9 +553,30 @@ fn send_dirty_frame(
     let (dx, dy, dw, dh) = dirty;
     let frame_w = frame.width;
     let frame_h = frame.height;
-    let stride = frame.stride as usize;
 
-    // Extract the dirty region pixels
+    if let Some(shm) = frame_shm {
+        // Fast path: write dirty region to shared memory, send metadata only.
+        if shm.width == frame_w && shm.height == frame_h {
+            shm.write_region(&frame.pixels, frame.stride, dx, dy, dw, dh);
+
+            let mut pw = PayloadWriter::with_capacity(24);
+            pw.write_u32(dx);
+            pw.write_u32(dy);
+            pw.write_u32(dw);
+            pw.write_u32(dh);
+            pw.write_u32(frame_w);
+            pw.write_u32(frame_h);
+            if let Err(e) = ipc.send(tags::FRAME_READY, pw.finish()) {
+                tracing::warn!("Failed to send frame notification: {}", e);
+            }
+            return;
+        }
+        // Dimension mismatch — fall through to socket path.
+        // (A FRAME_INIT with new dimensions would be needed to resize the SHM.)
+    }
+
+    // Fallback: send pixel data over the socket.
+    let stride = frame.stride as usize;
     let mut pixels = Vec::with_capacity((dw * dh * 4) as usize);
     for row in dy..(dy + dh) {
         let start = (row as usize) * stride + (dx as usize) * 4;
@@ -537,7 +586,6 @@ fn send_dirty_frame(
         }
     }
 
-    // Build the frame message
     let mut pw = PayloadWriter::with_capacity(24 + pixels.len());
     pw.write_u32(dx);
     pw.write_u32(dy);

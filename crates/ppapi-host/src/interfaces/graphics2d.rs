@@ -289,7 +289,7 @@ unsafe extern "C" fn replace_contents(graphics_2d: PP_Resource, image_data: PP_R
 }
 
 unsafe extern "C" fn flush(graphics_2d: PP_Resource, callback: PP_CompletionCallback) -> i32 {
-    tracing::info!(
+    tracing::trace!(
         "PPB_Graphics2D::Flush(graphics_2d={}, callback={:?})",
         graphics_2d,
         callback
