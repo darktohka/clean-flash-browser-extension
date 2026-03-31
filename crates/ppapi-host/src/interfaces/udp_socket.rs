@@ -18,9 +18,8 @@ use crate::HOST;
 // ---------------------------------------------------------------------------
 
 /// Hosts that are always blocked for UDP sockets.
-const ALWAYS_BLOCKED_UDP_HOSTS: [&str; 3] = [
-    // These two are used for the ood.xml service.
-    "fpdownload.macromedia.com",
+const ALWAYS_BLOCKED_UDP_HOSTS: [&str; 2] = [
+    // This is used for the ood.xml service.
     "a4fizyp1nl.execute-api.us-east-1.amazonaws.com",
     // This is used for various CN services
     "api.flash.cn"
