@@ -4,3 +4,8 @@ chrome
 target
 *.so
 *.key
+*.zst
+*.so
+.cxx
+build
+proot-build

@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">Flash Player</string>
+    <string name="open_url">Open URL</string>
+    <string name="open_file">Open File</string>
+    <string name="settings">Settings</string>
+    <string name="enter_swf_url">Enter SWF URL</string>
+    <string name="play">Play</string>
+    <string name="initializing">Initializing...</string>
+    <string name="loading">Loading Flash content...</string>
+    <string name="error_no_rootfs">Container not initialized. Please wait for setup to complete.</string>
+</resources>
