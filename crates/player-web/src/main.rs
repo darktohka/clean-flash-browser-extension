@@ -338,9 +338,9 @@ fn main() {
 }
 
 fn init_tracing_if_enabled() -> Option<WorkerGuard> {
-    //if std::env::var_os("TRACE_FLASH").is_none() {
-    //    return None;
-    //}
+    if std::env::var_os("TRACE_FLASH").is_none() {
+        return None;
+    }
 
     let filter = EnvFilter::new("trace");
     let log_dir = std::env::var("FLASH_PLAYER_LOG_DIR")
